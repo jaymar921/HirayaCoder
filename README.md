@@ -1,7 +1,5 @@
 # HirayaCoder
 
-By: [Jayharron Abejar](https://jayharronabejar.vercel.app)
-
 *A local Filipino-inspired AI coder that brings imagination and speed to your VS Code workflow.*
 
 HirayaCoder is a **fully offline** VS Code extension that pairs your editor with a **local Ollama** LLM. It's built to run on modest laptop hardware — down to a 1B-parameter, non-agentic model — while still scaling up to full agentic, tool-calling workflows on stronger machines. No cloud calls, no telemetry, no data leaving your machine.
@@ -12,10 +10,11 @@ HirayaCoder is a **fully offline** VS Code extension that pairs your editor with
 
 ## Why HirayaCoder
 
+- 🤖 **Agentic on every model** — HirayaCoder plans, reads files, edits across multiple files, and iterates within a task on its own, the way Claude Code does — even on a 1B model.
 - 🔒 **Private by construction** — only ever talks to `127.0.0.1` (your local Ollama instance).
-- 💻 **Low-spec friendly** — designed and tested against `llama3.2:1b` for machines without a GPU.
-- 🧠 **Tiered intelligence** — automatically detects whether your model supports agentic tool-calling (Tier A) or needs a constrained single-shot JSON workflow (Tier B), and adapts.
-- 🛡️ **Security-first** — every file write and terminal command requires explicit approval; see [`/doc/SECURITY.md`](doc/SECURITY.md).
+- 💻 **Low-spec friendly** — designed and tested against `llama3.2:1b` for machines without a GPU, using a simulated step-by-step agent loop instead of native tool-calling.
+- 🧠 **Tiered execution, same autonomy** — automatically detects whether your model supports native tool-calling (Tier A) or needs a simulated one-action-per-turn loop (Tier B), and drives the same agent behavior either way.
+- 🛡️ **Security-first** — every file write and terminal command requires explicit approval, at every step of every agent session, on both tiers; see [`/doc/SECURITY.md`](doc/SECURITY.md).
 - 🇵🇭 **Made with a Filipino developer's sensibility** — practical, resourceful, built for real hardware, not just top-spec dev machines.
 
 ---
@@ -42,7 +41,7 @@ Full walkthrough: [`/doc/TUTORIAL.md`](doc/TUTORIAL.md)
 
 ## Building From the AI Prompt
 
-This project was scaffolded from a single structured prompt designed for AI coding agents (Claude Code, etc.). See [`/setup/PROMPT.md`](setup/1.initial-prompt-build-hirayacoder.md) for the full specification, feature list, security requirements, and build order — re-runnable per phase for iterative feature work.
+This project was scaffolded from a single structured prompt designed for AI coding agents (Claude Code, etc.). See [`/setup/PROMPT.md`](setup/PROMPT.md) for the full specification, feature list, security requirements, and build order — re-runnable per phase for iterative feature work.
 
 ## Security
 
