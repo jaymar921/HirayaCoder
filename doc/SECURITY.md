@@ -3,7 +3,7 @@
 ## Design Principles
 
 1. **Offline-only, loopback-only.** The extension only ever talks to `127.0.0.1`/`localhost` (the local Ollama service). Any configured URL that isn't loopback is rejected by `core/ollamaClient.js` at load time.
-2. **Default-deny on side effects.** Nothing writes to disk or executes a shell command without explicit, per-action user approval via `security/permissionGate.js`.
+2. **Default-deny on side effects.** Nothing writes to disk or executes a shell command without explicit user approval via `security/permissionGate.js` — true at every step of every agent session, regardless of loop strategy (native tool-calling or simulated ReAct) or how many steps the agent has already taken autonomously. Reads within the workspace don't require per-call approval so the agent can explore freely, but writes and shell execution always do.
 3. **Fail closed, not open.** If model output can't be parsed or validated, HirayaCoder shows the raw response and takes no action — it never guesses.
 4. **Least privilege.** The agent can only read/write inside the current workspace root; `security/pathGuard.js` canonicalizes and validates every path.
 5. **No silent data exfiltration.** `security/secretsScanner.js` screens content before it's sent to the model (even locally) so `.env` files, keys, and tokens aren't casually included in prompts by accident.
