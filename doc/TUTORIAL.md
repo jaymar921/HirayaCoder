@@ -105,21 +105,27 @@ You can also open the **Model Manager** view (`HirayaCoder: Manage Models` from 
 
 ## 6. Using HirayaCoder
 
-### Chat Panel
-- Open the HirayaCoder icon in the Activity Bar, or run `HirayaCoder: Open Chat` from the Command Palette (`Ctrl/Cmd + Shift + P`).
-- Ask questions about the open file, request refactors, or paste an error and ask for a fix.
+### Agent Sessions (the core workflow)
+- Open the HirayaCoder icon in the Activity Bar, or run `HirayaCoder: Start Agent Task` from the Command Palette, and describe what you want in plain language — e.g. *"add email validation to the signup form and update its tests"*.
+- HirayaCoder plans, then works step by step: reading files it needs, searching the workspace for relevant code, proposing edits — narrating each step live in the chat panel (`thought` → `action` → result), the same way Claude Code shows its work.
+- This works the same way on `llama3.2:1b` as on a larger model — on small models it takes one step at a time (typically up to 8 steps per task); on larger models it can plan further ahead (up to ~25 steps).
+- You can **pause**, **stop**, or let it **resume** at any point from the chat panel controls.
+
+### Session Diff & Apply
+- Every file the agent touched during a session — could be one file, could be five — is grouped into a single **session diff review**. Nothing is written to disk until you review it.
+- Click **Apply** on individual files or **Apply All**; click **Discard** to drop any file's proposed change without affecting the others.
+
+### Chat Panel (Q&A mode)
+- You can also just ask questions about the open file, request a quick refactor, or paste an error — these run as a short, scoped agent session under the hood.
 
 ### Code Actions
-- Select a block of code → click the lightbulb (💡) → choose **Explain**, **Refactor**, **Document**, or **Fix with HirayaCoder**.
-
-### Diff & Apply
-- Any proposed code change opens as a **diff view**. Nothing is written to disk until you click **Apply**. Click **Discard** to drop the suggestion entirely.
+- Select a block of code → click the lightbulb (💡) → choose **Explain**, **Refactor**, **Document**, or **Fix with HirayaCoder**. Each starts a scoped agent session for just that selection.
 
 ### Test Generator
-- Right-click a function or select code → `HirayaCoder: Generate Tests`. Output lands in `/test/generated/` for review — it will not overwrite existing test files without a diff confirmation.
+- Invoke directly (`HirayaCoder: Generate Tests`), or let the agent decide to write tests as part of a larger task. Output lands in `/test/generated/` for review — it will not overwrite existing test files without a diff confirmation.
 
-### Terminal Suggestions
-- HirayaCoder may suggest a shell command; by default it only **inserts** the command into the terminal for you to review and run yourself. Auto-run is opt-in and shows a warning banner each session.
+### Terminal Commands
+- The agent can propose running a command as one of its steps, but every terminal action pauses the session and requires your explicit approval before it runs — on both small and large models. Auto-run is opt-in per session and shows a warning banner.
 
 ---
 
@@ -127,9 +133,11 @@ You can also open the **Model Manager** view (`HirayaCoder: Manage Models` from 
 
 | Laptop class | Suggested model | Notes |
 |---|---|---|
-| Low-spec (4GB RAM, no GPU) | `llama3.2:1b` or `qwen2.5:0.5b` | Tier B (lite) mode — single-shot JSON responses, no autonomous multi-step actions. |
-| Mid-spec (8-16GB RAM) | `qwen2.5-coder:3b` | Usually still Tier B, better code quality. |
-| Higher-spec (16GB+ RAM or GPU) | `qwen2.5-coder:7b`, `llama3.1:8b` | Tier A — agentic multi-step planning with tool calls, still 100% offline. |
+| Low-spec (4GB RAM, no GPU) | `llama3.2:1b` or `qwen2.5:0.5b` | Tier B — agentic, one JSON action per turn, ~8-step budget per task, still multi-file capable. |
+| Mid-spec (8-16GB RAM) | `qwen2.5-coder:3b` | Usually still Tier B, better code/edit quality per step. |
+| Higher-spec (16GB+ RAM or GPU) | `qwen2.5-coder:7b`, `llama3.1:8b` | Tier A — native tool-calling, longer plans (~25-step budget), still 100% offline. |
+
+Both tiers run the same kind of agent session — the difference is step budget and how the model expresses each action, not whether it can act autonomously.
 
 Switch anytime via **Model Manager** — HirayaCoder re-detects the tier automatically.
 
