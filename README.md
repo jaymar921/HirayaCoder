@@ -49,4 +49,4 @@ See [`/doc/SECURITY.md`](doc/SECURITY.md) for the security model and [`/security
 
 ## License
 
-Choose and add a license (MIT recommended for a dev-tool extension) — see `LICENSE`.
+This project is licensed under the terms in [LICENSE](LICENSE).
