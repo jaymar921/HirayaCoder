@@ -42,14 +42,14 @@ HirayaCoder/
 ├── LICENSE
 ├── .eslintrc.json
 ├── .vscodeignore
-├── .gitignore                    # See section 11 — must exclude all HirayaCoder-generated files
+├── .gitignore                    # See section 12 — must exclude all HirayaCoder-generated files
 ├── /app/                         # Extension source code (the actual product)
 │   ├── extension.js              # Activation entrypoint
 │   ├── /core/
 │   │   ├── ollamaClient.js       # HTTP wrapper for Ollama API (chat/generate/tags/show)
 │   │   ├── modelDiscovery.js     # Calls /api/tags, lists installed models, classifies size/tier, flags a ">7B available" recommendation
 │   │   ├── modelCapability.js    # Detects native tool-calling support, sets loop strategy
-│   │   ├── promptRouter.js       # Chooses native tool-calling loop vs. simulated ReAct loop
+│   │   ├── promptRouter.js       # Chooses native tool-calling loop vs. simulated ReAct loop; also enforces Ask/Plan/Agent mode's tool availability
 │   │   ├── contextBuilder.js     # Gathers file/selection/workspace/context-file/memory context, token-budgets it
 │   │   ├── contextTranslator.js  # "Smartens up" small models: condenses conversation + task into a compact memory-ready summary
 │   │   ├── memoryStore.js        # In-memory cache + plain-text persistence at .hirayacoder/memory/session<N>.txt
@@ -87,12 +87,14 @@ HirayaCoder/
 │   ├── /webview/                 # Chat tab HTML/CSS/JS (CSP-locked)
 │   │   ├── index.html
 │   │   ├── main.js
-│   │   ├── style.css             # "Cool UI" theme — see section 9
+│   │   ├── style.css             # "Cool UI" theme — see section 10
 │   │   └── /components/
 │   │       ├── welcomePanel.js
 │   │       ├── modelDropdown.js
 │   │       ├── thinkingSelector.js
+│   │       ├── modeSelector.js       # Agent / Plan / Ask toggle
 │   │       ├── permissionMenu.js
+│   │       ├── planChecklist.js      # Renders a Plan-mode result with a "Run this plan" action
 │   │       ├── contextFileChip.js
 │   │       └── messageBubble.js
 │   └── /utils/
@@ -123,7 +125,7 @@ HirayaCoder/
     └── icon-128.png
 ```
 
-**Runtime-generated, never committed by the template (must be `.gitignore`d — see section 11):**
+**Runtime-generated, never committed by the template (must be `.gitignore`d — see section 12):**
 
 ```
 .hirayacoder/
@@ -144,7 +146,7 @@ Implement `core/modelDiscovery.js`:
 1. On chat-tab open and on demand, call Ollama's `GET /api/tags` to list every locally installed model, and `POST /api/show` per model (cached) to read parameter size and tool-calling capability metadata.
 2. Feed this list into `features/modelManager.js`, which backs the **model dropdown** in the webview UI — shows model name, approximate parameter size, and a small tier badge (`Lite` vs `Agentic`).
 3. **Forward-looking recommendation:** if `modelDiscovery.js` detects any installed model with parameter size **> 7B**, surface a one-time, dismissible suggestion in the dropdown/UI: *"You have a larger model installed — for better results on capable hardware, consider switching to `<model>`."* This is informational only, never automatic — the user's selected model never changes without an explicit click.
-4. If no model is installed at all, the welcome screen (section 9) must show a clear "No models found — run `ollama pull llama3.2:1b` to get started" state instead of a silent empty dropdown.
+4. If no model is installed at all, the welcome screen (section 10) must show a clear "No models found — run `ollama pull llama3.2:1b` to get started" state instead of a silent empty dropdown.
 5. Re-poll `/api/tags` when the dropdown is opened (models can be pulled outside the extension at any time via `ollama pull`).
 
 ---
@@ -170,7 +172,7 @@ Exposed in the UI as a **Low / Medium / High** selector next to the model dropdo
 | **Medium** (default) | Standard step budget (~15 steps), one up-front plan step via `plannerAgent.js`. | Recall last 3–5 memory entries via `memoryStore.js`, 8-step budget, `contextTranslator.js` runs once after the session. |
 | **High** | Full step budget (~25 steps), plan + periodic re-plan checkpoints, model asked to show reasoning before each tool call (if the model supports a `reasoning`/`think` field, pass it through; Ollama's `think` parameter is used when the model supports it). | Recall full available memory file(s) up to the token budget, 8-step budget (unchanged — small models don't get more steps, just more memory), `contextTranslator.js` runs after every step, not just at the end, to keep the model "topped up" with condensed context each turn. |
 
-This is the mechanism that makes a 1B model "smarter" without more raw reasoning capacity: **on Tier B, "Thinking Capacity" mostly controls how much persisted memory the translator recalls and how often it re-condenses**, not how long the model is allowed to ramble — see section 6.
+This is the mechanism that makes a 1B model "smarter" without more raw reasoning capacity: **on Tier B, "Thinking Capacity" mostly controls how much persisted memory the translator recalls and how often it re-condenses**, not how long the model is allowed to ramble — see section 7.
 
 `setup/prompts/lite-1b-system-prompt.md` must contain a strict, short ReAct-style system prompt that:
 - Forces JSON-only output, **one action per turn**, from a fixed action set: `read_file`, `list_files`, `search_workspace`, `write_file`, `delete_file`, `run_script`, `run_tests`, `done`.
@@ -180,7 +182,29 @@ This is the mechanism that makes a 1B model "smarter" without more raw reasoning
 
 ---
 
-## 6. In-Memory Context Storage & the Context Translator (making 1B models smarter)
+## 6. Mode Selector: Agent / Plan / Ask
+
+Alongside the model dropdown and Thinking Capacity selector, the chat tab shows a **mode button** with three states. This controls how far `agentSession.js` is allowed to go on a given message — independent of Thinking Capacity (which controls memory recall depth) and independent of the Permissions menu (which controls whether a *proposed* mutation needs a click).
+
+| Mode | What it does | Tools available | Can it write/delete/run scripts? |
+|---|---|---|---|
+| **Ask** | Pure Q&A / read-only conversation. No agent loop is started at all — a single response using only the currently open file, selection, attached context files, and session memory as context. Fastest, cheapest, right for "explain this", "what does this error mean", "what's the difference between X and Y". | None — no tool calls, no workspace exploration beyond what's already in context. | No. |
+| **Plan** | Runs the agent loop in **read-only exploration mode**: the agent can `read_file`, `list_files`, and `search_workspace` freely to understand the task, then produces a structured **plan** — an ordered list of proposed steps and the files each would touch/create/delete — rendered as a checklist in the chat, not executed. | Read-only tools only (`readFile`/`read_file`, `listFiles`/`list_files`, `searchWorkspace`/`search_workspace`). `write_file`/`delete_file`/`run_script` are not offered to the model at all in this mode — not just gated, structurally unavailable. | No — by construction, not just by permission. |
+| **Agent** (default) | The full agentic loop from sections 5–9: plan → act → observe → repeat, with read/write/delete/script actions available, each still governed by the Permissions menu (section 9). | Full tool set. | Yes, subject to the current Edits/Scripts permission state. |
+
+### Plan → Agent handoff
+- A plan produced in **Plan** mode is not thrown away: the chat shows a **"Run this plan"** action that switches the session into **Agent** mode and feeds the accepted plan back in as the task's starting point, so the agent doesn't have to re-explore from scratch.
+- The user can edit the plan's text before running it (it's just an editable list in the chat), letting them correct or reorder steps before anything executes.
+
+### Why this matters for small models
+- **Ask** mode is the cheapest and most reliable mode on `llama3.2:1b` — for a large fraction of real usage ("explain this function", "why is this failing") the full agent loop is unnecessary overhead and more chances for a malformed JSON turn. Steering simple questions into Ask mode keeps Tier B feeling snappy and dependable.
+- **Plan** mode gives the user a cheap way to sanity-check a 1B model's proposed approach before it starts editing files — useful precisely because small models are more likely to misjudge a task; reviewing the plan first catches that before any write/delete/script action is even attempted.
+- Implement `core/promptRouter.js` to pass the active mode down into `agentSession.js`, which is what actually enforces "tool structurally unavailable" for Ask/Plan — this must not be achieved by asking the model nicely not to call write/delete/script tools; the tool schemas/registry entries for those actions are simply omitted from what's offered to the model in Ask/Plan mode.
+- Mode is per-message, not locked for the whole session — the user can ask a Plan-mode question, then send the next message in Agent mode, in the same chat tab, without losing session memory or context files.
+
+---
+
+## 7. In-Memory Context Storage & the Context Translator (making 1B models smarter)
 
 This is the single most important mechanism for making `llama3.2:1b` usable across a real coding session, since it has a tiny effective context window and no long-term memory of its own.
 
@@ -194,7 +218,7 @@ This is the single most important mechanism for making `llama3.2:1b` usable acro
   - User prefers concise commit-style summaries, not long paragraphs.
   ```
 - `memoryStore.js` exposes `append(entry)`, `readAll()`, `readRecent(n)`, `clear()`. Writes are append-only during a session; the user can clear a session's memory from the UI.
-- This file lives under `.hirayacoder/` and is **never** committed (see section 11) and **never** transmitted anywhere except back into local prompts.
+- This file lives under `.hirayacoder/` and is **never** committed (see section 12) and **never** transmitted anywhere except back into local prompts.
 
 ### `core/contextTranslator.js`
 - After every agent response (frequency depends on Thinking Capacity — see section 5), runs a small, cheap, separate prompt against the *same local model* using `setup/prompts/context-translator-prompt.md`: "given this turn's outcome, extract 1-3 short plain-text facts worth remembering for later — new features added, bugs fixed, decisions made, constraints stated by the user. Skip anything not worth remembering."
@@ -206,38 +230,39 @@ This is the single most important mechanism for making `llama3.2:1b` usable acro
 - The user can click a **+** in the welcome/chat UI to attach one or more **context files** (e.g. a spec, a style guide, an existing module they want the agent to match).
 - Attached files are read (not modified) and their content is summarized/trimmed to fit the token budget, then included in every prompt for that session as directional context — "here's what exists, here's the pattern to follow" — separate from the agent's own read/write actions on the live workspace.
 - Context files are tracked in `.hirayacoder/context-files/` as lightweight references (path + optional cached excerpt), never silently copied wholesale if large; oversized files are truncated with a visible note in the UI.
-- The user can remove an attached context file at any time via its chip in the UI (section 9).
+- The user can remove an attached context file at any time via its chip in the UI (section 10).
 
 ---
 
-## 7. Feature Set to Implement
+## 8. Feature Set to Implement
 
 Build these as discrete, independently-toggleable features (each with its own `package.json` contribution point):
 
 1. **Agent Session (core feature)** — natural-language task in, `agentSession.js` runs plan → act → observe, narrating each step ("thought") in the chat tab like Claude Code's step-by-step trace, until `done` or step budget.
 2. **Multi-file Task Execution** — a single session can read, edit, and **delete** files across several paths in one run. Every proposed change accumulates into one **session diff set** reviewed together.
 3. **Chat as its own Editor Tab** — HirayaCoder opens in a dedicated tab in the main editor area (like GitHub Copilot Chat / Claude Code), not squeezed into a small sidebar panel. Command: `HirayaCoder: Open Chat`. Multiple chat tabs (multiple sessions) can be open at once, each with its own memory file (`session1.txt`, `session2.txt`, ...).
-4. **Welcome Screen** — shown when a chat tab has no messages yet; see section 9 for exact layout.
+4. **Welcome Screen** — shown when a chat tab has no messages yet; see section 10 for exact layout.
 5. **Model Dropdown + Thinking Capacity Selector** — see sections 4 and 5.
-6. **Permission Modes UI** — a single permission control exposing four states (see section 8): Approve Edits, Auto Edit, Approve Running Scripts, Auto Approve Running Scripts — edits and scripts are independent toggles, both visible from one menu.
-7. **File Edit & Delete with Permission** — the agent can propose edits *and deletions*; both route through `permissionGate.js` and respect the current permission mode.
-8. **Script/Command Execution with Permission** — the agent can propose running shell commands (`npm install`, `npm run build`, `npm test`, project scaffolding commands, etc.) via `runScript.js`/`scriptRunner.js`, cross-platform, always respecting the current permission mode for scripts.
-9. **In-Memory Context Storage + Context Translator** — see section 6; this is what compensates for small-model weaknesses.
-10. **Context Files Attachment** — the **+** button lets the user attach one or more files the agent reads for direction without being asked to edit them.
-11. **Session Diff-and-Apply workflow** — every touched/deleted file in a session renders as a diff (or a clear "file will be deleted" notice) grouped in one review UI; nothing touches disk until Apply.
-12. **Inline Code Completion** — ghost-text via `InlineCompletionItemProvider`, off by default on Tier B.
-13. **Explain / Refactor / Document / Fix Code Actions** — lightbulb quick actions, internally a scoped agent session.
-14. **Test Generator** — standalone or agent-initiated; output in `/test/generated/`.
-15. **Model Manager & Recommendation** — see section 4.
-16. **Workspace-aware Context Builder** — merges open file, selection, memory recall, and attached context files into one token-budgeted prompt.
-17. **Offline-first Status Bar** — connection state, active model, tier, thinking capacity, step count, permission mode indicators.
-18. **Cross-platform Support** — verified working on macOS, Windows, and Linux, including script execution.
+6. **Agent / Plan / Ask Mode Selector** — see section 6; Ask skips the loop entirely, Plan runs a read-only exploration that produces a reviewable checklist, Agent is the full loop. A "Run this plan" action promotes a Plan-mode result into an Agent-mode execution.
+7. **Permission Modes UI** — a single permission control exposing four states (see section 9): Approve Edits, Auto Edit, Approve Running Scripts, Auto Approve Running Scripts — edits and scripts are independent toggles, both visible from one menu.
+8. **File Edit & Delete with Permission** — the agent can propose edits *and deletions*; both route through `permissionGate.js` and respect the current permission mode (Agent mode only — structurally unavailable in Plan/Ask).
+9. **Script/Command Execution with Permission** — the agent can propose running shell commands (`npm install`, `npm run build`, `npm test`, project scaffolding commands, etc.) via `runScript.js`/`scriptRunner.js`, cross-platform, always respecting the current permission mode for scripts (Agent mode only).
+10. **In-Memory Context Storage + Context Translator** — see section 7; this is what compensates for small-model weaknesses.
+11. **Context Files Attachment** — the **+** button lets the user attach one or more files the agent reads for direction without being asked to edit them.
+12. **Session Diff-and-Apply workflow** — every touched/deleted file in a session renders as a diff (or a clear "file will be deleted" notice) grouped in one review UI; nothing touches disk until Apply.
+13. **Inline Code Completion** — ghost-text via `InlineCompletionItemProvider`, off by default on Tier B.
+14. **Explain / Refactor / Document / Fix Code Actions** — lightbulb quick actions, internally a scoped agent session (runs in Agent mode by default, since they mutate code).
+15. **Test Generator** — standalone or agent-initiated; output in `/test/generated/`.
+16. **Model Manager & Recommendation** — see section 4.
+17. **Workspace-aware Context Builder** — merges open file, selection, memory recall, and attached context files into one token-budgeted prompt.
+18. **Offline-first Status Bar** — connection state, active model, tier, thinking capacity, current mode, step count, permission mode indicators.
+19. **Cross-platform Support** — verified working on macOS, Windows, and Linux, including script execution.
 
 ---
 
-## 8. Permissions Model (four explicit states)
+## 9. Permissions Model (four explicit states)
 
-Implement `security/permissionModes.js` as two independent boolean settings, surfaced together as one **Permissions** menu in the UI (see section 9):
+Implement `security/permissionModes.js` as two independent boolean settings, surfaced together as one **Permissions** menu in the UI (see section 10):
 
 | Setting | Off (default, safer) | On |
 |---|---|---|
@@ -252,7 +277,7 @@ Rules that apply regardless of mode:
 
 ---
 
-## 9. Chat Tab UI Spec ("cool UI", welcome screen, and controls)
+## 10. Chat Tab UI Spec ("cool UI", welcome screen, and controls)
 
 Implement the chat experience as a **VS Code webview panel opened as a normal editor tab** (`vscode.window.createWebviewPanel` with `viewColumn` in the main editor group), not a narrow sidebar view — mirroring how Copilot Chat and Claude Code present as first-class tabs.
 
@@ -264,7 +289,8 @@ Top to bottom, centered:
 4. A **Send** button.
 5. A **model dropdown** (from `modelDropdown.js`, backed by section 4) showing installed models and the current selection.
 6. A **Thinking Capacity selector** (`Low / Med / High`, from `thinkingSelector.js`, section 5).
-7. A **Permissions button** (`permissionMenu.js`) that opens the four-state menu from section 8, with the current mode(s) visible at a glance (e.g. small badges: `Edits: Approve` / `Scripts: Approve`).
+7. A **mode button** (`modeSelector.js`, section 6) toggling **Agent / Plan / Ask** — defaults to Agent, always visible next to the input so the user knows what a message is about to do before sending it.
+8. A **Permissions button** (`permissionMenu.js`) that opens the four-state menu from section 9, with the current mode(s) visible at a glance (e.g. small badges: `Edits: Approve` / `Scripts: Approve`).
 
 ### Visual direction ("cool UI")
 - Dark-first theme that inherits the user's VS Code color theme via CSS variables (`--vscode-editor-background`, `--vscode-foreground`, etc.) rather than hardcoded colors, so it never clashes with the user's setup.
@@ -275,11 +301,12 @@ Top to bottom, centered:
 
 ### Behavior
 - Each open chat tab = one session = one `.hirayacoder/memory/session<N>.txt`. Closing a tab does not delete its memory file; reopening `HirayaCoder: Open Chat` can resume an existing session or start a new numbered one.
-- The welcome screen's `+`, dropdown, thinking selector, and permissions button remain accessible (moved to a compact header bar) once the conversation has messages — they are not one-time-only welcome-screen elements.
+- The welcome screen's `+`, dropdown, thinking selector, mode button, and permissions button remain accessible (moved to a compact header bar) once the conversation has messages — they are not one-time-only welcome-screen elements.
+- A **Plan**-mode response renders via `planChecklist.js` as an ordered, editable checklist of proposed steps/files rather than a normal message bubble, with a **"Run this plan"** button that hands it to Agent mode (section 6).
 
 ---
 
-## 10. Cross-Platform Requirements
+## 11. Cross-Platform Requirements
 
 - All path handling via `path.join`/`path.resolve`/`path.sep` — never manual `/`-concatenation.
 - `security/scriptRunner.js` resolves the correct shell per `os.platform()`:
@@ -291,7 +318,7 @@ Top to bottom, centered:
 
 ---
 
-## 11. `.gitignore` & Generated-File Policy (must implement, not just document)
+## 12. `.gitignore` & Generated-File Policy (must implement, not just document)
 
 HirayaCoder writes several kinds of files into the user's workspace during normal operation: session memory, context-file caches, audit logs, and temp scratch files. **None of these should ever be suggested for commit.**
 
@@ -311,7 +338,7 @@ The repository template's own root `.gitignore` (this project's own repo, not th
 
 ---
 
-## 12. Branding: Icon & Author
+## 13. Branding: Icon & Author
 
 - **Author:** `jaymar921` — set in `package.json`'s `"author"` field, referenced in `README.md`.
 - **Extension icon:** a simple, professional mark reflecting "hiraya" (imagination/spark) — e.g. a small sunburst/spark motif merged with a code-bracket `< >` shape. Provide as `docs/assets/icon.svg` (vector source, safe to hand-edit) and export a `docs/assets/icon-128.png` (128×128, required by VS Code's `package.json` `"icon"` field) using any local SVG-to-PNG tool (e.g. Inkscape CLI, `resvg`, or an online-free/offline converter) — do not ship only the SVG, since the VS Code Marketplace requires a PNG icon.
@@ -319,7 +346,7 @@ The repository template's own root `.gitignore` (this project's own repo, not th
 
 ---
 
-## 13. Security Requirements (implement, don't just document)
+## 14. Security Requirements (implement, don't just document)
 
 1. **No network egress except `127.0.0.1`/`localhost` to the configured Ollama port.** Enforce this in code (reject any config value that isn't loopback) — not just by convention.
 2. **Permission gate (`security/permissionGate.js`)** — a single chokepoint that every file-write, file-delete, and script-exec action from *any* agent loop step must pass through, honoring the current `permissionModes.js` state. Reads (`readFile`, `listFiles`, `searchWorkspace`) don't require per-call approval; writes, deletes, and script execution always do unless the corresponding auto mode is explicitly on.
@@ -334,7 +361,7 @@ The repository template's own root `.gitignore` (this project's own repo, not th
 
 ---
 
-## 14. Static Application Security Testing (SAST) — run and report
+## 15. Static Application Security Testing (SAST) — run and report
 
 After implementation, run and document results for:
 
@@ -348,9 +375,9 @@ Produce results in `/security/sast-report-template.md` filled out with: tool, da
 
 ---
 
-## 15. Testing Requirements
+## 16. Testing Requirements
 
-- Unit tests for `contextBuilder`, `outputParser`, `permissionGate`, `permissionModes`, `pathGuard`, `secretsScanner`, `tokenBudget`, `agentSession`, `memoryStore` (append/readRecent/clear, on-disk sync), `contextTranslator` (produces well-formed short entries from a scripted turn), `modelDiscovery` (parses `/api/tags` fixtures, correctly flags >7B recommendation).
+- Unit tests for `contextBuilder`, `outputParser`, `permissionGate`, `permissionModes`, `pathGuard`, `secretsScanner`, `tokenBudget`, `agentSession`, `memoryStore` (append/readRecent/clear, on-disk sync), `contextTranslator` (produces well-formed short entries from a scripted turn), `modelDiscovery` (parses `/api/tags` fixtures, correctly flags >7B recommendation), `promptRouter` (correctly omits write/delete/script tools in Plan mode and skips the loop entirely in Ask mode).
 - Loop-strategy tests: `reactLoop.js` and `nativeToolLoop.js` against scripted mock Ollama responses, including deliberately malformed JSON, delete actions, and script-run actions in both permission modes (approve vs. auto).
 - Cross-platform tests: `scriptRunner.js` shell-selection logic tested with `os.platform()` mocked to `win32`, `darwin`, and `linux`.
 - Integration tests using `@vscode/test-electron` for: chat tab opens (not sidebar), welcome screen renders with all controls present, multi-file session (including a delete) produces one grouped diff/review set, permission menu correctly gates/ungates actions, context file attach/remove updates the prompt context.
@@ -358,7 +385,7 @@ Produce results in `/security/sast-report-template.md` filled out with: tool, da
 
 ---
 
-## 16. Build Order (execute in phases; confirm each phase before proceeding)
+## 17. Build Order (execute in phases; confirm each phase before proceeding)
 
 1. Scaffold repo structure + `package.json` manifest (author `jaymar921`, icon field) + activation events + `.gitignore`.
 2. Implement `ollamaClient.js`, `modelDiscovery.js`, `modelCapability.js`, status bar.
@@ -367,8 +394,8 @@ Produce results in `/security/sast-report-template.md` filled out with: tool, da
 5. Implement `contextFilesManager.js` + `contextBuilder.js` + `tokenBudget.js`.
 6. Implement `toolRegistry.js` + `agent/tools/*` (including `deleteFile.js`, `runScript.js`), each routed through the permission gate and honoring permission modes.
 7. Implement `agent/reactLoop.js` + `setup/prompts/lite-1b-system-prompt.md` (Tier B) — verify a real 1B model completes a genuine multi-step, multi-file task, including a delete and a script run, gated correctly in both permission modes.
-8. Implement `agent/agentSession.js` as the shared driver (step budget, session diff set, pause/resume/stop, thinking-capacity-aware memory recall frequency).
-9. Implement the chat **tab** UI (`chatTab.js`, `welcomeScreen.js`, `app/webview/*`) — read `frontend-design` skill first — wire up model dropdown, thinking selector, permissions menu, context-file chips, live agent trace, grouped diff review.
+8. Implement `agent/agentSession.js` as the shared driver (step budget, session diff set, pause/resume/stop, thinking-capacity-aware memory recall frequency) plus mode handling (`promptRouter.js` omitting write/delete/script tools entirely in Plan/Ask mode, and skipping the loop altogether in Ask mode).
+9. Implement the chat **tab** UI (`chatTab.js`, `welcomeScreen.js`, `app/webview/*`) — read `frontend-design` skill first — wire up model dropdown, thinking selector, mode button (Agent/Plan/Ask), permissions menu, context-file chips, live agent trace, grouped diff review, and the Plan-mode checklist with its "Run this plan" handoff into Agent mode.
 10. Implement code actions (Explain/Refactor/Document/Fix) as scoped-session shortcuts.
 11. Implement `agent/nativeToolLoop.js` for Tier A under the same `agentSession.js`.
 12. Implement inline completion (opt-in, single-turn only).
@@ -381,11 +408,13 @@ Produce results in `/security/sast-report-template.md` filled out with: tool, da
 
 ---
 
-## 17. Acceptance Criteria
+## 18. Acceptance Criteria
 
 - Extension activates with **zero network calls** other than to the local Ollama endpoint.
-- HirayaCoder opens as its own editor **tab**, not a cramped sidebar, and shows the full welcome screen (icon, +, input, send, model dropdown, thinking selector, permissions button) when empty.
-- With `llama3.2:1b` (Tier B), a session can autonomously read files it wasn't given the path to, edit at least two files, delete a file when asked, and propose running a script (e.g. `npm install`) — every write/delete/script action correctly blocked pending approval in default mode, and correctly auto-applied only when the matching auto mode is explicitly on.
+- HirayaCoder opens as its own editor **tab**, not a cramped sidebar, and shows the full welcome screen (icon, +, input, send, model dropdown, thinking selector, mode button, permissions button) when empty.
+- **Ask** mode never triggers a tool call or workspace exploration, even if the user's phrasing sounds like a task request — provable via a fixture asserting zero tool invocations for an Ask-mode message.
+- **Plan** mode can read/list/search the workspace but a fixture test confirms `write_file`/`delete_file`/`run_script` are absent from the tool schema offered to the model in this mode (not merely blocked at the permission gate) — and its output renders as a checklist with a working "Run this plan" handoff into Agent mode.
+- With `llama3.2:1b` (Tier B) in **Agent** mode, a session can autonomously read files it wasn't given the path to, edit at least two files, delete a file when asked, and propose running a script (e.g. `npm install`) — every write/delete/script action correctly blocked pending approval in default mode, and correctly auto-applied only when the matching auto mode is explicitly on.
 - A second request in the same chat tab correctly recalls prior session memory (e.g. mentions a feature added two turns earlier) without the user re-explaining it — provable via a fixture test.
 - Attaching a context file via `+` measurably changes the agent's proposed direction in a fixture test (i.e. it's actually read and used, not just stored).
 - The model dropdown reflects real installed models via `/api/tags`, and a >7B model installed alongside `llama3.2:1b` triggers the one-time recommendation.
