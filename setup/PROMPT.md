@@ -109,7 +109,8 @@ HirayaCoder/
 │   ├── TUTORIAL.md               # Setup + usage guide (generated separately)
 │   ├── ARCHITECTURE.md
 │   ├── FEATURES.md
-│   └── SECURITY.md
+│   ├── SECURITY.md
+│   └── PUBLISHING.md             # Step-by-step VS Code Marketplace publishing guide (section 14)
 ├── /setup/
 │   ├── PROMPT.md                 # This file
 │   └── prompts/                  # Model-facing system prompts, versioned per capability tier
@@ -135,6 +136,16 @@ HirayaCoder/
 ├── context-files/                # Copies/references of user-attached context files
 ├── audit.log
 └── tmp/
+```
+
+**Build output, versioned, also `.gitignore`d (see section 14):**
+
+```
+/builds/
+├── v0.1.0/
+│   └── hirayacoder-0.1.0.vsix
+└── v0.2.0/
+    └── hirayacoder-0.2.0.vsix
 ```
 
 ---
@@ -334,7 +345,13 @@ The extension must, on first activation in a workspace, check whether a `.gitign
 *.hirayacoder.tmp
 ```
 
-The repository template's own root `.gitignore` (this project's own repo, not the user's workspace) must also include this block from the start — see the generated `/.gitignore` file alongside this prompt.
+The repository template's own root `.gitignore` (this project's own repo, not the user's workspace) must also include this block from the start, plus the versioned build-output folder from section 14:
+
+```gitignore
+/builds/
+```
+
+— see the generated `/.gitignore` file alongside this prompt.
 
 ---
 
@@ -346,7 +363,46 @@ The repository template's own root `.gitignore` (this project's own repo, not th
 
 ---
 
-## 14. Security Requirements (implement, don't just document)
+## 14. Packaging, Versioned Builds & Marketplace Publishing
+
+### Versioned build output folder
+
+Add a top-level `/builds/` folder that holds packaged `.vsix` files, one subfolder per released version:
+
+```
+HirayaCoder/
+└── /builds/
+    ├── v0.1.0/
+    │   └── hirayacoder-0.1.0.vsix
+    ├── v0.2.0/
+    │   └── hirayacoder-0.2.0.vsix
+    └── v1.0.0/
+        └── hirayacoder-1.0.0.vsix
+```
+
+- Every version's `.vsix` — and the exact `package.json` snapshot it was built from, if useful for debugging an old release — lives in its own `vX.Y.Z/` folder. Never overwrite an older version's folder.
+- `/builds/` is a **build output directory, not source** — it must be excluded via `.gitignore` (see section 12) the same way `node_modules/`, `out/`, and `dist/` are. Keep the *folder structure convention* documented here, but don't commit binaries to git; instead attach the relevant `.vsix` to a GitHub Release when tagging a version (see the publishing guide below), so the repository stays lightweight while every released binary is still easy to find.
+- The build script (`npm run package`, or equivalent) should read the version from `package.json`, run `vsce package`, and move the resulting `.vsix` into `/builds/v<version>/` automatically — don't leave this as a manual step the author has to remember.
+
+### Publishing guide
+
+Write a full, beginner-friendly, step-by-step guide at **`/doc/PUBLISHING.md`** covering the entire path from "everything is built and tested" to "live on the VS Code Marketplace." It must be written so the author (`jaymar921`) can follow it start to finish without prior VS Code Marketplace publishing experience. At minimum it must cover, in order:
+
+1. Pre-publish checklist (SAST clean, tests passing, README/CHANGELOG/LICENSE present, icon present, cross-platform smoke test done).
+2. `package.json` fields the Marketplace requires/uses (`publisher`, `name`, `displayName`, `description`, `version`, `engines.vscode`, `categories`, `keywords`, `icon`, `repository`, `license`).
+3. One-time publisher account setup (Azure DevOps organization + Personal Access Token, `vsce create-publisher`).
+4. Local login (`vsce login`).
+5. Version bump + packaging (`npm version`, `vsce package`), and moving the output into `/builds/v<version>/`.
+6. Installing and smoke-testing the packaged `.vsix` locally before publishing.
+7. Publishing (`vsce publish`), and how to verify the live listing.
+8. Tagging the release in git and attaching the `.vsix` from `/builds/` to a GitHub Release.
+9. Post-publish steps (monitoring the Q&A tab, planning the next version bump).
+
+This file is generated separately — see the companion tutorial-style deliverable — but must exist and be linked from `README.md` before the extension is considered release-ready.
+
+---
+
+## 15. Security Requirements (implement, don't just document)
 
 1. **No network egress except `127.0.0.1`/`localhost` to the configured Ollama port.** Enforce this in code (reject any config value that isn't loopback) — not just by convention.
 2. **Permission gate (`security/permissionGate.js`)** — a single chokepoint that every file-write, file-delete, and script-exec action from *any* agent loop step must pass through, honoring the current `permissionModes.js` state. Reads (`readFile`, `listFiles`, `searchWorkspace`) don't require per-call approval; writes, deletes, and script execution always do unless the corresponding auto mode is explicitly on.
@@ -361,7 +417,7 @@ The repository template's own root `.gitignore` (this project's own repo, not th
 
 ---
 
-## 15. Static Application Security Testing (SAST) — run and report
+## 16. Static Application Security Testing (SAST) — run and report
 
 After implementation, run and document results for:
 
@@ -375,7 +431,7 @@ Produce results in `/security/sast-report-template.md` filled out with: tool, da
 
 ---
 
-## 16. Testing Requirements
+## 17. Testing Requirements
 
 - Unit tests for `contextBuilder`, `outputParser`, `permissionGate`, `permissionModes`, `pathGuard`, `secretsScanner`, `tokenBudget`, `agentSession`, `memoryStore` (append/readRecent/clear, on-disk sync), `contextTranslator` (produces well-formed short entries from a scripted turn), `modelDiscovery` (parses `/api/tags` fixtures, correctly flags >7B recommendation), `promptRouter` (correctly omits write/delete/script tools in Plan mode and skips the loop entirely in Ask mode).
 - Loop-strategy tests: `reactLoop.js` and `nativeToolLoop.js` against scripted mock Ollama responses, including deliberately malformed JSON, delete actions, and script-run actions in both permission modes (approve vs. auto).
@@ -385,7 +441,7 @@ Produce results in `/security/sast-report-template.md` filled out with: tool, da
 
 ---
 
-## 17. Build Order (execute in phases; confirm each phase before proceeding)
+## 18. Build Order (execute in phases; confirm each phase before proceeding)
 
 1. Scaffold repo structure + `package.json` manifest (author `jaymar921`, icon field) + activation events + `.gitignore`.
 2. Implement `ollamaClient.js`, `modelDiscovery.js`, `modelCapability.js`, status bar.
@@ -403,12 +459,14 @@ Produce results in `/security/sast-report-template.md` filled out with: tool, da
 14. Design and export the icon (`docs/assets/icon.svg` + `icon-128.png`), wire into `package.json`.
 15. Write unit + integration + cross-platform tests.
 16. Run SAST suite, fix findings, fill out `security/sast-report-template.md`.
-17. Write `/doc` documentation set and `README.md` (author, license section, screenshots).
-18. Package `.vsix`, smoke test on Windows, macOS, and Linux with `llama3.2:1b`.
+17. Write `/doc` documentation set, `README.md` (author, license section, screenshots), and `/doc/PUBLISHING.md` (section 14).
+18. Set up the `/builds/v<version>/` output convention and the packaging script that produces it automatically from `vsce package`.
+19. Package `.vsix`, smoke test on Windows, macOS, and Linux with `llama3.2:1b`.
+20. When the author is ready, follow `/doc/PUBLISHING.md` end to end to publish to the VS Code Marketplace and tag the release in git.
 
 ---
 
-## 18. Acceptance Criteria
+## 19. Acceptance Criteria
 
 - Extension activates with **zero network calls** other than to the local Ollama endpoint.
 - HirayaCoder opens as its own editor **tab**, not a cramped sidebar, and shows the full welcome screen (icon, +, input, send, model dropdown, thinking selector, mode button, permissions button) when empty.
@@ -420,4 +478,5 @@ Produce results in `/security/sast-report-template.md` filled out with: tool, da
 - The model dropdown reflects real installed models via `/api/tags`, and a >7B model installed alongside `llama3.2:1b` triggers the one-time recommendation.
 - `scriptRunner.js` passes cross-platform unit tests for Windows/macOS/Linux shell selection without ever using string-interpolated shell execution.
 - The workspace's `.gitignore` correctly excludes `.hirayacoder/` (offered, not forced) and the repo's own `.gitignore` excludes it from the start.
+- Running the packaging script produces a `.vsix` inside a correctly versioned `/builds/v<version>/` folder without manual file-moving, and `/doc/PUBLISHING.md` exists with a complete, followable path from "tested and ready" to "published on the Marketplace."
 - `npm audit` shows no unresolved high/critical findings; `eslint` security rules pass with zero errors; test suite passes in CI without network access.
