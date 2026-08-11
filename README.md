@@ -41,7 +41,7 @@ Full walkthrough: [`/doc/TUTORIAL.md`](doc/TUTORIAL.md)
 
 ## Building From the AI Prompt
 
-This project was scaffolded from a single structured prompt designed for AI coding agents (Claude Code, etc.). See [`/setup/PROMPT.md`](setup/1.initial-prompt-build-hirayacoder.md) for the full specification, feature list, security requirements, and build order — re-runnable per phase for iterative feature work.
+This project was scaffolded from a single structured prompt designed for AI coding agents (Claude Code, etc.). See [`/setup/PROMPT.md`](setup/PROMPT.md) for the full specification, feature list, security requirements, and build order — re-runnable per phase for iterative feature work.
 
 ## Security
 
