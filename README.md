@@ -33,9 +33,10 @@ HirayaCoder is a **fully offline** VS Code extension that pairs your editor with
 HirayaCoder/
 ├── app/        # Extension source code
 ├── test/       # Unit + integration tests
-├── doc/        # Tutorial, architecture, feature docs, security model
+├── doc/        # Tutorial, architecture, feature docs, security model, publishing guide
 ├── setup/      # AI build prompt + versioned model/translator system prompts
 ├── security/   # Threat model, SAST report template, rules
+├── builds/     # Packaged .vsix output, organized by version (gitignored — see doc/PUBLISHING.md)
 └── docs/       # Icon, screenshots, marketing assets
 ```
 
@@ -54,6 +55,10 @@ This project was scaffolded from a single structured prompt designed for AI codi
 ## Security
 
 See [`/doc/SECURITY.md`](doc/SECURITY.md) for the security model and [`/security/threat-model.md`](security/threat-model.md) for the full threat matrix. SAST results are tracked per release in [`/security/sast-report-template.md`](security/sast-report-template.md).
+
+## Publishing
+
+Once a version is fully built, tested, and SAST-clean, follow [`/doc/PUBLISHING.md`](doc/PUBLISHING.md) for the complete, step-by-step path to shipping it on the VS Code Marketplace — publisher setup, packaging into [`/builds/`](builds/), and the actual `vsce publish` flow.
 
 ## Author
 
