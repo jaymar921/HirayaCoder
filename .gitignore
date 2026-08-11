@@ -1,0 +1,24 @@
+# --- HirayaCoder — local AI agent data (never commit) ---
+.hirayacoder/
+.hirayacoder/memory/
+.hirayacoder/context-files/
+.hirayacoder/tmp/
+.hirayacoder/audit.log
+*.hirayacoder.tmp
+
+# --- Node / build ---
+node_modules/
+out/
+dist/
+*.vsix
+npm-debug.log*
+
+# --- Editor / OS ---
+.vscode-test/
+.DS_Store
+Thumbs.db
+
+# --- Env / secrets ---
+.env
+.env.*
+*.pem
