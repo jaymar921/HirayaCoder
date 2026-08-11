@@ -15,6 +15,7 @@ HirayaCoder is a **fully offline** VS Code extension that pairs your editor with
 ## Why HirayaCoder
 
 - 🤖 **Agentic on every model** — plans, reads files, edits, deletes, and runs scripts across multiple files within a task on its own, the way Claude Code and Copilot Chat do — even on a 1B model.
+- 🎚️ **Agent / Plan / Ask modes** — ask a quick question without triggering the agent loop, preview a read-only plan before anything changes, or let it run the full task end to end.
 - 🧠 **Smarter small models via memory** — a local, plain-text, in-memory + on-disk memory store (`.hirayacoder/memory/`) and a context translator keep a 1B model "aware" of what it already did earlier in the session, compensating for its tiny context window.
 - 📎 **Context files** — attach one or more reference files with the `+` button so the agent has clear direction before it starts.
 - 🗂️ **Chat lives in its own tab** — opens as a full editor tab, just like GitHub Copilot Chat and Claude Code, not squeezed into a small sidebar.
