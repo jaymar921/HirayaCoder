@@ -1,8 +1,12 @@
 # HirayaCoder
 
+<p align="center">
+  <img src="docs/assets/icon-128.png" width="96" height="96" alt="HirayaCoder icon" />
+</p>
+
 *A local Filipino-inspired AI coder that brings imagination and speed to your VS Code workflow.*
 
-HirayaCoder is a **fully offline** VS Code extension that pairs your editor with a **local Ollama** LLM. It's built to run on modest laptop hardware — down to a 1B-parameter, non-agentic model — while still scaling up to full agentic, tool-calling workflows on stronger machines. No cloud calls, no telemetry, no data leaving your machine.
+HirayaCoder is a **fully offline** VS Code extension that pairs your editor with a **local Ollama** LLM. It's built to run on modest laptop hardware — down to a 1B-parameter model — while still scaling up to full native tool-calling workflows on stronger machines. No cloud calls, no telemetry, no data leaving your machine.
 
 > **Hiraya** (Filipino) — imagination, aspiration, the spark of an idea before it becomes real.
 
@@ -10,11 +14,14 @@ HirayaCoder is a **fully offline** VS Code extension that pairs your editor with
 
 ## Why HirayaCoder
 
-- 🤖 **Agentic on every model** — HirayaCoder plans, reads files, edits across multiple files, and iterates within a task on its own, the way Claude Code does — even on a 1B model.
+- 🤖 **Agentic on every model** — plans, reads files, edits, deletes, and runs scripts across multiple files within a task on its own, the way Claude Code and Copilot Chat do — even on a 1B model.
+- 🧠 **Smarter small models via memory** — a local, plain-text, in-memory + on-disk memory store (`.hirayacoder/memory/`) and a context translator keep a 1B model "aware" of what it already did earlier in the session, compensating for its tiny context window.
+- 📎 **Context files** — attach one or more reference files with the `+` button so the agent has clear direction before it starts.
+- 🗂️ **Chat lives in its own tab** — opens as a full editor tab, just like GitHub Copilot Chat and Claude Code, not squeezed into a small sidebar.
 - 🔒 **Private by construction** — only ever talks to `127.0.0.1` (your local Ollama instance).
-- 💻 **Low-spec friendly** — designed and tested against `llama3.2:1b` for machines without a GPU, using a simulated step-by-step agent loop instead of native tool-calling.
-- 🧠 **Tiered execution, same autonomy** — automatically detects whether your model supports native tool-calling (Tier A) or needs a simulated one-action-per-turn loop (Tier B), and drives the same agent behavior either way.
-- 🛡️ **Security-first** — every file write and terminal command requires explicit approval, at every step of every agent session, on both tiers; see [`/doc/SECURITY.md`](doc/SECURITY.md).
+- 🛡️ **Explicit permissions** — four clear modes (Approve Edits / Auto Edit / Approve Running Scripts / Auto Approve Running Scripts) so file edits, deletes, and shell commands never run without the control you choose. See [`/doc/SECURITY.md`](doc/SECURITY.md).
+- 💻 **Low-spec friendly** — designed and tested against `llama3.2:1b` for machines without a GPU.
+- 🌐 **Cross-platform** — works the same on macOS, Windows, and Linux.
 - 🇵🇭 **Made with a Filipino developer's sensibility** — practical, resourceful, built for real hardware, not just top-spec dev machines.
 
 ---
@@ -26,16 +33,16 @@ HirayaCoder/
 ├── app/        # Extension source code
 ├── test/       # Unit + integration tests
 ├── doc/        # Tutorial, architecture, feature docs, security model
-├── setup/      # AI build prompt + versioned model system prompts
+├── setup/      # AI build prompt + versioned model/translator system prompts
 ├── security/   # Threat model, SAST report template, rules
-└── docs/       # Icons, screenshots, marketing assets
+└── docs/       # Icon, screenshots, marketing assets
 ```
 
 ## Quick Start
 
 1. Install [Ollama](https://ollama.com) and run `ollama pull llama3.2:1b`.
 2. `npm install` in this repo, then press `F5` in VS Code to launch the dev host.
-3. Open the HirayaCoder chat panel and start coding.
+3. Run `HirayaCoder: Open Chat` — it opens in its own tab with a welcome screen: model dropdown, thinking capacity, permissions menu, and a `+` to attach context files.
 
 Full walkthrough: [`/doc/TUTORIAL.md`](doc/TUTORIAL.md)
 
@@ -46,6 +53,10 @@ This project was scaffolded from a single structured prompt designed for AI codi
 ## Security
 
 See [`/doc/SECURITY.md`](doc/SECURITY.md) for the security model and [`/security/threat-model.md`](security/threat-model.md) for the full threat matrix. SAST results are tracked per release in [`/security/sast-report-template.md`](security/sast-report-template.md).
+
+## Author
+
+Built by [**jaymar921**](https://github.com/jaymar921).
 
 ## License
 
