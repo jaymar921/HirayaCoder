@@ -3,7 +3,7 @@
 ## Design Principles
 
 1. **Offline-only, loopback-only.** The extension only ever talks to `127.0.0.1`/`localhost` (the local Ollama service). Any configured URL that isn't loopback is rejected by `core/ollamaClient.js` at load time.
-2. **Default-deny on side effects.** Nothing writes to disk or executes a shell command without explicit user approval via `security/permissionGate.js` — true at every step of every agent session, regardless of loop strategy (native tool-calling or simulated ReAct) or how many steps the agent has already taken autonomously. Reads within the workspace don't require per-call approval so the agent can explore freely, but writes and shell execution always do.
+2. **Default-deny on side effects.** Nothing writes to disk, deletes a file, or executes a shell/script command without explicit user approval via `security/permissionGate.js` — true at every step of every agent session, regardless of loop strategy (native tool-calling or simulated ReAct). The four explicit permission states (Approve Edits / Auto Edit / Approve Running Scripts / Auto Approve Running Scripts) are always visible in the chat tab, never hidden settings, and Auto Approve Running Scripts requires a deliberate one-time opt-in. Reads within the workspace don't require per-call approval so the agent can explore freely, but writes, deletes, and script execution always do unless the matching auto mode is on.
 3. **Fail closed, not open.** If model output can't be parsed or validated, HirayaCoder shows the raw response and takes no action — it never guesses.
 4. **Least privilege.** The agent can only read/write inside the current workspace root; `security/pathGuard.js` canonicalizes and validates every path.
 5. **No silent data exfiltration.** `security/secretsScanner.js` screens content before it's sent to the model (even locally) so `.env` files, keys, and tokens aren't casually included in prompts by accident.
@@ -25,11 +25,11 @@ See `/security/threat-model.md` for the full matrix. Key threats considered:
 
 ## What HirayaCoder Will Never Do
 
-- Send code, files, or prompts to any non-loopback network endpoint.
-- Auto-execute a terminal command without explicit per-session opt-in.
-- Auto-write a file without a diff shown and an explicit **Apply** click.
+- Send code, files, session memory, or attached context files to any non-loopback network endpoint.
+- Auto-run a shell/script command without the user explicitly enabling Auto Approve Running Scripts for that session.
+- Auto-write or auto-delete a file without either an explicit Apply click, or Auto Edit explicitly enabled.
 - Collect telemetry, usage analytics, or crash reports.
-- Store credentials or model output outside the local workspace `.hirayacoder/` folder.
+- Store credentials, memory, or model output outside the local workspace `.hirayacoder/` folder — which the extension offers (never forces) to add to your `.gitignore`.
 
 ## Reporting a Security Issue
 
