@@ -13,6 +13,11 @@ dist/
 *.vsix
 npm-debug.log*
 
+# --- Versioned packaged builds (binaries) — keep the folder's own README, ignore everything else ---
+/builds/*
+!/builds/README.md
+!/builds/**/README.md
+
 # --- Editor / OS ---
 .vscode-test/
 .DS_Store
