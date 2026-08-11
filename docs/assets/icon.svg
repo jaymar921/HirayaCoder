@@ -1,0 +1,33 @@
+<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="hirayaGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FF7A45"/>
+      <stop offset="55%" stop-color="#FFB020"/>
+      <stop offset="100%" stop-color="#2B6CB0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- background -->
+  <rect width="128" height="128" rx="24" fill="#101826"/>
+
+  <!-- spark / sunburst (hiraya = imagination/spark) -->
+  <g transform="translate(64,50)">
+    <circle r="14" fill="url(#hirayaGradient)"/>
+    <g stroke="url(#hirayaGradient)" stroke-width="4" stroke-linecap="round">
+      <line x1="0" y1="-26" x2="0" y2="-34"/>
+      <line x1="0" y1="26" x2="0" y2="34"/>
+      <line x1="-26" y1="0" x2="-34" y2="0"/>
+      <line x1="26" y1="0" x2="34" y2="0"/>
+      <line x1="-18" y1="-18" x2="-24" y2="-24"/>
+      <line x1="18" y1="-18" x2="24" y2="-24"/>
+      <line x1="-18" y1="18" x2="-24" y2="24"/>
+      <line x1="18" y1="18" x2="24" y2="24"/>
+    </g>
+  </g>
+
+  <!-- code bracket motif -->
+  <g fill="none" stroke="#E8ECF1" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M40 92 L28 100 L40 108"/>
+    <path d="M88 92 L100 100 L88 108"/>
+  </g>
+</svg>
