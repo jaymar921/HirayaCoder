@@ -40,4 +40,4 @@ This step:
 - `{step_summary}` — a short, extension-generated summary of the step (action + 1-line result), not the raw model output, to keep this call cheap and fast.
 - Treat a `NONE` response (or any response that fails to parse as plain "- " bullet lines) as "append nothing" — never fabricate a note when the model declines.
 - Append accepted notes to `memoryStore.js` verbatim (already plain text, no further parsing needed) — one `append()` call per note line.
-- This call should be fast and low-token; if it noticeably slows down the session on a very low-spec machine, let the user disable translator calls entirely from settings, at the cost of the model "forgetting" more within long sessions.
+- `agent/nativeToolLoop.js`/`agent/reactLoop.js` are only invoked at all when the chat tab's mode button is set to **Agent** (see `PROMPT.md` section 6). In **Plan** mode, the same driver runs with `write_file`/`delete_file`/`run_script` omitted from the schema entirely (not just gated), and its final output is rendered as a plan checklist instead of applied. In **Ask** mode, neither loop runs at all — the extension answers directly with the model, no tools offered.
