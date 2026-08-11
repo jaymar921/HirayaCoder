@@ -115,6 +115,7 @@ You can also open the **Model Manager** view (`HirayaCoder: Manage Models` from 
   - The chat **input box** and **Send** button.
   - The **model dropdown** — every model `ollama list` knows about.
   - The **Thinking Capacity** selector — Low / Medium / High.
+  - A **mode button** — **Agent / Plan / Ask** (see below).
   - The **Permissions** button — shows and controls the four permission states (see below).
 - You can open multiple chat tabs at once — each is its own session with its own memory file.
 
@@ -123,6 +124,16 @@ You can also open the **Model Manager** view (`HirayaCoder: Manage Models` from 
 - HirayaCoder works step by step: reading files it needs, searching the workspace, proposing edits (or deletions, or a script to run) — narrating each step live in the chat (`thought` → `action` → result), the same way Claude Code shows its work.
 - This works the same way on `llama3.2:1b` as on a larger model — on small models it takes one step at a time (typically up to 8 steps per task); on larger models it can plan further ahead (up to ~25 steps).
 - You can **pause**, **stop**, or let it **resume** at any point.
+
+### Mode: Agent / Plan / Ask
+The mode button next to the model dropdown controls how far a message is allowed to go:
+| Mode | What happens | Can it edit/delete/run scripts? |
+|---|---|---|
+| **Ask** | A direct, single-turn answer — no exploration, no tool use. Best for "explain this", "what's wrong with this error", quick questions. Fastest and most reliable, especially on `llama3.2:1b`. | No. |
+| **Plan** | HirayaCoder explores the workspace (read-only) and comes back with a numbered, editable checklist of what it would do — no files are touched. You can edit the plan, then click **Run this plan** to hand it straight to Agent mode. | No — write/delete/run-script aren't even offered to the model in this mode. |
+| **Agent** (default) | The full workflow below — reads, edits, deletes, and runs scripts as needed to complete the task, gated by your Permissions settings. | Yes, per your Permissions settings. |
+
+Switch modes per message — you're not locked in for the whole chat tab, and switching doesn't lose session memory or attached context files.
 
 ### Context Files (the **+** button)
 - Click **+** to attach one or more files — a spec, a style guide, an existing module you want new code to match. HirayaCoder reads them for **direction**, not to edit them.
