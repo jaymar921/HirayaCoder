@@ -52,7 +52,8 @@
       {
         "command": "hirayacoder.openChat",
         "title": "Open Chat",
-        "category": "HirayaCoder"
+        "category": "HirayaCoder",
+        "icon": "$(add)"
       },
       {
         "command": "hirayacoder.selectModel",
@@ -128,6 +129,17 @@
         "command": "hirayacoder.generateTests",
         "title": "Generate Tests for This File",
         "category": "HirayaCoder"
+      },
+      {
+        "command": "hirayacoder.openSession",
+        "title": "Open Session",
+        "category": "HirayaCoder"
+      },
+      {
+        "command": "hirayacoder.refreshSessions",
+        "title": "Refresh Sessions",
+        "category": "HirayaCoder",
+        "icon": "$(refresh)"
       }
     ],
     "menus": {
@@ -158,6 +170,28 @@
         {
           "command": "hirayacoder.generateTests",
           "group": "2_write@4"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "hirayacoder.openChat",
+          "when": "view == hirayacoder.sessions",
+          "group": "navigation@1"
+        },
+        {
+          "command": "hirayacoder.refreshSessions",
+          "when": "view == hirayacoder.sessions",
+          "group": "navigation@2"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "hirayacoder.openSession",
+          "when": "false"
+        },
+        {
+          "command": "hirayacoder.refreshSessions",
+          "when": "false"
         }
       ]
     },
@@ -315,7 +349,31 @@
           "description": "Verbosity of the HirayaCoder output channel."
         }
       }
-    }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "hirayacoder",
+          "title": "HirayaCoder",
+          "icon": "docs/assets/activity-bar.svg"
+        }
+      ]
+    },
+    "views": {
+      "hirayacoder": [
+        {
+          "id": "hirayacoder.sessions",
+          "name": "Sessions",
+          "contextualTitle": "HirayaCoder"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "hirayacoder.sessions",
+        "contents": "Each chat tab is a session with its own memory, kept in this workspace.\n\n[Start a chat](command:hirayacoder.openChat)\n\nRuns entirely on your machine through Ollama."
+      }
+    ]
   },
   "scripts": {
     "lint": "eslint app test",
