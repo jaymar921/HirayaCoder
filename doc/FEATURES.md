@@ -20,9 +20,39 @@ that session or start a new one.
 
 | Mode | What it can do |
 |---|---|
-| **Agent** | Reads, writes, deletes, runs commands — all permission-gated. |
+| **Agent** | Reads, writes, deletes, creates and removes folders, runs commands — all permission-gated. Answers conversationally when the message is conversation, without you switching anything. |
 | **Plan** | Produces an ordered checklist and **cannot mutate anything** — the write, delete, and script tools are not in its tool set at all, rather than being offered and refused. Comes with a **Run this plan** button that hands it to Agent mode. |
 | **Ask** | Answers questions. No loop, no tools. |
+
+### Agent mode answers when you are talking to it
+
+Agent mode constrains a small model's output to a grammar whose every branch is a tool
+call, which is what makes a 1B model agentic at all — and which meant a greeting could
+only come out as `read_file`. "hi", "what model are you", and "do you remember what we
+were doing" each ended in the repeat guard.
+
+Each message is now classified before it is routed, and a conversational one is answered
+directly: one reply, no loop, no tools. The mode selector does not move and the next
+message is judged on its own, so the moment you ask for work every tool is back.
+
+The classifier is patterns, not another model call — it runs before every turn, and
+spending an inference to establish that "hi" is not a refactor is a bad trade. It treats
+a message as work unless there is positive evidence otherwise, and **any instruction
+anywhere wins**: "hi, can you fix the bug in app.js" is work with a greeting attached.
+Plan and Ask ignore it entirely, because those are you saying what you want.
+
+### It has to have actually done it
+
+A run that says it finished gets checked against what it produced, once:
+
+- **Nothing changed**, on a request that asked for something to be built or edited. A
+  request that only asked you to read, check, or explain is never challenged — those
+  finish correctly having written nothing.
+- **A function it just wrote was never implemented** — a body containing
+  `// Implement the delete functionality here` and a `console.log`, and nothing else.
+
+Once, not repeatedly. A model that cannot produce the work will not be argued into it,
+and the honest "no files changed" report is better than a burned step budget.
 
 ### Thinking capacity
 
@@ -76,6 +106,30 @@ models are GPU-resident this is worth re-trying.
   (**Show Session Memory**, **Clear Session Memory**). Notes are composed by the
   extension from what actually happened, not written by the model, and a failed write or
   delete is deliberately *not* remembered.
+- **The conversation itself** is carried into the prompt — what was actually said, not
+  just a distilled note about what was done. It outranks session memory when the budget
+  cannot fit both, since the notes are a compression of the same material. This is what
+  makes "do it the way we discussed" and "the file I mentioned earlier" work at all.
+- **Facts about the workspace** persist across *every* session in it, not just the one
+  that learned them: a toolchain that is missing, a decision you made, what the project
+  is meant to produce. They are typed and labelled in the prompt, and ordered so your
+  decision outranks anything the agent observed.
+
+  Nothing here comes from a model call — a fact is read out of what a program printed,
+  or it is not recorded, because a wrong one persists and is stated to every later turn
+  as settled. In practice this is mostly about missing toolchains, recognised in all
+  three of the ways one announces itself:
+
+  ```
+  macOS    The operation couldn't be completed. Unable to locate a Java Runtime.
+  Linux    javac: command not found
+  Windows  'javac' is not recognized as an internal or external command
+  ```
+
+  The macOS case is the one no `PATH` check can catch — Apple ships a `javac` stub, so
+  the program really is there and really does fail. **Clear Session Memory** gains an
+  entry for these, kept separate because they have a different scope; use it after
+  installing something the agent recorded as absent.
 
 ---
 
@@ -111,6 +165,11 @@ The parts that decide what the agent is *allowed* to do.
   and recoverable from the change set; a wrong delete is neither. This is not
   theoretical — a 1B model once deleted the file it had been asked to edit while
   reporting an unrelated thought.
+- **Folder deletes always confirm, in every mode, with no setting that turns it off.**
+  They are also refused for a folder that still has anything in it unless the call
+  explicitly asks to recurse, and refused outright past 100 items with a note to do it
+  yourself. The distance between `src/main/java` and `src` is one token of model output,
+  and a subtree is the one thing the change set cannot put back.
 - **Some commands always ask**, even in auto-approve mode: `git push`, `npm publish`,
   `ollama pull`, and anything else that publishes code or reaches the network.
   Auto-approve means *routine local work*.

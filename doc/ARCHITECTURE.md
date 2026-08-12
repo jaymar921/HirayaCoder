@@ -98,10 +98,13 @@ identical traffic regardless of tier. Swapping loops changes how an action is
 | `ollamaClient.js` | Zero-dependency HTTP against `/api/tags`, `/api/show`, `/api/chat`, `/api/generate`, `/api/pull`, `/api/version`. NDJSON streaming, timeouts, abort. **Loopback enforced at construction**, before a socket opens. |
 | `modelDiscovery.js` | Normalises `/api/tags`; falls back to `/api/show` only for incomplete entries. Caches by name+digest. |
 | `modelCapability.js` | Tier rule, budget matrix, `canPlanTodos`. Indexes budgets through a `Map` so a settings-supplied key cannot reach a prototype member. |
-| `promptRouter.js` | Assembles the system prompt and the tool set for the current mode. Plan and Ask modes **omit** the mutating tools rather than refusing them later. |
+| `intentRouter.js` | Decides, before routing, whether a message is conversation or work. Patterns only — no model call. `task` is the default and `chat` needs positive evidence, because a misread greeting costs one loop while a misread request is silently dropped. Consulted in Agent mode only. |
+| `promptRouter.js` | Assembles the system prompt and the tool set for the current mode. Plan and Ask modes **omit** the mutating tools rather than refusing them later, and a conversational message in Agent mode gets the same treatment: no loop, no tools, one reply. |
+| `completionCheck.js` | Consulted when a loop is told the work is finished. Sends the model back **once** if nothing changed on a request that asked for a change, or if a file it just wrote still has an unimplemented function body. |
 | `contextBuilder.js` | Assembles the prompt under a token budget, by priority. Redacts on the way in. |
 | `contextFilesManager.js` | Files attached with `+`. Scans and redacts at ingestion, before truncation. |
 | `memoryStore.js` | Plain-text session memory. Treats its own file as untrusted on read; neutralises injection both directions; supersedes by subject. |
+| `factStore.js` | Typed, workspace-scoped facts — what is *true*, as against what happened. Detection is pattern-matching over what a program printed; no model call ever writes one. Same untrusted-file discipline as `memoryStore`, whose `neutralize` it reuses. |
 | `contextTranslator.js` | Turns a step trace into memory notes. **Composed**, not model-written. |
 | `outputParser.js` | Model output → validated action. |
 | `tokenBudget.js` (in `utils/`) | Estimation and truncation that errs high. |
@@ -142,10 +145,25 @@ Everything lives under `.hirayacoder/` in the workspace, and nothing leaves the 
 | Path | Contents |
 |---|---|
 | `.hirayacoder/memory/session<N>.txt` | Plain-text session memory, one file per chat tab |
-| `.hirayacoder/transcripts/session<N>.json` | The visible conversation, restored when a tab is reopened |
+| `.hirayacoder/transcripts/session<N>.json` | The conversation, restored when a tab is reopened **and** fed to the model as context |
+| `.hirayacoder/facts.jsonl` | Typed facts about this workspace and machine, shared by every session |
 | `.hirayacoder/audit.log` | Append-only JSONL: action, decision, mode, timestamp |
 | `.hirayacoder/outcomes.jsonl` | Append-only JSONL: model, tier, action, guard code, stop reason — counts only, no paths or content |
 | `.hirayacoder/context-files/` | Index of files attached with `+` |
+
+The three memory-ish files answer three different questions, which is why they are not
+one file:
+
+- **Session memory** is what the agent *did*, per conversation. A log.
+- **The transcript** is what was *said*, per conversation. Until 0.4.0 it was display
+  state only — written, restored into the panel, and never shown to the model, which is
+  why the agent could not answer a question about its own conversation.
+- **Facts** are what is *true* of the project and the machine, per **workspace**. Typed
+  (`environment`, `decision`, `artifact`, `preference`) and shared across every session,
+  so a second conversation starts knowing that there is no JDK behind `javac` rather
+  than spending its step budget finding out again. Nothing here comes from a model call:
+  a fact is detected from what a program printed, or it is not recorded, because a wrong
+  fact persists and is stated to every future turn as settled.
 
 Both `.git` and `.hirayacoder` are write- and delete-protected, so the agent cannot
 rewrite its own audit log or memory.
