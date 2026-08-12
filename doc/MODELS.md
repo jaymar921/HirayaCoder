@@ -32,6 +32,26 @@ that needed it.
 | OS | Windows 11 |
 | Ollama | 0.32.9, partial GPU offload |
 
+**Machine C — MacBook Pro (measurement in progress)**
+
+| | |
+|---|---|
+| Model | MacBook Pro 16-inch, M4 Pro, 2024 |
+| CPU | Apple M4 Pro, 14-core (10 performance + 4 efficiency) |
+| GPU | 20-core, hardware-accelerated ray tracing |
+| Memory | **24 GB unified** |
+| OS | macOS |
+
+Unified memory is why this machine is worth measuring separately. A and B both have a
+hard split — A runs everything on the CPU, B splits each model between a 4 GB card and
+system RAM. Here the GPU addresses the same 24 GB as the CPU, and Metal is typically
+allowed about 75% of it, which exceeds what any model in this matrix needs. The
+prediction to test is that **every model is at or near 100% GPU**, including
+`gemma4:e4b` at 9.6 GB, which Machine A could not load at all.
+
+The handoff instructions are in `setup/FOLLOWUP-PROMPT-MACOS.md`. Results go in their
+own section below, alongside A and B rather than over them.
+
 Two consequences shape every laptop result below.
 
 **Inference is CPU-bound and memory-bandwidth-bound.** LPDDR5-4800 shared between the
@@ -220,6 +240,28 @@ Comparing the two machines on the rows the laptop measured:
 in both runs here. Nothing about a faster machine makes a 2B model reason better; this
 is ordinary run-to-run variance, and it is the reason the guards matter more than the
 timings. Every one of the 17 runs left the workspace either correct or untouched.
+
+### Machine C — MacBook Pro (M4 Pro, 24 GB unified)
+
+**Not yet measured.** Nine models × two tasks, plus `gemma4:e2b` forced to Tier B, are
+queued on that machine. The table below is the shape to fill; leave it empty rather than
+estimating, and do not adjust A or B to match.
+
+| Model | Tier | Simple | Full | Resident | CPU/GPU | Verdict |
+|---|---|---|---|---|---|---|
+| | | | | | | |
+
+Four questions the numbers should answer explicitly, in prose underneath:
+
+1. **Is every model 100% GPU?** If any splits, at what size — that is the number a
+   reader with a 16 GB or 8 GB Mac actually needs.
+2. **How much faster than Machine B?** Its best correct result was `gemma4:e2b` at 25.5s
+   on the full task.
+3. **Does correctness change?** It should not; same weights, same prompts. If
+   `qwen3.5:2b` passes here after failing twice on B, that is variance — say so, rather
+   than implying the hardware made the model smarter.
+4. **Which constraint binds?** A says fit-and-latency, so a 2B model wins. B says
+   correctness, so the largest that runs wins. Say which applies here and why.
 
 ### Open: the laptop's TODO-path numbers
 

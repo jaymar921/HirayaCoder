@@ -12,8 +12,10 @@
 # model-facing prompts from there at runtime. Excluding them would silently drop the
 # extension onto its embedded fallback prompts in production. Only the build spec,
 # which is for humans, is left out.
-setup/PROMPT.md
-setup/FOLLOWUP-PROMPT.md
+# Every top-level setup document is for humans building the project, not for the
+# packaged extension. A pattern rather than a list, because the previous version named
+# two files individually and the third one silently shipped.
+setup/*.md
 security/**
 test/**
 builds/**

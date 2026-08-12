@@ -67,15 +67,21 @@ even if everything else passed.
 
 ### The machines
 
-| | Machine A — laptop | Machine B — desktop |
-|---|---|---|
-| CPU | Intel Core i5-12450H (4P + 4E) | AMD Ryzen 5 3600X (6C / 12T) |
-| RAM | 16 GB LPDDR5-4800 | 32 GB DDR4-3200 |
-| GPU | Intel UHD — **not used** | NVIDIA GTX 1650 Super, **4 GB VRAM** |
-| Inference | CPU-only | Partial GPU offload |
+| | Machine A — laptop | Machine B — desktop | Machine C — MacBook Pro |
+|---|---|---|---|
+| CPU | Intel Core i5-12450H (4P + 4E) | AMD Ryzen 5 3600X (6C / 12T) | Apple M4 Pro, 14-core (10P + 4E) |
+| RAM | 16 GB LPDDR5-4800 | 32 GB DDR4-3200 | 24 GB **unified** |
+| GPU | Intel UHD — **not used** | NVIDIA GTX 1650 Super, **4 GB VRAM** | 20-core, shares the 24 GB |
+| Inference | CPU-only | Partial GPU offload | *measurement in progress* |
 
 **Machine A is the design constraint.** Every guard and budget in this project exists
 because of something that happened there.
+
+**Machine C is being measured now** and has no rows below yet. Unified memory removes
+the split that shapes Machine B — the GPU addresses the same 24 GB the CPU does — so
+every model in the matrix is expected to be GPU-resident, a configuration neither other
+machine can produce. Numbers will be published when they exist rather than predicted
+here.
 
 ### Results
 
@@ -91,10 +97,11 @@ because of something that happened there.
 | `ornith:9b` | A | B | 64.5s | 91.9s | 63% / 37% | **passes both** |
 | `gemma4:e4b` | A | B | 79.0s | 63.0s | 85% / 15% | **passes both** — the strongest that runs here |
 
-Machine A, for comparison, on the rows it measured: `qwen3.5:2b` ~125s simple,
-`qwen3.5:4b` 299s full, `gemma4:e2b` 180–200s full, and `gemma4:e4b` could not run at
-all on 16 GB. Full detail, including what each model broke and how,
-is in [MODELS.md](https://github.com/jaymar921/HirayaCoder/blob/main/doc/MODELS.md).
+Every row above is Machine B. Machine A, for comparison, on the rows it measured:
+`qwen3.5:2b` ~125s simple, `qwen3.5:4b` 299s full, `gemma4:e2b` 180–200s full, and
+`gemma4:e4b` could not run at all on 16 GB. Machine C is pending. Full detail, including
+what each model broke and how, is in
+[MODELS.md](https://github.com/jaymar921/HirayaCoder/blob/main/doc/MODELS.md).
 
 ---
 
