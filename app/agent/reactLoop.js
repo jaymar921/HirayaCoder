@@ -52,6 +52,10 @@ const RETRYABLE_ERRORS = new Set([
   'FULLY_COMMENTED',
   'MISSING_CONTENT',
   'ECHOED_OBSERVATION',
+  // `delete_folder` refuses a non-empty folder and asks for the same call back with
+  // `recursive: true`. That is the tool naming the one thing that would work, so it
+  // belongs with the content refusals rather than with the misdirected actions.
+  'FOLDER_NOT_EMPTY',
 ]);
 
 /** How many corrected retries a single action/path is forgiven before the repeat guard applies. */
@@ -147,6 +151,17 @@ function nextStepHint(action, result, repeats, activeRoute) {
   // while this function simultaneously told it never to write that path again. It
   // obeyed the loop, went back to read_file, and the session ended having done
   // nothing.
+  // The folder case is a retryable refusal with a different remedy: nothing is wrong
+  // with the payload, a flag is missing. Sending it through the "corrected content"
+  // wording below would ask a small model to fix something that is not broken.
+  if (!result.ok && result.error === 'FOLDER_NOT_EMPTY') {
+    return (
+      `${action.path || 'That folder'} still exists — it is not empty, so it was left alone. ` +
+      'If you meant to remove it and everything inside it, send delete_folder for the same path with ' +
+      '"recursive": true. If you only wanted particular files gone, use delete_file on each of them.'
+    );
+  }
+
   if (!result.ok && RETRYABLE_ERRORS.has(result.error)) {
     return (
       `${action.path || 'The file'} was NOT changed — the content you sent was rejected for the reason above. ` +
@@ -270,6 +285,9 @@ function recoveryHint(error) {
  * @param {string} options.task
  * @param {string} options.context           Prebuilt context block from contextBuilder.
  * @param {(action: import('../core/outputParser').ParsedAction) => Promise<import('../agent/toolRegistry').ToolResult>} options.execute
+ * @param {(summary: string) => string | null} [options.verifyDone]
+ *   Consulted when the model says it has finished. A returned string is fed back as a
+ *   correction and the loop continues; null accepts the `done`. Called at most once.
  * @param {(event: object) => void} [options.onEvent]
  * @param {AbortSignal} [options.signal]
  * @returns {Promise<{steps: import('./agentSession').AgentStep[], summary: string, stopReason: string}>}
@@ -296,6 +314,8 @@ async function run(options) {
   let summary = '';
   let stopReason = 'budget';
   let parseFailures = 0;
+  /** A `done` has already been sent back once for want of evidence. */
+  let doneChallenged = false;
   // Two independent nudges. `hint` is about the task ("you have the file, now edit
   // it") and survives a bad reply; `parseNudge` is about the last reply's shape and
   // is cleared as soon as one parses. Folding them into one variable meant a parse
@@ -433,6 +453,20 @@ async function run(options) {
     const action = parsed.action;
 
     if (action.action === 'done') {
+      // Raised once, never twice — see `agent/completionCheck`. A model that cannot
+      // produce the work will not be argued into it, and refusing indefinitely ends
+      // with a worse report than the honest one.
+      const objection = doneChallenged || !options.verifyDone ? null : options.verifyDone(action.summary || '');
+      if (objection) {
+        doneChallenged = true;
+        logger.info('Challenged a "done" that nothing supports; giving the model one more turn.');
+        hint = objection;
+        // The observation is deliberately left standing: the model's last action really
+        // did happen, and clearing it is how a small model loses the file it just read
+        // and goes back to reading it again.
+        continue;
+      }
+
       summary = action.summary || 'Finished.';
       stopReason = 'done';
       emit({ type: 'done', summary, thought: action.thought });
@@ -516,7 +550,11 @@ async function run(options) {
   }
 
   logger.info(`ReAct session ended: ${stopReason} after ${steps.length} step(s).`);
-  return { steps, summary, stopReason };
+  // `doneChallenged` travels out because the challenge is only half the mechanism. The
+  // other half is telling the user when it went unanswered: a model that finishes,
+  // is told nothing changed, and finishes again has produced a report the user must
+  // not read as success.
+  return { steps, summary, stopReason, doneChallenged };
 }
 
 module.exports = {

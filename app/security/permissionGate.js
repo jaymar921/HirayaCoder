@@ -136,9 +136,50 @@ class PermissionGate {
   }
 
   /**
+   * Creating an empty directory. The least consequential mutation there is — it
+   * destroys nothing and `write_file` already does it implicitly — so it follows the
+   * ordinary edit permission rather than getting a rule of its own.
+   *
+   * @param {{path: string, sessionId?: string, mode?: string}} request
+   * @returns {Promise<Decision>}
+   */
+  async requestCreateFolder(request) {
+    return this._requestMutation('create_folder', request, {
+      title: `Create folder ${request.path}?`,
+      detail: 'This adds an empty directory to your workspace.',
+    });
+  }
+
+  /**
+   * Removing a directory, and everything under it.
+   *
+   * The one mutation that always asks, in every permission mode, with no setting that
+   * turns it off — `alwaysConfirmDeletes` governs files and is deliberately not
+   * consulted here. A wrong file delete costs one file and the change set can restore
+   * it; a wrong recursive delete costs a subtree and nothing can. The gap between
+   * "delete src/main/java" and "delete src" is one token of model output.
+   *
+   * `entries` is what the tool counted underneath, so the confirmation can say how
+   * much is actually at stake instead of asking the user to guess.
+   *
+   * @param {{path: string, sessionId?: string, mode?: string, entries?: number}} request
+   * @returns {Promise<Decision>}
+   */
+  async requestDeleteFolder(request) {
+    const count = Number(request.entries) || 0;
+    return this._requestMutation('delete_folder', request, {
+      title: `Delete folder ${request.path}?`,
+      detail:
+        count > 0
+          ? `This removes the folder and everything in it — ${count} item(s). Folder deletions always ask, in every permission mode.`
+          : 'This removes an empty folder. Folder deletions always ask, in every permission mode.',
+    });
+  }
+
+  /**
    * Shared write/delete flow.
    *
-   * @param {'write_file' | 'delete_file'} action
+   * @param {'write_file' | 'delete_file' | 'create_folder' | 'delete_folder'} action
    * @param {{path: string, sessionId?: string, mode?: string}} request
    * @param {{title: string, detail: string, before?: string | null, after?: string}} prompt
    * @returns {Promise<Decision>}
@@ -159,21 +200,25 @@ class PermissionGate {
       return this._blocked(action, request, err);
     }
 
-    const deleteNeedsConfirmation = action === 'delete_file' && this.alwaysConfirmDeletes;
+    // A folder delete is unconditional — see `requestDeleteFolder`.
+    const deleteNeedsConfirmation =
+      action === 'delete_folder' || (action === 'delete_file' && this.alwaysConfirmDeletes);
 
     if (!this.modes.requiresEditApproval() && !deleteNeedsConfirmation) {
       await this._audit({ action, decision: 'auto-approved', path: resolved.relative, ...this._context(request) });
       return { allowed: true, decision: 'auto-approved', resolved };
     }
 
+    const destructive = action === 'delete_file' || action === 'delete_folder';
+
     const approved = await this._ask({
-      kind: action === 'write_file' ? 'write' : 'delete',
+      kind: destructive ? 'delete' : 'write',
       title: prompt.title,
       detail:
-        deleteNeedsConfirmation && !this.modes.requiresEditApproval()
+        deleteNeedsConfirmation && !this.modes.requiresEditApproval() && action === 'delete_file'
           ? `${prompt.detail} Deletions always ask, even in Auto Edit mode.`
           : prompt.detail,
-      risk: action === 'delete_file' ? 'elevated' : 'normal',
+      risk: destructive ? 'elevated' : 'normal',
       path: resolved.relative,
       // The guard's own output, never the model's string — a confirmation UI that
       // opens this path must not be handed something that skipped resolution.

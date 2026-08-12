@@ -117,6 +117,200 @@ describe('AgentSession', () => {
     });
   });
 
+  describe('conversation in Agent mode', () => {
+    it('answers a greeting instead of running the agent at it', async () => {
+      // Reproduced from the evaluation session: in Agent mode every message went into
+      // the loop, whose grammar has no branch for an answer, so "what model are you"
+      // came back as "I stopped because I kept repeating the same step (read_file)".
+      const client = scriptedClient(['Hey! What are we working on?']);
+      const session = makeSession({ client });
+
+      const result = await session.run('hi', { mode: 'agent' });
+
+      assert.strictEqual(result.stopReason, 'conversation');
+      assert.strictEqual(result.steps.length, 0);
+      assert.strictEqual(client.calls, 1, 'exactly one call, no loop');
+      assert.strictEqual(result.summary, 'Hey! What are we working on?');
+      assert.strictEqual(client.bodies[0].tools, undefined, 'a tool schema was offered for a greeting');
+      assert.strictEqual(client.bodies[0].format, undefined, 'the action grammar was still applied');
+    });
+
+    it('runs the agent when the greeting has work attached', async () => {
+      const client = scriptedClient([
+        json({ thought: 'write it', action: 'write_file', path: 'src/new.js', code: 'export const a = 1;\n' }),
+        json({ action: 'done', summary: 'Added src/new.js.' }),
+      ]);
+      const session = makeSession({ client, autoEdit: true });
+
+      const result = await session.run('hi! please create src/new.js', { mode: 'agent' });
+
+      assert.notStrictEqual(result.stopReason, 'conversation');
+      assert.ok(fs.existsSync(path.join(root, 'src', 'new.js')), 'the request was dropped as small talk');
+    });
+
+    it('shows the model what was said earlier', async () => {
+      const client = scriptedClient(['You asked me to build a Java todo app.']);
+      const session = makeSession({ client });
+
+      await session.run('can you remember our first conversation?', {
+        mode: 'agent',
+        conversation: [
+          { role: 'user', text: 'create a java todo app' },
+          { role: 'assistant', text: 'Created TodoApp.java.' },
+        ],
+      });
+
+      const prompt = JSON.stringify(client.bodies[0].messages);
+      assert.match(prompt, /create a java todo app/);
+    });
+
+    it('carries the conversation into a working turn too', async () => {
+      // "do it the way we discussed" is an ordinary thing to say mid-task.
+      const client = scriptedClient([json({ action: 'done', summary: 'Done.' })]);
+      const session = makeSession({ client });
+
+      await session.run('do the same for the other file', {
+        mode: 'agent',
+        conversation: [{ role: 'user', text: 'use tabs, not spaces' }],
+      });
+
+      assert.match(JSON.stringify(client.bodies[0].messages), /use tabs, not spaces/);
+    });
+  });
+
+  describe('what the workspace has learned', () => {
+    it('records a missing toolchain and offers it to the next session', async () => {
+      // The evaluation cost this twice: session 1 spent its whole budget finding out
+      // `javac` could not run, and session 2 — same workspace, an hour later — spent
+      // its budget finding out again, then proposed apt-get on macOS.
+      const { FactStore } = require('../../app/core/factStore');
+
+      const first = makeSession({ client: scriptedClient(['ok']) });
+      first.facts = new FactStore(root);
+      await first._remember([
+        {
+          action: { action: 'run_script', command: 'javac -d build src/main/java/App.java' },
+          result: { ok: false, observation: 'Unable to locate a Java Runtime.' },
+        },
+      ]);
+      await first.facts.flush();
+
+      // A second session, with its own store over the same workspace.
+      const next = makeSession({ client: scriptedClient(['ok']) });
+      next.facts = new FactStore(root);
+
+      assert.match(await next._renderMemory(), /Java runtime/i);
+    });
+
+    it('puts what is known into the system prompt of the next turn', async () => {
+      const { FactStore } = require('../../app/core/factStore');
+      const facts = new FactStore(root);
+      await facts.record({ kind: 'environment', text: 'A Java runtime (JDK) is not available on this machine.' });
+      await facts.flush();
+
+      const client = scriptedClient([json({ action: 'done', summary: 'Understood.' })]);
+      const session = makeSession({ client });
+      session.facts = facts;
+
+      await session.run('compile the project', { mode: 'agent' });
+
+      const systemPrompt = client.bodies[0].messages[0].content;
+      assert.match(systemPrompt, /Java runtime/i, 'the session re-learned what it already knew');
+    });
+  });
+
+  describe('challenging an unsupported "done"', () => {
+    it('sends the model back once when it finished without writing anything', async () => {
+      // Five consecutive attempts at one HTML file ended "2 of 2 item(s) completed …
+      // done (no files changed)". The report was honest and the user read it as success.
+      const client = scriptedClient([
+        json({ thought: 'read it', action: 'read_file', path: 'src/app.js' }),
+        json({ action: 'done', summary: 'Converted it.' }),
+        json({ thought: 'actually write it', action: 'write_file', path: 'out.html', code: '<h1>Todo</h1>\n' }),
+        json({ action: 'done', summary: 'Created out.html.' }),
+      ]);
+      const session = makeSession({ client, autoEdit: true });
+
+      const result = await session.run('convert src/app.js into out.html', { mode: 'agent' });
+
+      assert.strictEqual(result.stopReason, 'done');
+      assert.ok(fs.existsSync(path.join(root, 'out.html')), 'the empty "done" was accepted');
+      assert.match(JSON.stringify(client.bodies[2].messages), /nothing in the project has actually changed/i);
+    });
+
+    it('gives up after one challenge rather than arguing with the model', async () => {
+      // A model that cannot produce the work will not be argued into it, and refusing
+      // indefinitely burns the budget to arrive at a worse report than the honest one.
+      const client = scriptedClient([json({ action: 'done', summary: 'All finished.' })]);
+      const session = makeSession({ client, autoEdit: true });
+
+      const result = await session.run('create out.html', { mode: 'agent' });
+
+      assert.strictEqual(result.stopReason, 'done');
+      assert.strictEqual(client.calls, 2, 'the loop argued more than once');
+      assert.strictEqual(result.changeSet.isEmpty(), true);
+    });
+
+    it('tells the user plainly when the challenge went unanswered', async () => {
+      // Accepting the second `done` is right; reporting it as an ordinary success is
+      // not. Observed on `ornith:9b`: asked four times to create todoapp.html, the
+      // entire summary the user got back was the word "Finished."
+      const client = scriptedClient([json({ action: 'done', summary: 'Finished.' })]);
+      const session = makeSession({ client, autoEdit: true });
+
+      const result = await session.run('create todoapp.html', { mode: 'agent' });
+
+      assert.match(result.summary, /Nothing in the project changed/i);
+      assert.match(result.summary, /not of what happened/i);
+    });
+
+    it('adds no such note to a session that actually did the work', async () => {
+      const client = scriptedClient([
+        json({ thought: 'write it', action: 'write_file', path: 'out.html', code: '<h1>Todo</h1>\n' }),
+        json({ action: 'done', summary: 'Created out.html.' }),
+      ]);
+
+      const result = await makeSession({ client, autoEdit: true }).run('create out.html', { mode: 'agent' });
+
+      assert.ok(!/Nothing in the project changed/i.test(result.summary));
+    });
+
+    it('does not challenge a request that only asked to look at something', async () => {
+      const client = scriptedClient([json({ action: 'done', summary: 'It exports one function.' })]);
+      const session = makeSession({ client });
+
+      await session.run('what does src/app.js export', { mode: 'agent' });
+
+      assert.strictEqual(client.calls, 1, 'a read-only request was treated as unfinished work');
+    });
+
+    it('challenges a file whose functions were never written', async () => {
+      const stub = 'function deleteTask(id) {\n  // Implement the delete functionality here\n  console.log(id);\n}\n';
+      const real = 'function deleteTask(id) {\n  todos = todos.filter((t) => t.id !== id);\n  render();\n}\n';
+      const client = scriptedClient([
+        json({ thought: 'write it', action: 'write_file', path: 'todoapp.js', code: stub }),
+        json({ action: 'done', summary: 'Added the delete feature.' }),
+        json({ thought: 'implement it properly', action: 'write_file', path: 'todoapp.js', code: real }),
+        json({ action: 'done', summary: 'Implemented delete.' }),
+      ]);
+      const session = makeSession({ client, autoEdit: true });
+
+      await session.run('add a delete feature to todoapp.js', { mode: 'agent' });
+
+      assert.match(fs.readFileSync(path.join(root, 'todoapp.js'), 'utf8'), /filter/);
+      assert.match(JSON.stringify(client.bodies[2].messages), /never written/);
+    });
+
+    it('leaves Plan mode alone, where changing nothing is the point', async () => {
+      const client = scriptedClient([json({ action: 'done', summary: '1. Add validation to src/app.js' })]);
+      const session = makeSession({ client });
+
+      await session.run('add validation to src/app.js', { mode: 'plan' });
+
+      assert.strictEqual(client.calls, 1, 'a plan was challenged for not editing anything');
+    });
+  });
+
   describe('Plan mode', () => {
     it('explores read-only and produces a checklist without touching disk', async () => {
       const client = scriptedClient([
@@ -138,6 +332,51 @@ describe('AgentSession', () => {
       ]);
       assert.strictEqual(result.changeSet.isEmpty(), true);
       assert.ok(fs.existsSync(path.join(root, 'src', 'old.js')), 'plan mode deleted a file');
+    });
+
+    it('asks for the plan directly when the loop never produced a list', async () => {
+      // The failure this replaces: Plan mode's only source of a checklist used to be
+      // the closing `done` summary happening to come out as a numbered list. A run that
+      // hits the repeat guard has no `done` at all, so the plan was empty, the webview
+      // rendered the stop notice as prose, and "Run this plan" never appeared — Plan
+      // mode looking broken rather than degraded.
+      const client = scriptedClient([
+        json({ thought: 'look', action: 'read_file', path: 'src/app.js' }),
+        json({ thought: 'look again', action: 'read_file', path: 'src/app.js' }),
+        json({ thought: 'and again', action: 'read_file', path: 'src/app.js' }),
+        // The follow-up planning call, once the loop has given up.
+        '1. Add validation to src/app.js\n2. Remove src/old.js',
+      ]);
+      const session = makeSession({ client });
+
+      const result = await session.run('Add validation and clean up', { mode: 'plan' });
+
+      assert.strictEqual(result.stopReason, 'repeating');
+      assert.deepStrictEqual(result.plan, ['Add validation to src/app.js', 'Remove src/old.js']);
+    });
+
+    it('tells the follow-up planner which files the run actually looked at', async () => {
+      const client = scriptedClient([
+        json({ thought: 'look', action: 'read_file', path: 'src/app.js' }),
+        json({ action: 'done', summary: 'I had a look around.' }),
+        '1. Add validation to src/app.js',
+      ]);
+
+      await makeSession({ client }).run('Add validation', { mode: 'plan' });
+
+      const planningPrompt = JSON.stringify(client.bodies[client.bodies.length - 1].messages);
+      assert.match(planningPrompt, /src\/app\.js/);
+    });
+
+    it('falls back to prose rather than inventing steps', async () => {
+      const client = scriptedClient([
+        json({ action: 'done', summary: 'There is nothing to do here.' }),
+        'I could not think of any steps.',
+      ]);
+
+      const result = await makeSession({ client }).run('Do something', { mode: 'plan' });
+
+      assert.deepStrictEqual(result.plan, []);
     });
 
     it('refuses a mutation at the executor even if the loop produces one', async () => {
@@ -425,6 +664,36 @@ describe('AgentSession', () => {
       assert.strictEqual(session.tier, 'A');
       assert.strictEqual(session.thinking, 'low');
       assert.strictEqual(session.model, 'test-model');
+    });
+
+    it('records how long the turn and its steps took', async () => {
+      // The first question anyone asks about a session that felt slow, and until now
+      // the ledger could not answer it at all.
+      const client = scriptedClient([
+        json({ action: 'read_file', path: 'src/app.js' }),
+        json({ action: 'done', summary: 'Had a look.' }),
+      ]);
+      await makeSession({ client, ledger }).run('what does src/app.js do');
+      await ledger.flush();
+
+      const records = await ledger.read();
+      const session = records.find((r) => r.kind === 'session');
+      const step = records.find((r) => r.kind === 'step');
+
+      assert.ok(typeof session.ms === 'number' && session.ms >= 0, 'no session duration');
+      assert.ok(typeof step.ms === 'number' && step.ms >= 0, 'no step duration');
+    });
+
+    it('survives a client with no health tracking rather than writing NaN', async () => {
+      // The scripted double has no `health`, which is also what an older client or a
+      // test stub looks like. A missing measurement must be a zero, not a NaN that
+      // lands in the file and poisons every average built from it.
+      const client = scriptedClient([json({ action: 'done', summary: 'Done.' })]);
+      await makeSession({ client, ledger }).run('check the project');
+      await ledger.flush();
+
+      const session = (await ledger.read()).find((r) => r.kind === 'session');
+      assert.strictEqual(session.modelMs, 0);
     });
 
     it('records a declined action as a decision by the user', async () => {
@@ -915,7 +1184,13 @@ describe('TODO-driven sessions', () => {
     const result = await session.run('Update a and also update b', { mode: 'agent' });
 
     assert.strictEqual(result.todos, undefined);
-    // The planning call must not have happened at all.
-    assert.strictEqual(client.calls, 1);
+    // The planning call must not have happened at all. Asserted against what was sent
+    // rather than against the raw call count: a `done` with nothing behind it is now
+    // challenged once, so a scripted client that only ever says "done" legitimately
+    // gets asked twice.
+    assert.ok(
+      !client.prompts.some((prompt) => prompt.includes('Break this request into a TODO list')),
+      'a TODO planning pass ran for a model that cannot keep a list'
+    );
   });
 });

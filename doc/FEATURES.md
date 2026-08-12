@@ -20,9 +20,39 @@ that session or start a new one.
 
 | Mode | What it can do |
 |---|---|
-| **Agent** | Reads, writes, deletes, runs commands — all permission-gated. |
+| **Agent** | Reads, writes, deletes, creates and removes folders, runs commands — all permission-gated. Answers conversationally when the message is conversation, without you switching anything. |
 | **Plan** | Produces an ordered checklist and **cannot mutate anything** — the write, delete, and script tools are not in its tool set at all, rather than being offered and refused. Comes with a **Run this plan** button that hands it to Agent mode. |
 | **Ask** | Answers questions. No loop, no tools. |
+
+### Agent mode answers when you are talking to it
+
+Agent mode constrains a small model's output to a grammar whose every branch is a tool
+call, which is what makes a 1B model agentic at all — and which meant a greeting could
+only come out as `read_file`. "hi", "what model are you", and "do you remember what we
+were doing" each ended in the repeat guard.
+
+Each message is now classified before it is routed, and a conversational one is answered
+directly: one reply, no loop, no tools. The mode selector does not move and the next
+message is judged on its own, so the moment you ask for work every tool is back.
+
+The classifier is patterns, not another model call — it runs before every turn, and
+spending an inference to establish that "hi" is not a refactor is a bad trade. It treats
+a message as work unless there is positive evidence otherwise, and **any instruction
+anywhere wins**: "hi, can you fix the bug in app.js" is work with a greeting attached.
+Plan and Ask ignore it entirely, because those are you saying what you want.
+
+### It has to have actually done it
+
+A run that says it finished gets checked against what it produced, once:
+
+- **Nothing changed**, on a request that asked for something to be built or edited. A
+  request that only asked you to read, check, or explain is never challenged — those
+  finish correctly having written nothing.
+- **A function it just wrote was never implemented** — a body containing
+  `// Implement the delete functionality here` and a `console.log`, and nothing else.
+
+Once, not repeatedly. A model that cannot produce the work will not be argued into it,
+and the honest "no files changed" report is better than a burned step budget.
 
 ### Thinking capacity
 
@@ -76,6 +106,47 @@ models are GPU-resident this is worth re-trying.
   (**Show Session Memory**, **Clear Session Memory**). Notes are composed by the
   extension from what actually happened, not written by the model, and a failed write or
   delete is deliberately *not* remembered.
+- **The conversation itself** is carried into the prompt — what was actually said, not
+  just a distilled note about what was done. It outranks session memory when the budget
+  cannot fit both, since the notes are a compression of the same material. This is what
+  makes "do it the way we discussed" and "the file I mentioned earlier" work at all.
+- **What it changed, and what it changed it from.** Every write is recorded to
+  `.hirayacoder/history.jsonl` as a bounded diff — **Show File History** renders them
+  newest-first as a diff document. A `ChangeSet` used to hold both versions of a file
+  for exactly as long as the turn lasted, so "what did it do to this file two turns ago"
+  had no answer anywhere.
+
+  Diffs rather than snapshots, deliberately: storing both versions of every file would
+  duplicate the workspace on each write, and in a git repo it would duplicate git. A
+  large rewrite is recorded as a truncated diff and is not reversible from this file —
+  git is the tool for that, and this is for seeing what happened without leaving the
+  editor.
+
+  The agent gets the short version — paths and line counts, not the diffs — under the
+  heading *"files you have already changed in this session — do not redo this work"*.
+  That is the half that fixes behaviour rather than reporting on it: a model asked to
+  modify a file it edited three turns ago has no idea it did so, and re-does or undoes
+  its own work. Observed exactly that way, more than once.
+- **Facts about the workspace** persist across *every* session in it, not just the one
+  that learned them: a toolchain that is missing, a decision you made, what the project
+  is meant to produce. They are typed and labelled in the prompt, and ordered so your
+  decision outranks anything the agent observed.
+
+  Nothing here comes from a model call — a fact is read out of what a program printed,
+  or it is not recorded, because a wrong one persists and is stated to every later turn
+  as settled. In practice this is mostly about missing toolchains, recognised in all
+  three of the ways one announces itself:
+
+  ```
+  macOS    The operation couldn't be completed. Unable to locate a Java Runtime.
+  Linux    javac: command not found
+  Windows  'javac' is not recognized as an internal or external command
+  ```
+
+  The macOS case is the one no `PATH` check can catch — Apple ships a `javac` stub, so
+  the program really is there and really does fail. **Clear Session Memory** gains an
+  entry for these, kept separate because they have a different scope; use it after
+  installing something the agent recorded as absent.
 
 ---
 
@@ -101,6 +172,46 @@ instead of several.
 
 ---
 
+## When it feels slow, or stops answering
+
+A local model on a laptop is slow in several different ways, and they need different
+responses. All of this is recorded locally in `.hirayacoder/outcomes.jsonl` and never
+leaves the machine — durations and states are numbers and enums, so the file's existing
+rule holds: no paths, no commands, no content.
+
+**Timing.** Every turn logs how long it took and how much of that was spent waiting on
+Ollama, to the output channel as it happens and to the ledger for later:
+
+```
+Turn finished in 94.2s (96% waiting on the model) — done, 4 step(s).
+```
+
+The split is the useful part. A four-minute turn is a different problem depending on
+whether the model was thinking or a script was hanging, and 96% says which. Individual
+steps are timed too, including any wait on a confirmation dialog — a session that looks
+slow because a prompt sat unanswered is not a slow model.
+
+**Up, down, or wedged.** Three states, because two of them need opposite actions from
+you:
+
+| State | What it means | What to do |
+|---|---|---|
+| `down` | Nothing is listening on the endpoint | Start it — `ollama serve` |
+| `unresponsive` | It accepted the connection and then didn't answer, twice running | Restart it; it's wedged |
+| `up`, request failed | The server answered with an error | Nothing — the request was wrong, not the server |
+
+The last row is why this isn't a boolean. A 404 for a model that isn't pulled would
+otherwise be reported as an outage and send you to restart something that is working.
+And one timeout is never enough to call a server wedged: on CPU inference a large model
+loading into memory legitimately blows a deadline.
+
+Transitions are recorded, not individual requests, so a healthy server costs nothing and
+a flapping one reads as a short list of flips with timestamps. You get a notification
+only when entering a state you can act on. **Show Status** has the numbers at a glance —
+last, average, and slowest call, plus any current failure streak.
+
+---
+
 ## Safety
 
 The parts that decide what the agent is *allowed* to do.
@@ -111,6 +222,11 @@ The parts that decide what the agent is *allowed* to do.
   and recoverable from the change set; a wrong delete is neither. This is not
   theoretical — a 1B model once deleted the file it had been asked to edit while
   reporting an unrelated thought.
+- **Folder deletes always confirm, in every mode, with no setting that turns it off.**
+  They are also refused for a folder that still has anything in it unless the call
+  explicitly asks to recurse, and refused outright past 100 items with a note to do it
+  yourself. The distance between `src/main/java` and `src` is one token of model output,
+  and a subtree is the one thing the change set cannot put back.
 - **Some commands always ask**, even in auto-approve mode: `git push`, `npm publish`,
   `ollama pull`, and anything else that publishes code or reaches the network.
   Auto-approve means *routine local work*.

@@ -163,6 +163,85 @@ describe('contextBuilder.build', () => {
     });
   });
 
+  describe('conversation', () => {
+    const turns = [
+      { role: 'user', text: 'create a java todo app' },
+      { role: 'assistant', text: 'Created TodoApp.java and TodoManager.java.' },
+      { role: 'user', text: 'java is not installed, use python instead' },
+    ];
+
+    it('carries what was actually said into the prompt', () => {
+      // Before 0.4.0 this section did not exist: `chatTab.history` was display state and
+      // the transcript on disk was written and never read. The agent could not answer a
+      // question about its own conversation except by searching the workspace.
+      const result = build({ task: 'proceed', budget: 5000, conversation: turns });
+
+      assert.match(result.text, /create a java todo app/);
+      assert.match(result.text, /use python instead/);
+      assert.strictEqual(result.included.Conversation, true);
+    });
+
+    it('labels who said what', () => {
+      const result = build({ task: 'proceed', budget: 5000, conversation: turns });
+      assert.match(result.text, /User: create a java todo app/);
+      assert.match(result.text, /You: Created TodoApp\.java/);
+    });
+
+    it('keeps the newest turns when the history is long', () => {
+      const many = Array.from({ length: 40 }, (_, i) => ({ role: 'user', text: `message number ${i}` }));
+      const result = build({ task: 'go', budget: 5000, conversation: many });
+
+      assert.match(result.text, /message number 39/);
+      assert.ok(!result.text.includes('message number 0\n'), 'the whole history was replayed');
+    });
+
+    it('caps one enormous turn rather than letting it crowd out the rest', () => {
+      const result = build({
+        task: 'go',
+        budget: 5000,
+        conversation: [
+          { role: 'user', text: 'x'.repeat(20000) },
+          { role: 'user', text: 'the actual point' },
+        ],
+      });
+
+      assert.match(result.text, /the actual point/);
+    });
+
+    it('redacts credentials pasted into the conversation', () => {
+      const result = build({
+        task: 'go',
+        budget: 5000,
+        conversation: [{ role: 'user', text: 'my key is AKIAIOSFODNN7EXAMPLE' }],
+      });
+
+      assert.ok(!result.text.includes('AKIAIOSFODNN7EXAMPLE'));
+    });
+
+    it('outranks session memory when only one of them fits', () => {
+      // The transcript is the primary source; the notes are a compression of it.
+      const result = build({
+        task: 'go',
+        budget: 90,
+        conversation: [
+          { role: 'user', text: 'the deliverable is todoapp.html and nothing else matters here, remember that' },
+        ],
+        memory: [
+          '- Edited src/todo_manager.py to add priority handling and sorting',
+          '- Ran `python3 src/todo_app.py` and the console menu worked',
+        ],
+      });
+
+      assert.strictEqual(result.included.Conversation, true);
+      assert.strictEqual(result.included['Session Memory'], false);
+    });
+
+    it('adds nothing for an empty history', () => {
+      const result = build({ task: 'go', budget: 5000, conversation: [] });
+      assert.ok(!result.text.includes('Earlier in this conversation'));
+    });
+  });
+
   it('handles a zero budget without throwing', () => {
     assert.doesNotThrow(() => build({ task: 'x', budget: 0 }));
   });

@@ -2,7 +2,7 @@
   "name": "hirayacoder",
   "displayName": "HirayaCoder",
   "description": "A fully offline, privacy-first AI coding agent powered by your local Ollama instance. Agentic on every model — even 1B.",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "publisher": "jaymar921",
   "author": {
     "name": "jaymar921",
@@ -83,6 +83,11 @@
       {
         "command": "hirayacoder.showAuditLog",
         "title": "Show Audit Log",
+        "category": "HirayaCoder"
+      },
+      {
+        "command": "hirayacoder.showFileHistory",
+        "title": "Show File History",
         "category": "HirayaCoder"
       },
       {

@@ -25,11 +25,13 @@
 
 const logger = require('../utils/logger');
 const promptRouter = require('../core/promptRouter');
+const intentRouter = require('../core/intentRouter');
 const toolRegistry = require('./toolRegistry');
 const contextBuilder = require('../core/contextBuilder');
 const reactLoop = require('./reactLoop');
 const nativeToolLoop = require('./nativeToolLoop');
 const plannerAgent = require('./plannerAgent');
+const completionCheck = require('./completionCheck');
 const earnedHints = require('./earnedHints');
 const { TodoList } = require('./todoList');
 
@@ -219,7 +221,7 @@ function snapshotTodos(todos) {
  * model's own claim of completion — that is the failure the whole judgement exists to
  * avoid, so a run that changed nothing can never reach this state.
  *
- * @param {{stopReason: string, steps: AgentStep[], summary: string}} outcome
+ * @param {{stopReason: string, steps: AgentStep[], summary: string, doneChallenged?: boolean}} outcome
  * @param {ChangeSet} changeSet
  * @param {number | null} sizeBefore
  * @returns {{status: 'done' | 'done-with-warning' | 'failed', outcomeText: string}}
@@ -242,6 +244,16 @@ function judgeItem(outcome, changeSet, sizeBefore) {
     if (!changed && anyFailed) {
       return { status: 'failed', outcomeText: 'the model reported it finished, but its actions failed' };
     }
+
+    // Told outright that nothing had been written, and it closed the item anyway. That
+    // is a stronger statement than "no files changed", which reads as a legitimate
+    // check — this one is an item that asked for work and did not do it. Observed on
+    // `ornith:9b` against "Create todoapp.html …", reported as "done (no files
+    // changed)" while the user was asking a fourth time where the file was.
+    if (!changed && outcome.doneChallenged) {
+      return { status: 'failed', outcomeText: 'it asked for a file and none was written' };
+    }
+
     return { status: 'done', outcomeText: changed ? '' : 'no files changed' };
   }
   if (changed && anySucceeded && !anyFailed) {
@@ -277,6 +289,37 @@ function judgeItem(outcome, changeSet, sizeBefore) {
  * @param {AgentStep[]} steps
  * @returns {string}
  */
+/**
+ * State plainly that a session claiming to be finished produced nothing.
+ *
+ * `appendUnfinishedNote` below covers steps that *failed*, and this is the case it
+ * cannot see: a session where every step succeeded, nothing was written, and the model
+ * said it was done — twice, the second time after being told outright that nothing had
+ * changed. Observed on `ornith:9b`: asked four separate times to create `todoapp.html`,
+ * it read the two Python files, replied "Finished.", and the user got a one-word
+ * success report for a file that did not exist.
+ *
+ * The completion check gives the model a chance to fix that. This is what happens when
+ * it does not take it — and it is the more important half, because the model's second
+ * `done` is accepted and would otherwise be reported as an ordinary success.
+ *
+ * @param {string} summary
+ * @param {{doneChallenged?: boolean, stopReason: string}} outcome
+ * @param {ChangeSet} changeSet
+ * @returns {string}
+ */
+function appendUnverifiedNote(summary, outcome, changeSet) {
+  if (!outcome.doneChallenged || !changeSet.isEmpty()) return summary;
+
+  return (
+    `${summary}\n\n**Nothing in the project changed.** I said this was finished, was told ` +
+    'no file had been written, and said it was finished again — so treat the summary above ' +
+    'as a description of what was intended, not of what happened. Nothing was created, ' +
+    'edited, or deleted. Asking again with the exact file path usually works; a larger ' +
+    'model is the surer fix.'
+  );
+}
+
 function appendUnfinishedNote(summary, steps) {
   const failed = (steps || []).filter((step) => step.result && step.result.ok === false);
   if (failed.length === 0) return summary;
@@ -316,6 +359,21 @@ class AgentSession {
     this.gate = options.gate;
     this.workspaceRoot = options.workspaceRoot;
     this.memory = options.memory || null;
+    /**
+     * What is true of this workspace and machine, across every session.
+     *
+     * Separate from `memory` on purpose: that is a per-session log of what happened,
+     * this is what was established. Null when there is no workspace to keep it in.
+     *
+     * @type {import('../core/factStore').FactStore | null}
+     */
+    this.facts = options.facts || null;
+    /**
+     * What was changed, and what it was changed from.
+     *
+     * @type {import('../core/fileHistory').FileHistory | null}
+     */
+    this.history = options.history || null;
     this.translator = options.translator || null;
     this.contextFiles = options.contextFiles || null;
     this.thinkingCapacity = options.thinkingCapacity || 'medium';
@@ -339,6 +397,25 @@ class AgentSession {
      */
     this.ledger = options.ledger || null;
     this.adaptation = options.adaptation || {};
+    /**
+     * Whether a `done` is checked against what the session actually produced.
+     *
+     * On by default and settable off, because it costs a turn in the case where the
+     * model was right and the check was wrong — and because a user who has decided they
+     * want the model's word taken at face value should be able to have that.
+     */
+    this.verifyCompletion = options.verifyCompletion !== false;
+
+    /**
+     * Earlier turns of this chat, set per `run` call.
+     *
+     * Held on the session rather than threaded through every private method: the
+     * context is rebuilt once per TODO item and once per loop turn, and each of those
+     * call sites would otherwise have to remember to pass it on.
+     *
+     * @type {Array<{role: string, text: string}>}
+     */
+    this.conversation = [];
 
     /** @type {AbortController | null} */
     this._controller = null;
@@ -357,33 +434,65 @@ class AgentSession {
    * @param {object} [options]
    * @param {'agent' | 'plan' | 'ask'} [options.mode]
    * @param {{path?: string, content?: string, selection?: string, language?: string}} [options.editor]
+   * @param {Array<{role: string, text: string}>} [options.conversation]
+   *   Earlier turns, oldest first, not including this one.
    * @param {(event: object) => void} [options.onEvent]
    * @returns {Promise<SessionResult>}
    */
   async run(task, options = {}) {
     const mode = options.mode || 'agent';
     const emit = options.onEvent || (() => {});
+    this.conversation = Array.isArray(options.conversation) ? options.conversation : [];
     this._controller = new AbortController();
     this.running = true;
+    this._startedAt = Date.now();
+    // Snapshotted rather than measured per call: the client already totals every
+    // request it makes, so the difference across a session is the time spent waiting on
+    // Ollama — including the planning and TODO-splitting passes, which happen outside
+    // any loop and would be missed by instrumenting the loops instead.
+    this._modelMsAtStart = this._modelMsSoFar();
 
     try {
+      // Only Agent mode is routed by intent — Plan and Ask are the user saying what they
+      // want, and second-guessing an explicit choice is not this classifier's job.
+      const intent = mode === 'agent' ? intentRouter.classify(task) : { intent: 'task', reason: 'mode was chosen' };
+      if (intent.intent === 'chat') {
+        logger.info(`Answering conversationally rather than running the agent (${intent.reason}).`);
+      }
+
       const activeRoute = promptRouter.route({
         mode,
         capability: this.capability,
         thinkingCapacity: this.thinkingCapacity,
-        memory: this.memory ? await this.memory.renderForPrompt(this._recallDepth()) : '',
+        memory: await this._renderMemory(),
         earnedHints: await this._earnedHints(mode),
+        intent: intent.intent,
       });
 
-      emit({ type: 'start', mode, strategy: activeRoute.strategy, maxSteps: activeRoute.budgets.maxSteps });
+      emit({
+        type: 'start',
+        mode,
+        strategy: activeRoute.strategy,
+        maxSteps: activeRoute.budgets.maxSteps,
+        // The UI needs to know a turn will not be doing any work, so it can stop
+        // promising a step counter it is never going to fill in.
+        conversational: activeRoute.strategy === 'chat',
+      });
 
-      // Ask mode: one response, no loop, no tools in existence.
-      if (activeRoute.strategy === 'none') {
+      // Ask mode, and Agent mode answering conversation: one response, no loop, no
+      // tools in existence.
+      if (activeRoute.strategy === 'none' || activeRoute.strategy === 'chat') {
         const askContext = await this._buildContext(task, activeRoute, options.editor);
         const summary = await this._answerDirectly(task, activeRoute, askContext);
         emit({ type: 'done', summary });
         /** @type {SessionResult} */
-        const answered = { summary, steps: [], changeSet: new ChangeSet(), stopReason: 'answered', mode };
+        const answered = {
+          summary,
+          steps: [],
+          changeSet: new ChangeSet(),
+          stopReason: activeRoute.strategy === 'chat' ? 'conversation' : 'answered',
+          mode,
+        };
         await this._recordSession(answered);
         return answered;
       }
@@ -428,6 +537,9 @@ class AgentSession {
         task: effectiveTask,
         context,
         execute: (action) => this._execute(action, activeRoute, changeSet),
+        // Agent mode only. A Plan run that changed nothing did exactly what it was for,
+        // and challenging it would be the check firing on its own success condition.
+        verifyDone: mode === 'agent' ? this._doneVerifier(task, changeSet, 0) : undefined,
         onEvent: emit,
         signal: this._controller.signal,
         images: this.images,
@@ -437,7 +549,11 @@ class AgentSession {
 
       /** @type {SessionResult} */
       const result = {
-        summary: appendUnfinishedNote(outcome.summary, outcome.steps),
+        summary: appendUnverifiedNote(
+          appendUnfinishedNote(outcome.summary, outcome.steps),
+          outcome,
+          changeSet
+        ),
         steps: outcome.steps,
         changeSet,
         stopReason: outcome.stopReason,
@@ -445,7 +561,7 @@ class AgentSession {
       };
 
       // A Plan-mode run produces a checklist, not changes.
-      if (mode === 'plan') result.plan = plannerAgent.parsePlanSummary(outcome.summary);
+      if (mode === 'plan') result.plan = await this._derivePlan(task, outcome);
 
       await this._recordSession(result);
       return result;
@@ -588,6 +704,10 @@ class AgentSession {
         task: itemTask,
         context,
         execute: (action) => this._execute(action, itemRoute, changeSet),
+        // Judged against this item's own text and this item's own starting point: the
+        // list runs one loop per item, and an earlier item's file is not evidence that
+        // this one did anything.
+        verifyDone: this._doneVerifier(item.text, changeSet, before),
         onEvent: emitForItem,
         signal: this._controller.signal,
         // Only the first item sees the image. By item two the work is grounded in
@@ -634,6 +754,96 @@ class AgentSession {
       mode: 'agent',
       todos: todos.items,
     };
+  }
+
+  /**
+   * The check a loop runs before accepting the model's word that it has finished.
+   *
+   * Bound to a starting size rather than to emptiness, so within a TODO list each item
+   * is judged on what *it* produced. Plan mode gets no verifier at all: a plan changing
+   * nothing is the entire point of it.
+   *
+   * @param {string} task What this loop was asked to do.
+   * @param {ChangeSet} changeSet
+   * @param {number} sizeBefore
+   * @returns {((summary: string) => string | null) | undefined}
+   * @private
+   */
+  _doneVerifier(task, changeSet, sizeBefore) {
+    if (this.verifyCompletion === false) return undefined;
+
+    return () =>
+      completionCheck.objectTo({
+        task,
+        changed: changeSet.size() > sizeBefore,
+        written: changeSet.list().filter((change) => change.kind !== 'delete'),
+      });
+  }
+
+  /**
+   * The checklist a Plan-mode run hands back.
+   *
+   * Plan mode's whole output is the checklist, and until now the only way to get one
+   * was for the model's closing `done` summary to happen to be a numbered list. That
+   * is two bets on one turn: that the loop reached `done` at all, and that the summary
+   * came out in list shape. Small models lose both routinely — a Plan run that hits
+   * the repeat guard ends with "I stopped because I kept repeating the same step",
+   * which parses to zero steps — and the failure is silent, because the webview simply
+   * renders the prose and never draws the "Run this plan" button. The feature reads as
+   * broken rather than as degraded.
+   *
+   * So the summary is still preferred, and when it yields nothing the plan is asked
+   * for directly instead: one cheap constrained call, given what the exploration
+   * actually turned up. That call has one job and a fixed output shape, which is a far
+   * easier thing for a 1B model to get right than closing a loop in list form.
+   *
+   * Returns `[]` when even that produces nothing, so the caller falls back to prose
+   * rather than inventing steps.
+   *
+   * @param {string} task
+   * @param {{summary: string, steps: AgentStep[]}} outcome
+   * @returns {Promise<string[]>}
+   * @private
+   */
+  async _derivePlan(task, outcome) {
+    const fromSummary = plannerAgent.parsePlanSummary(outcome.summary);
+    if (fromSummary.length > 0) return fromSummary;
+
+    logger.debug('Plan-mode summary held no numbered steps; asking for the plan directly.');
+
+    try {
+      return await plannerAgent.plan({
+        client: this.client,
+        model: this.model,
+        task,
+        context: this._explorationNotes(outcome.steps),
+        signal: this._controller ? this._controller.signal : undefined,
+      });
+    } catch (err) {
+      // A missing checklist degrades Plan mode to prose. It must never fail the turn.
+      logger.warn(`Could not derive a plan: ${/** @type {Error} */ (err).message}`);
+      return [];
+    }
+  }
+
+  /**
+   * What a read-only run learned, compressed for one follow-up prompt.
+   *
+   * Paths and outcomes only. The observations themselves are file contents, which
+   * would blow the budget of the very models this exists for — and the second pass
+   * needs to know *which files matter*, not what is in them.
+   *
+   * @param {AgentStep[]} steps
+   * @returns {string}
+   * @private
+   */
+  _explorationNotes(steps) {
+    const lines = (steps || [])
+      .filter((step) => step.action && step.action.path)
+      .map((step) => `- ${step.action.path}${step.result && step.result.ok ? '' : ' (could not be read)'}`);
+
+    const unique = [...new Set(lines)].slice(0, 15);
+    return unique.length > 0 ? `Files you looked at while exploring:\n${unique.join('\n')}` : '';
   }
 
   /**
@@ -694,9 +904,10 @@ class AgentSession {
    * @param {import('./toolRegistry').ToolResult} result
    * @param {import('../core/promptRouter').Route} activeRoute
    * @param {boolean} mutating Whether the tool could change the workspace.
+   * @param {number} [ms] How long the tool took, including any confirmation wait.
    * @private
    */
-  _recordStep(action, result, activeRoute, mutating) {
+  _recordStep(action, result, activeRoute, mutating, ms) {
     if (!this._adapting()) return;
 
     // A permission prompt only decided this step if the tool was one that asks. A
@@ -715,6 +926,7 @@ class AgentSession {
       ok: Boolean(result.ok),
       code: result.ok ? undefined : result.error,
       decision,
+      ms,
     });
   }
 
@@ -730,6 +942,28 @@ class AgentSession {
    * @private
    */
   async _recordSession(result) {
+    // Written from the change set, which holds the state from *before the turn began*
+    // even for a file edited three times — so the recorded diff is the net effect the
+    // user was shown, not the agent's intermediate drafts.
+    if (this.history && !result.changeSet.isEmpty()) {
+      await this.history.recordAll(result.changeSet.list(), {
+        sessionId: this.sessionId,
+        model: this.model,
+      });
+    }
+
+    const ms = this._startedAt ? Date.now() - this._startedAt : undefined;
+    const modelMs =
+      typeof this._modelMsAtStart === 'number' ? this._modelMsSoFar() - this._modelMsAtStart : undefined;
+
+    // Logged whether or not the ledger is on. Adaptation is a choice about whether the
+    // extension *learns*; how long a turn took is the first thing anyone needs when a
+    // session felt slow, and the output channel is where they will look for it.
+    if (typeof ms === 'number') {
+      const share = ms > 0 && typeof modelMs === 'number' ? ` (${Math.round((modelMs / ms) * 100)}% waiting on the model)` : '';
+      logger.info(`Turn finished in ${(ms / 1000).toFixed(1)}s${share} — ${result.stopReason}, ${result.steps.length} step(s).`);
+    }
+
     if (!this._adapting()) return;
 
     await this.ledger.recordSession({
@@ -741,7 +975,69 @@ class AgentSession {
       stopReason: result.stopReason,
       steps: result.steps.length,
       changed: !result.changeSet.isEmpty(),
+      ms,
+      modelMs,
     });
+  }
+
+  /**
+   * Total milliseconds this client has spent on Ollama since it was created.
+   *
+   * Returns 0 for a client without health tracking — a test double, mostly — so the
+   * subtraction still produces a number rather than a NaN that would land in the file.
+   *
+   * @returns {number}
+   * @private
+   */
+  _modelMsSoFar() {
+    return this.client && this.client.health ? this.client.health.totalLatencyMs : 0;
+  }
+
+  /**
+   * The memory block for the system prompt: established facts, then session notes.
+   *
+   * Facts come first and are never trimmed for notes, because they are the statements a
+   * turn most needs and the ones least likely to be re-derivable. "Java is not available
+   * on this machine" changes what the whole session should attempt; "Edited
+   * src/todo_manager.py" is recoverable by reading the file.
+   *
+   * Both go under the one heading the prompt templates carry. Facts are self-labelling
+   * — `[This machine]`, `[Decided]` — so the distinction survives without a second
+   * placeholder in every template.
+   *
+   * @returns {Promise<string>}
+   * @private
+   */
+  async _renderMemory() {
+    const blocks = [];
+
+    if (this.facts) {
+      try {
+        const known = await this.facts.renderForPrompt();
+        if (known) blocks.push(known);
+      } catch (err) {
+        logger.warn(`Could not read established facts: ${/** @type {Error} */ (err).message}`);
+      }
+    }
+
+    // What this session has already changed. Distinct from the notes below, which say
+    // a file was touched, and from the facts above, which say what is true of the
+    // project: this says "you did that, it is done". Observed without it, more than
+    // once — a model that had correctly wired two classes together rewrote the file
+    // later without the wiring, because nothing in its context said the wiring was its
+    // own work from four turns ago.
+    if (this.history) {
+      try {
+        const changed = await this.history.renderForPrompt(this.sessionId);
+        if (changed) blocks.push(changed);
+      } catch (err) {
+        logger.warn(`Could not read what this session has changed: ${/** @type {Error} */ (err).message}`);
+      }
+    }
+
+    if (this.memory) blocks.push(await this.memory.renderForPrompt(this._recallDepth()));
+
+    return blocks.filter(Boolean).join('\n');
   }
 
   /**
@@ -768,18 +1064,29 @@ class AgentSession {
   async _buildContext(task, activeRoute, editor) {
     if (this.contextFiles) await this.contextFiles.refresh();
 
+    // Both of the loopless strategies put memory in the user turn rather than the
+    // system prompt, and neither wants a file listing it has no way to act on.
+    const loopless = activeRoute.strategy === 'none' || activeRoute.strategy === 'chat';
+
     const built = contextBuilder.build({
       task,
       budget: activeRoute.budgets.promptTokenTarget,
       editor: editor || {},
       // Memory is already in the system prompt for the loop tiers; including it
-      // twice would waste a scarce budget on a duplicate.
-      memory: activeRoute.strategy === 'none' && this.memory ? await this.memory.readRecent(this._recallDepth()) : [],
+      // twice would waste a scarce budget on a duplicate. The loopless strategies have
+      // no system-prompt memory block, so it arrives here instead — facts included,
+      // since "Java is not installed here" is exactly the kind of thing a user asks
+      // about conversationally.
+      memory: loopless ? (await this._renderMemory()).split('\n').filter(Boolean) : [],
+      // Carried on every strategy, not only the conversational one. "Do it the way we
+      // discussed" and "the file I mentioned earlier" are ordinary things to say to an
+      // agent mid-task, and until 0.4.0 nothing in the prompt could answer either.
+      conversation: this.conversation,
       contextFiles: this.contextFiles ? this.contextFiles.renderForPrompt() : '',
       // A model that has to discover the file tree spends steps on it and, worse,
       // invents paths when it guesses. Seeding the listing costs a fraction of the
       // budget and removes the most common failure on Tier B outright.
-      workspaceFiles: activeRoute.strategy === 'none' ? [] : await this._workspaceFiles(activeRoute),
+      workspaceFiles: loopless ? [] : await this._workspaceFiles(activeRoute),
     });
 
     return built.text;
@@ -891,6 +1198,7 @@ class AgentSession {
 
     /** @type {import('./toolRegistry').ToolResult} */
     let result;
+    const startedAt = Date.now();
     try {
       result = await tool.handler(action, context);
     } catch (err) {
@@ -899,10 +1207,15 @@ class AgentSession {
       logger.error(`Tool ${action.action} threw: ${message}`);
       result = { ok: false, observation: `${action.action} failed: ${message}`, error: 'TOOL_ERROR' };
     }
+    // Includes any time the user spent looking at a confirmation dialog, which is the
+    // honest reading of "how long did this step take" and is worth being able to see:
+    // a session that looks slow because a prompt sat unanswered for two minutes is not
+    // a slow model.
+    const ms = Date.now() - startedAt;
 
     // Recorded here rather than in the loops, because this is the one place every
     // action passes through regardless of which tier produced it.
-    this._recordStep(action, result, activeRoute, Boolean(tool.mutating));
+    this._recordStep(action, result, activeRoute, Boolean(tool.mutating), ms);
     return result;
   }
 
@@ -914,7 +1227,32 @@ class AgentSession {
    * @private
    */
   async _remember(steps) {
-    if (!this.translator || steps.length === 0) return;
+    if (steps.length === 0) return;
+
+    // Facts first, and independently of the translator: this is pattern-matching over
+    // what a program printed, so it costs no inference and must not be skipped just
+    // because note-writing is unavailable. It is also the half that outlives the
+    // session, which makes it the half worth being careful about losing.
+    if (this.facts) {
+      try {
+        // Deliberately not `_toStepSummary`, which is shaped for the translator and
+        // drops the error code. What a fact is derived from is the raw evidence: the
+        // action, the command, whether it failed, and what it printed.
+        await this.facts.learnFrom(
+          steps.map((step) => ({
+            action: step.action.action,
+            command: step.action.command,
+            ok: step.result.ok,
+            error: step.result.error,
+            observation: step.result.observation,
+          }))
+        );
+      } catch (err) {
+        logger.warn(`Could not record what this session established: ${/** @type {Error} */ (err).message}`);
+      }
+    }
+
+    if (!this.translator) return;
 
     const budgets = require('../core/modelCapability').budgetsFor(
       this.capability ? this.capability.tier : 'B',

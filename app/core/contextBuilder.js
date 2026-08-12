@@ -42,6 +42,12 @@ const { allocate, estimateTokens } = require('../utils/tokenBudget');
 const PRIORITY = {
   task: 100,
   observation: 90,
+  // Above the distilled notes, below the last observation. Memory is a summary of what
+  // happened; the transcript is what was actually said, and when a user refers back to
+  // something ("do it the way we discussed", "the file I mentioned earlier") the words
+  // are the thing being referred to. Notes are a compression of the same material, so
+  // when only one survives the budget it should be the primary source.
+  conversation: 85,
   memory: 80,
   selection: 70,
   contextFiles: 60,
@@ -68,7 +74,55 @@ const PRIORITY = {
  * @property {string} [contextFiles]             Rendered block from contextFilesManager.
  * @property {string} [observation]              Result of the previous agent step.
  * @property {string[]} [workspaceFiles]         Nearby paths, for orientation.
+ * @property {Array<{role: string, text: string}>} [conversation]
+ *   Earlier turns of this chat, oldest first, excluding the message being answered.
  */
+
+/** Turns of conversation carried into a prompt. Older ones are dropped, not summarized. */
+const MAX_CONVERSATION_TURNS = 10;
+
+/** Per-turn cap, so one pasted stack trace cannot crowd out ten exchanges. */
+const MAX_TURN_CHARS = 600;
+
+/**
+ * Render earlier turns as a transcript the model can read.
+ *
+ * ## Why the conversation was not here before
+ *
+ * It was never assembled at all. `chatTab.history` is documented as display state —
+ * "the model is given memory and a freshly built context, never this" — and the
+ * transcript on disk was written and never read back. So the agent had no access to
+ * anything said before the current message, and answered "can you remember our first
+ * conversation?" by searching the workspace, which is the only place it had ever been
+ * allowed to look.
+ *
+ * Session memory was meant to cover this and cannot: it holds what the *agent did*
+ * ("Ran `javac …` (failed)", "Edited src/todo_manager.py"), never what either party
+ * said. Across a real six-session evaluation, the decision to abandon Java for Python,
+ * the fact that the target file was `todoapp.html`, and every requirement the user
+ * restated were all absent from it — because none of them are actions.
+ *
+ * Truncation is per-turn and from the head, keeping the beginning of each message:
+ * requests state what they want first and elaborate afterwards, so the opening survives
+ * where a tail would keep the qualifications and lose the ask.
+ *
+ * @param {Array<{role: string, text: string}>} turns
+ * @returns {string}
+ */
+function renderConversation(turns) {
+  const recent = turns.slice(-MAX_CONVERSATION_TURNS);
+  /** @type {string[]} */
+  const lines = [];
+
+  for (const turn of recent) {
+    const text = redact(String((turn && turn.text) || '')).replace(/\s+/g, ' ').trim();
+    if (!text) continue;
+    const speaker = turn.role === 'user' ? 'User' : 'You';
+    lines.push(`${speaker}: ${text.length > MAX_TURN_CHARS ? `${text.slice(0, MAX_TURN_CHARS)}…` : text}`);
+  }
+
+  return lines.join('\n');
+}
 
 /**
  * @typedef {object} BuiltContext
@@ -100,6 +154,21 @@ function build(request) {
       minTokens: 40,
       keep: 'tail',
     });
+  }
+
+  if (request.conversation && request.conversation.length > 0) {
+    const transcript = renderConversation(request.conversation);
+    if (transcript) {
+      sections.push({
+        name: 'Conversation',
+        content: `Earlier in this conversation (what was actually said — the newest is last):\n${transcript}`,
+        priority: PRIORITY.conversation,
+        // Roughly one exchange. Below that the block is a fragment of a conversation,
+        // which reads as more misleading than no conversation at all.
+        minTokens: 60,
+        keep: 'tail',
+      });
+    }
   }
 
   if (request.contextFiles) {
@@ -187,4 +256,4 @@ function build(request) {
   };
 }
 
-module.exports = { build, PRIORITY };
+module.exports = { build, PRIORITY, renderConversation, MAX_CONVERSATION_TURNS, MAX_TURN_CHARS };

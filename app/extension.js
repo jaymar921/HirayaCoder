@@ -14,7 +14,11 @@
 const vscode = require('vscode');
 
 const logger = require('./utils/logger');
-const { createClient, assertLoopbackEndpoint } = require('./core/ollamaClient');
+const {
+  createClient,
+  assertLoopbackEndpoint,
+  TIMEOUTS_BEFORE_UNRESPONSIVE,
+} = require('./core/ollamaClient');
 const { ModelDiscovery, pickRecommendation } = require('./core/modelDiscovery');
 const modelCapability = require('./core/modelCapability');
 const { StatusBar } = require('./features/statusBar');
@@ -24,6 +28,8 @@ const { AuditLog } = require('./security/auditLog');
 const { DEFAULT_ALLOWED_BINARIES } = require('./security/scriptRunner');
 const { MemoryStore, nextSessionId, listSessions } = require('./core/memoryStore');
 const { OutcomeLedger } = require('./core/outcomeLedger');
+const { FactStore } = require('./core/factStore');
+const { FileHistory } = require('./core/fileHistory');
 const earnedHints = require('./agent/earnedHints');
 const { ContextFilesManager } = require('./core/contextFilesManager');
 const { ContextTranslator } = require('./core/contextTranslator');
@@ -158,6 +164,10 @@ class HirayaCoder {
 
     /** @type {OutcomeLedger | null} */
     this.ledger = null;
+    /** @type {FactStore | null} */
+    this.facts = null;
+    /** @type {FileHistory | null} */
+    this.fileHistory = null;
 
     this.buildClient();
     this.buildSecurityLayer();
@@ -175,6 +185,16 @@ class HirayaCoder {
   buildLedger() {
     const root = workspaceRoot();
     this.ledger = root ? new OutcomeLedger(root) : null;
+    // Workspace scope, like the ledger and for the same reason: what a session finds
+    // out about this machine — that there is no JDK behind `javac`, say — is a fact
+    // about the project, not about the conversation that happened to discover it. Held
+    // per session it would be rediscovered from scratch in every new tab, which is
+    // exactly what the evaluation sessions did, twice, at the cost of a whole run each.
+    this.facts = root ? new FactStore(root) : null;
+    // Workspace scope again, and for a third reason: "what did it change" is a question
+    // about the project, and a user asking it a week later will not remember which chat
+    // tab did the work.
+    this.fileHistory = root ? new FileHistory(root) : null;
   }
 
   /** The workspace folder, or null when none is open. */
@@ -199,11 +219,26 @@ class HirayaCoder {
   }
 
   /**
+   * Switch the active model and do not resolve until it actually is the active model.
+   *
+   * `setModel` only writes the setting. Adopting it happens in `onConfigChange`,
+   * which the listener invokes fire-and-forget — so a caller that repainted straight
+   * after this resolved read the *previous* `activeModel` and drew the dropdown back
+   * to where it started. Clicking again appeared to work only because the listener
+   * had caught up in the meantime.
+   *
+   * Reading the settings here rather than waiting for the listener matters too:
+   * `_refresh` picks the active model out of `this.settings.selectedModel`, so
+   * refreshing before that field is adopted would re-select the old model from the
+   * new list.
+   *
    * @param {string} name
    * @returns {Promise<void>}
    */
   async selectModel(name) {
     await this.setModel(name);
+    this.settings = readSettings();
+    await this.refresh({ force: true });
   }
 
   /**
@@ -318,6 +353,56 @@ class HirayaCoder {
   }
 
   /**
+   * Ollama's reachability changed.
+   *
+   * Fired on the *transition*, never per request, so a healthy server costs nothing and
+   * a flapping one leaves a short readable trail. Three things happen here and they are
+   * deliberately different in loudness:
+   *
+   *  - The ledger gets a line, always. That is the record that answers "was it slow
+   *    last Tuesday, or was it me?" weeks later.
+   *  - The status bar updates, because it is already the place that shows connection.
+   *  - A notification appears **only** for the states a user can act on, and only on
+   *    the way into one. A toast every time a laptop wakes up would train them to
+   *    dismiss the one that matters.
+   *
+   * @param {ReturnType<import('./core/ollamaClient').OllamaClient['healthSnapshot']>} health
+   * @param {string} previous
+   */
+  onOllamaHealthChange(health, previous) {
+    if (this.ledger) {
+      void this.ledger.recordHealth({
+        model: this.activeModel || undefined,
+        state: health.state,
+        wasState: previous,
+        ms: health.lastLatencyMs === null ? undefined : health.lastLatencyMs,
+      });
+    }
+
+    this.statusBar.update({
+      connection: health.state === 'up' ? 'online' : 'offline',
+      error: health.state === 'up' ? undefined : health.lastError || `Ollama is ${health.state}.`,
+    });
+
+    if (!health.needsRestart) {
+      // Recovery is worth saying once, and only to someone who saw the failure.
+      if (previous === 'down' || previous === 'unresponsive') {
+        vscode.window.setStatusBarMessage('$(check) HirayaCoder: Ollama is responding again.', 5000);
+      }
+      return;
+    }
+
+    const detail =
+      health.state === 'down'
+        ? `Nothing is listening on ${this.settings.endpoint}. Start it with \`ollama serve\`.`
+        : `Ollama accepted the connection but did not answer ${TIMEOUTS_BEFORE_UNRESPONSIVE} requests in a row. It is probably wedged — restarting it usually fixes this.`;
+
+    void vscode.window.showWarningMessage(`HirayaCoder: Ollama is ${health.state}. ${detail}`, 'Show Logs').then((choice) => {
+      if (choice === 'Show Logs') void vscode.commands.executeCommand('hirayacoder.showLogs');
+    });
+  }
+
+  /**
    * (Re)create the client from current settings. A non-loopback endpoint fails here
    * rather than at request time, so the status bar can explain it immediately.
    */
@@ -329,6 +414,7 @@ class HirayaCoder {
         this.client.reconfigure({ endpoint: this.settings.endpoint, timeoutMs: this.settings.requestTimeoutMs });
       } else {
         this.client = createClient({ endpoint: this.settings.endpoint, timeoutMs: this.settings.requestTimeoutMs });
+        this.client.onHealthChange = (health, previous) => this.onOllamaHealthChange(health, previous);
         this.discovery = new ModelDiscovery(this.client);
       }
       if (this.discovery) this.discovery.invalidate();
@@ -342,10 +428,31 @@ class HirayaCoder {
   /**
    * Probe Ollama, refresh the model list, classify the active model, and repaint.
    *
+   * Refreshes are serialized rather than allowed to overlap. One model change
+   * produces two of them — `selectModel` awaits one directly, and the configuration
+   * listener fires another for the same write — and two `/api/tags` round-trips
+   * racing each other can settle in either order, so the later-finishing one installs
+   * whichever `settings.selectedModel` it captured. That is half of the two-click
+   * model switch; the other half is `selectModel` not adopting the new setting first.
+   *
    * @param {{force?: boolean, notifyRecommendation?: boolean}} [opts]
    * @returns {Promise<void>}
    */
   async refresh(opts = {}) {
+    const run = () => this._refresh(opts);
+    // Both arms run `run`: a failed refresh must not stall every refresh after it.
+    this._refreshQueue = (this._refreshQueue || Promise.resolve()).then(run, run);
+    return this._refreshQueue;
+  }
+
+  /**
+   * One refresh pass. Never call directly — go through `refresh`.
+   *
+   * @param {{force?: boolean, notifyRecommendation?: boolean}} opts
+   * @returns {Promise<void>}
+   * @private
+   */
+  async _refresh(opts) {
     if (this.configError || !this.client || !this.discovery) {
       this.statusBar.update({ connection: 'offline', error: this.configError || 'Client not initialized.' });
       return;
@@ -560,6 +667,8 @@ function activate(context) {
     vscode.commands.registerCommand('hirayacoder.permissions', () => permissionsCommand(app)),
 
     vscode.commands.registerCommand('hirayacoder.showAuditLog', () => showAuditLogCommand(app)),
+
+    vscode.commands.registerCommand('hirayacoder.showFileHistory', () => showFileHistoryCommand(app)),
 
     vscode.commands.registerCommand('hirayacoder.showAdaptation', () => showAdaptationCommand(app)),
 
@@ -870,15 +979,20 @@ async function permissionsCommand(app) {
   const items = [
     {
       label: state.autoEdit ? '$(check) Auto Edit' : 'Auto Edit',
-      description: state.autoEdit ? 'currently on' : 'currently off — edits require approval',
-      detail: 'Applies proposed file writes and deletes without a confirmation click. Path guards still apply.',
+      description: state.autoEdit ? 'currently on' : 'currently off — every write asks first',
+      // Names the prompt it governs. The two toggles are independent and each covers
+      // exactly one kind of action, which was not obvious from the labels: a user who
+      // turned on Auto Approve Running Scripts reasonably expected the Create/Apply
+      // dialogs to stop, and they are the other toggle's.
+      detail:
+        'Covers file writes and deletes — the Create/Apply prompts. Does NOT cover terminal commands; those are Auto Approve Running Scripts, below. Path guards and folder-delete confirmations still apply.',
       action: 'toggleEdit',
     },
     {
       label: state.autoApproveScripts ? '$(check) Auto Approve Running Scripts' : 'Auto Approve Running Scripts',
-      description: state.autoApproveScripts ? 'currently on' : 'currently off — commands require approval',
+      description: state.autoApproveScripts ? 'currently on' : 'currently off — every command asks first',
       detail:
-        'Runs proposed commands without a click. Highest-risk setting. Commands that reach the network or publish code still always ask.',
+        'Covers terminal commands only — npm, javac, python. Does NOT cover file writes; those are Auto Edit, above. Highest-risk setting. Commands that reach the network or publish code still always ask.',
       action: 'toggleScripts',
     },
     {
@@ -950,6 +1064,51 @@ async function showAuditLogCommand(app) {
   const document = await vscode.workspace.openTextDocument({
     content: `HirayaCoder audit log — ${entries.length} most recent actions\n\n${lines.join('\n')}\n`,
     language: 'log',
+  });
+  await vscode.window.showTextDocument(document, { preview: true });
+}
+
+/**
+ * Show what the agent has changed, and what each change looked like.
+ *
+ * Rendered as a diff document rather than a list of paths, because the question this
+ * answers is "what did it do to my file", and a path alone answers "which file" and
+ * stops there. Newest first: the thing you want is almost always the last thing that
+ * happened.
+ *
+ * @param {HirayaCoder} app
+ */
+async function showFileHistoryCommand(app) {
+  if (!app.fileHistory) {
+    vscode.window.showWarningMessage('HirayaCoder: no workspace folder is open, so nothing has been recorded.');
+    return;
+  }
+
+  await app.fileHistory.flush();
+  const entries = await app.fileHistory.recent({ limit: 100 });
+  if (entries.length === 0) {
+    vscode.window.showInformationMessage('HirayaCoder: the agent has not changed any files in this workspace yet.');
+    return;
+  }
+
+  const blocks = entries.map((entry) => {
+    const what =
+      entry.kind === 'delete'
+        ? `deleted (${entry.removed} lines)`
+        : entry.kind === 'create'
+          ? `created (${entry.added} lines)`
+          : `edited (+${entry.added} / -${entry.removed})`;
+
+    const header = `${entry.ts}  session ${entry.sessionId || '?'}  ${entry.model || ''}\n${entry.path} — ${what}`;
+    return entry.diff ? `${header}\n${entry.diff}` : header;
+  });
+
+  const document = await vscode.workspace.openTextDocument({
+    content:
+      `HirayaCoder file history — ${entries.length} most recent change(s), newest first\n` +
+      'Diffs are trimmed to the changed region and capped. Use git for a full history.\n\n' +
+      `${blocks.join('\n\n' + '-'.repeat(70) + '\n\n')}\n`,
+    language: 'diff',
   });
   await vscode.window.showTextDocument(document, { preview: true });
 }
@@ -1110,19 +1269,71 @@ async function clearMemoryCommand(app) {
     sessionId: session.sessionId,
   }));
 
+  // Facts are workspace-scoped, so they are not cleared by clearing any one session —
+  // that is the whole point of keeping them separately. The user still needs a way to
+  // retract one, because a fact that has become false ("there is no JDK here", after
+  // they install one) is worse than no fact: it persists and it is stated to every
+  // future turn as settled.
+  const changedFiles = app.fileHistory ? (await app.fileHistory.recent({ limit: 500 })).length : 0;
+  if (changedFiles > 0) {
+    items.push({
+      label: 'The record of what files were changed',
+      description: `${changedFiles} change(s)`,
+      detail: 'Diffs of every write the agent made in this workspace. Clearing this does not undo anything.',
+      sessionId: -2,
+    });
+  }
+
+  const knownFacts = app.facts ? (await app.facts.load()).length : 0;
+  if (knownFacts > 0) {
+    items.push({
+      label: 'Everything this workspace has learned',
+      description: `${knownFacts} fact${knownFacts === 1 ? '' : 's'}`,
+      detail: 'Facts about this machine and project, shared by every session. Clear this after installing something the agent recorded as missing.',
+      sessionId: -1,
+    });
+  }
+
   const picked = await vscode.window.showQuickPick(items, {
     title: 'Clear session memory',
-    placeHolder: 'This permanently deletes what the agent remembers for that session.',
+    placeHolder: 'This permanently deletes what the agent remembers.',
   });
   if (!picked) return;
 
   const confirm = 'Clear it';
-  const choice = await vscode.window.showWarningMessage(
-    `Clear the memory for session ${picked.sessionId}?`,
-    { modal: true, detail: 'The agent will no longer recall anything from earlier in that session.' },
-    confirm
-  );
+  const clearingFacts = picked.sessionId === -1;
+  const clearingHistory = picked.sessionId === -2;
+
+  /** @type {[string, string]} */
+  const [title, detail] = clearingFacts
+    ? [
+        'Clear what this workspace has learned?',
+        'The agent will re-discover things like a missing toolchain the slow way, one failed command at a time.',
+      ]
+    : clearingHistory
+      ? [
+          'Clear the record of what files were changed?',
+          'Your files are not touched — only the log of what changed and when. The agent will stop being able to tell you what it did earlier.',
+        ]
+      : [
+          `Clear the memory for session ${picked.sessionId}?`,
+          'The agent will no longer recall anything from earlier in that session.',
+        ];
+
+  const choice = await vscode.window.showWarningMessage(title, { modal: true, detail }, confirm);
   if (choice !== confirm) return;
+
+  if (clearingFacts) {
+    await app.facts.clear();
+    vscode.window.showInformationMessage('HirayaCoder: cleared what this workspace had learned.');
+    return;
+  }
+
+  if (clearingHistory) {
+    await app.fileHistory.clear();
+    vscode.window.showInformationMessage('HirayaCoder: cleared the record of file changes.');
+    return;
+  }
 
   // The cached store for that session, not a second one onto the same file. A fresh
   // instance clears the file while the one a running tab holds keeps its own entries
@@ -1192,6 +1403,42 @@ async function attachContextFileCommand(app) {
  *
  * @param {HirayaCoder} app
  */
+/**
+ * How Ollama has been behaving, in one paragraph.
+ *
+ * The numbers that matter when a session felt slow and it is not obvious why: what the
+ * last call cost, what calls cost on average, and the worst one — because on CPU
+ * inference the average hides the model-load spike that is usually the actual
+ * complaint. The full per-turn history is in `.hirayacoder/outcomes.jsonl`; this is the
+ * glance.
+ *
+ * Empty until something has been asked of the server, rather than reporting zeros as
+ * though they were measurements.
+ *
+ * @param {HirayaCoder} app
+ * @returns {string}
+ */
+function describeResponsiveness(app) {
+  if (!app.client || !app.client.health || app.client.health.requests === 0) return '';
+
+  const health = app.client.healthSnapshot();
+  const seconds = (ms) => `${(ms / 1000).toFixed(1)}s`;
+
+  const parts = [
+    `Ollama is ${health.state}.`,
+    `${health.requests} request(s) this session:`,
+    `last ${seconds(health.lastLatencyMs || 0)},`,
+    `average ${seconds(health.averageLatencyMs || 0)},`,
+    `slowest ${seconds(health.slowestMs)}.`,
+  ];
+
+  if (health.consecutiveFailures > 0) {
+    parts.push(`\n${health.consecutiveFailures} failure(s) in a row — last: ${health.lastError}`);
+  }
+
+  return parts.join(' ');
+}
+
 async function showStatusCommand(app) {
   const s = app.statusBar.state;
 
@@ -1218,6 +1465,7 @@ async function showStatusCommand(app) {
     capability ? `${capability.model}: Tier ${capability.tier} (${capability.label}), ${capability.strategy} loop.` : 'No model selected.',
     capability ? capability.reason : '',
     budgets ? `At ${app.settings.thinkingCapacity} thinking: ${budgets.maxSteps} steps max, ${budgets.memoryRecallEntries === Infinity ? 'full' : budgets.memoryRecallEntries}-entry memory recall.` : '',
+    describeResponsiveness(app),
   ]
     .filter(Boolean)
     .join('\n\n');

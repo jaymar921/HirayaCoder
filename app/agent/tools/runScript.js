@@ -45,11 +45,17 @@ const OUTPUT_TOKENS = 400;
  *
  * @type {Map<string, string>}
  */
+const MKDIR_INSTEAD =
+  'You usually do not need this at all: write_file creates any missing folders on the way to the file, so ' +
+  'writing src/main/java/TodoApp.java makes src/main/java by itself. If you do need the empty folder on its ' +
+  'own, use the create_folder tool.';
+
 const TOOL_INSTEAD_OF = new Map([
-  // Not "use another tool" but "you do not need this step" — the distinction matters,
-  // because a model told to find another way to make a directory will find one.
-  ['mkdir', 'You do not need to create directories at all: write_file creates any missing folders on the way to the file. Skip this step and write the file you wanted to put there.'],
-  ['md', 'You do not need to create directories at all: write_file creates any missing folders on the way to the file. Skip this step and write the file you wanted to put there.'],
+  // 0.3.0 answered `mkdir` with "you do not need to create directories at all", which is
+  // true and which models read three times before giving up anyway. It still leads with
+  // the cheaper route, but there is now a tool behind the sentence instead of a puzzle.
+  ['mkdir', MKDIR_INSTEAD],
+  ['md', MKDIR_INSTEAD],
   ['ls', 'Use the list_files tool to see what is in a folder.'],
   ['dir', 'Use the list_files tool to see what is in a folder.'],
   ['tree', 'Use the list_files tool to see what is in a folder.'],
@@ -63,9 +69,13 @@ const TOOL_INSTEAD_OF = new Map([
   ['rg', 'Use the search_workspace tool to find text in the project.'],
   ['ag', 'Use the search_workspace tool to find text in the project.'],
   ['find', 'Use the search_workspace tool to find text, or list_files to see what exists.'],
-  ['rm', 'Use the delete_file tool to remove a file.'],
+  ['rm', 'Use the delete_file tool to remove a file, or the delete_folder tool to remove a folder.'],
   ['del', 'Use the delete_file tool to remove a file.'],
-  ['rmdir', 'Use the delete_file tool to remove a file.'],
+  // Pointed at delete_file until 0.4.0, which refuses directories — so the redirect sent
+  // the model to a tool that could only say no. Observed live: after that refusal the
+  // model told the user the folder "has been removed from the workspace", and it had not.
+  ['rmdir', 'Use the delete_folder tool to remove a folder.'],
+  ['rd', 'Use the delete_folder tool to remove a folder.'],
   ['unlink', 'Use the delete_file tool to remove a file.'],
   ['touch', 'Use write_file to create the file, with its full contents.'],
   ['echo', 'Use write_file to put content in a file. There is nothing to print to.'],
@@ -202,9 +212,16 @@ module.exports = async function runScript(args, context) {
   try {
     result = await context.gate.runScript({ ...request, signal: context.signal }, decision);
   } catch (err) {
+    // The code travels with the result. `BINARY_NOT_FOUND` is raised here rather than
+    // at validation — the allow-list vets the name, and only `scriptRunner.run` looks
+    // for the program on PATH — so without this it was the one refusal reason that
+    // reached the loop as prose and nothing else. `factStore` reads it to record that
+    // the toolchain is absent, which is the fact worth keeping from a failed run.
+    const code = /** @type {Error & {code?: string}} */ (err).code;
     return {
       ok: false,
-      observation: `\`${command}\` could not be started: ${/** @type {Error} */ (err).message}`,
+      observation: `\`${command}\` could not be started: ${/** @type {Error} */ (err).message}${nextStepAfterRefusal(code, command)}`,
+      error: code,
     };
   }
 

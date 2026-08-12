@@ -79,6 +79,40 @@ anything. If answering would require looking at a file you were not given, say w
 file you would need.`;
 
 /**
+ * Agent mode, for a message that turned out to be conversation.
+ *
+ * Deliberately not Ask mode's prompt. Ask is a mode the user chose, and its instruction
+ * is about the boundary of a question — "say which file you would need". This one is
+ * reached without the user choosing anything, for a message that was not a question
+ * about the code at all, and its job is to sound like a person and then get out of the
+ * way. A model told to be concise and to answer from memory will do both; a model given
+ * Ask's framing starts explaining which files it would like to see, for a message that
+ * was "hi".
+ *
+ * The two paragraphs at the end are the ones that matter. Without the first, small
+ * models answer "do you remember what we were doing?" by inventing a plausible history
+ * — the conversation is right there in the context, so there is no reason to guess and
+ * every reason to say so when it is not. Without the second, a model that has just been
+ * told it has no tools reports that it *cannot* help with the next request, and the user
+ * has to fight it back into working.
+ */
+const CHAT_SYSTEM = `You are HirayaCoder, a coding assistant that lives in the user's editor.
+
+This message is conversation, not a task — nothing needs to be built, read, or changed
+to answer it. Reply the way a colleague would: directly, in a sentence or two, in the
+user's own language if they are not writing in English. No checklists, no summaries of
+work, no offers to do six things.
+
+The conversation so far and the notes from this project are below. Answer from them. If
+the answer is not there — you were asked about something from before this session, or a
+detail nobody recorded — say plainly that you do not have it. Never invent what was
+discussed.
+
+You have no tools for this reply, so do not claim to have read, changed, or run
+anything. This is about this message only: the moment the user asks for work, you will
+have every tool back.`;
+
+/**
  * Render the earned-hints block appended to a system prompt.
  *
  * Two things this wording has to do at once. It must carry enough authority that a
@@ -114,11 +148,14 @@ function renderEarnedHints(hints) {
  * @property {import('./modelCapability').ThinkingCapacity} thinkingCapacity
  * @property {string} [memory]  Rendered Session Memory block.
  * @property {string[]} [earnedHints]  Sentences from `agent/earnedHints`, already selected.
+ * @property {'chat' | 'task'} [intent]  From `core/intentRouter`. Only consulted in Agent mode.
  */
 
 /**
  * @typedef {object} Route
- * @property {'none' | 'react' | 'native'} strategy  'none' means answer directly.
+ * @property {'none' | 'chat' | 'react' | 'native'} strategy
+ *   'none' and 'chat' both mean answer directly with no loop; they differ only in the
+ *   system prompt and in what context is worth assembling.
  * @property {'agent' | 'plan' | 'ask'} mode
  * @property {import('../agent/toolRegistry').ToolDefinition[]} tools
  * @property {object[]} ollamaTools     Native schemas; empty unless strategy is 'native'.
@@ -149,6 +186,27 @@ function route(request) {
       ollamaTools: [],
       allowedActions: new Set(),
       systemPrompt: ASK_SYSTEM,
+      budgets: { ...budgets, maxSteps: 0 },
+      readOnly: true,
+    };
+  }
+
+  // Agent mode reached with a message that is conversation. Same mechanism as Ask —
+  // one call, no loop, no tools in existence — chosen by what was typed rather than by
+  // a button. The mode is reported unchanged, because the user did not leave Agent
+  // mode and the next message will be routed on its own merits.
+  //
+  // Only Agent mode consults the intent. Plan is a deliberate instruction to go and
+  // look at the project, and someone who has pressed it and typed "hi" is more likely
+  // to have mistyped than to want small talk from a read-only exploration.
+  if (mode === 'agent' && request.intent === 'chat') {
+    return {
+      strategy: 'chat',
+      mode,
+      tools: [],
+      ollamaTools: [],
+      allowedActions: new Set(),
+      systemPrompt: CHAT_SYSTEM,
       budgets: { ...budgets, maxSteps: 0 },
       readOnly: true,
     };
@@ -207,6 +265,7 @@ module.exports = {
   canMutate,
   renderEarnedHints,
   ASK_SYSTEM,
+  CHAT_SYSTEM,
   PLAN_SUFFIX,
   LITE_FALLBACK,
   AGENTIC_FALLBACK,

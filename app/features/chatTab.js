@@ -263,29 +263,26 @@ class ChatTab {
     this._postStatus();
   }
 
-  /** @private */
+  /**
+   * The permissions menu.
+   *
+   * Delegated to `hirayacoder.permissions` rather than reimplemented here. This tab
+   * used to render its own quick pick and apply the result with `modes.toggle(id)` —
+   * a method `PermissionModes` has never had, so every click threw a TypeError into
+   * an unhandled rejection and both permissions were unreachable from the chat tab
+   * for as long as it has existed. Auto-approve-scripts in particular could be
+   * clicked indefinitely with nothing happening and no error shown.
+   *
+   * A second implementation is also the wrong shape for this setting: enabling
+   * auto-approve-scripts requires a deliberate confirmation, which `permissionModes`
+   * enforces by demanding a confirm callback, and the duplicate had none to give.
+   * One menu, one enforcement path.
+   *
+   * @private
+   */
   async _showPermissionMenu() {
-    const modes = this.app.modes;
-    const snapshot = modes.snapshot();
-    const picked = await vscode.window.showQuickPick(
-      [
-        {
-          label: snapshot.autoEdit ? '$(check) Auto-apply edits' : 'Auto-apply edits',
-          detail: 'Write and delete without asking. Deletes still confirm.',
-          id: 'autoEdit',
-        },
-        {
-          label: snapshot.autoApproveScripts ? '$(check) Auto-approve scripts' : 'Auto-approve scripts',
-          detail: 'Run allow-listed commands without asking. Off by default, deliberately.',
-          id: 'autoApproveScripts',
-        },
-      ],
-      { title: 'Permissions', placeHolder: 'Toggle a permission' }
-    );
-    if (!picked) return;
-
-    modes.toggle(picked.id);
-    this._post({ type: 'permissions', permissions: modes.snapshot() });
+    await vscode.commands.executeCommand('hirayacoder.permissions');
+    this._post({ type: 'permissions', permissions: this.app.modes.snapshot() });
   }
 
   /**
@@ -431,6 +428,10 @@ class ChatTab {
       return;
     }
 
+    // Snapshotted before the new message joins it: what goes to the model is the
+    // conversation *up to* this turn, and the turn itself arrives as the task.
+    const conversation = this.history.slice();
+
     this.history.push({ role: 'user', text });
     if (this.transcript) this.transcript.append('user', text);
     this._post({ type: 'start' });
@@ -445,6 +446,10 @@ class ChatTab {
       gate: this.app.gate,
       workspaceRoot: this.app.workspaceRoot,
       memory: this.app.memoryFor(this.sessionId),
+      // Shared across tabs, like the ledger: a missing toolchain is a fact about the
+      // machine, not about this conversation.
+      facts: this.app.facts,
+      history: this.app.fileHistory,
       // This tab's own translator. A shared one wrote every tab's notes into whichever
       // session the extension happened to open at activation.
       translator: this.app.translatorFor(this.sessionId),
@@ -463,6 +468,11 @@ class ChatTab {
       const result = await this.session.run(text, {
         mode: this.mode,
         editor: this._editorContext(),
+        // `history` was display state only until 0.4.0 — written to disk, restored into
+        // the panel on reopen, and never shown to the model. That is why the agent could
+        // not answer "can you remember our first conversation?" except by searching the
+        // workspace: the conversation was the one thing it had no access to.
+        conversation,
         onEvent: (event) => this._onAgentEvent(event),
       });
 

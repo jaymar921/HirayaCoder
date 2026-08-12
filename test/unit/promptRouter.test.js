@@ -172,6 +172,66 @@ describe('promptRouter — prompt assembly', () => {
   });
 });
 
+describe('promptRouter conversational routing', () => {
+  const { route, CHAT_SYSTEM } = require('../../app/core/promptRouter');
+  const TIER_B = { tier: 'B', strategy: 'react', label: 'Lite', model: 'llama3.2:1b' };
+  const TIER_A = { tier: 'A', strategy: 'native', label: 'Agentic', model: 'qwen2.5-coder:7b' };
+
+  it('answers a conversational message with no loop and no tools', () => {
+    // The failure: Agent mode constrains Tier B decoding to a grammar whose every
+    // branch is a tool call, so a greeting could only come out as `read_file`.
+    const chat = route({ mode: 'agent', capability: TIER_B, thinkingCapacity: 'medium', intent: 'chat' });
+
+    assert.strictEqual(chat.strategy, 'chat');
+    assert.deepStrictEqual(chat.tools, []);
+    assert.deepStrictEqual(chat.ollamaTools, []);
+    assert.strictEqual(chat.allowedActions.size, 0);
+    assert.strictEqual(chat.budgets.maxSteps, 0);
+    assert.strictEqual(chat.readOnly, true);
+  });
+
+  it('does the same on a model that has native tool calling', () => {
+    const chat = route({ mode: 'agent', capability: TIER_A, thinkingCapacity: 'medium', intent: 'chat' });
+    assert.strictEqual(chat.strategy, 'chat');
+    assert.deepStrictEqual(chat.ollamaTools, [], 'a tool schema was still offered');
+  });
+
+  it('reports the mode unchanged, because the user never left Agent mode', () => {
+    const chat = route({ mode: 'agent', capability: TIER_B, thinkingCapacity: 'medium', intent: 'chat' });
+    assert.strictEqual(chat.mode, 'agent');
+  });
+
+  it('gives a task every tool, exactly as before', () => {
+    const task = route({ mode: 'agent', capability: TIER_B, thinkingCapacity: 'medium', intent: 'task' });
+
+    assert.strictEqual(task.strategy, 'react');
+    assert.ok(task.allowedActions.has('write_file'));
+  });
+
+  it('ignores the intent outside Agent mode', () => {
+    // Plan is a deliberate instruction to go and look at the project. Someone who
+    // pressed it and typed "hi" is likelier to have mistyped than to want small talk
+    // out of a read-only exploration.
+    const plan = route({ mode: 'plan', capability: TIER_B, thinkingCapacity: 'medium', intent: 'chat' });
+    assert.strictEqual(plan.strategy, 'react');
+
+    const ask = route({ mode: 'ask', capability: TIER_B, thinkingCapacity: 'medium', intent: 'chat' });
+    assert.strictEqual(ask.strategy, 'none');
+    assert.notStrictEqual(ask.systemPrompt, CHAT_SYSTEM);
+  });
+
+  it('tells the model it will have its tools back next turn', () => {
+    // Without this a model that has just been told it has no tools reports that it
+    // cannot help with the *next* request either.
+    assert.match(CHAT_SYSTEM, /tool/i);
+    assert.match(CHAT_SYSTEM, /have every tool back|tools back/i);
+  });
+
+  it('tells the model to say so rather than invent what was discussed', () => {
+    assert.match(CHAT_SYSTEM, /never invent/i);
+  });
+});
+
 describe('toolRegistry mode filtering', () => {
   it('refuses to hand back a mutating tool outside Agent mode', () => {
     // The executor's guard: even if a loop bug produced the name, dispatch fails.

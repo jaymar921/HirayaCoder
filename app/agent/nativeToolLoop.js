@@ -23,8 +23,27 @@
  */
 
 const logger = require('../utils/logger');
-const { parseToolCalls } = require('../core/outputParser');
+const { parseToolCalls, REQUIRED_FIELDS } = require('../core/outputParser');
 const { truncateToTokens } = require('../utils/tokenBudget');
+
+/**
+ * Required arguments a native tool call arrived without.
+ *
+ * The same `REQUIRED_FIELDS` table Tier B validates against, so the two tiers cannot
+ * disagree about what a tool needs. An empty string counts as missing for the same
+ * reason it does in `parseAction`: `"code": ""` is a write with no content, and letting
+ * it through produces a confusing truncation refusal instead of a plain answer.
+ *
+ * @param {string} name
+ * @param {Record<string, unknown>} args
+ * @returns {string[]}
+ */
+function missingRequired(name, args) {
+  return (REQUIRED_FIELDS.get(name) || []).filter((field) => {
+    const value = args ? args[String(field)] : undefined;
+    return typeof value !== 'string' || value.trim().length === 0;
+  });
+}
 
 /** Guards against a model that calls the same tool with the same arguments forever. */
 const REPEAT_LIMIT = 3;
@@ -129,6 +148,8 @@ async function run(options) {
   let summary = '';
   let stopReason = 'budget';
   let narratedCalls = 0;
+  /** A finish has already been sent back once for want of evidence. */
+  let doneChallenged = false;
 
   for (let stepIndex = 0; stepIndex < budgets.maxSteps; stepIndex += 1) {
     if (options.signal && options.signal.aborted) {
@@ -194,9 +215,19 @@ async function run(options) {
           content:
             'That was a tool call written as text, so nothing ran. Use the tool-calling interface, ' +
             'and only the tools you were given — write_file, read_file, list_files, search_workspace, ' +
-            'delete_file, run_script, run_tests. To change a file, call write_file with "path" and the ' +
-            'complete new contents in "code".',
+            'delete_file, create_folder, delete_folder, run_script, run_tests. To change a file, call ' +
+            'write_file with "path" and the complete new contents in "code".',
         });
+        continue;
+      }
+
+      // Raised once, never twice — see `agent/completionCheck`.
+      const objection = doneChallenged || !options.verifyDone ? null : options.verifyDone(answer);
+      if (objection) {
+        doneChallenged = true;
+        logger.info('Challenged a "done" that nothing supports; giving the model one more turn.');
+        messages.push(message);
+        messages.push({ role: 'user', content: objection });
         continue;
       }
 
@@ -224,6 +255,35 @@ async function run(options) {
         break;
       }
 
+      // Tier B validates required fields in `parseAction` and refuses a call without
+      // them, with a correction naming what was missing. Tier A had no equivalent —
+      // Ollama's tool-call format is trusted as structured, so an argument object
+      // missing `path` went straight through to `write_file`, which asked the gate to
+      // resolve `undefined` and came back with "The write to undefined was not applied:
+      // A file path is required."
+      //
+      // Observed on `gemma4:e4b`: five identical writes with no path, each answered by
+      // that sentence, after which the model told the user "the persistent failure
+      // suggests a technical issue with the tool execution environment itself" and
+      // reported the file as written. It was right that something was broken and wrong
+      // about what, because nothing had ever told it which field was missing.
+      const missing = missingRequired(call.name, call.args);
+      if (missing.length > 0) {
+        logger.warn(`Native tool call ${call.name} arrived without ${missing.join(', ')}.`);
+        messages.push({
+          role: 'tool',
+          ...(call.id ? { tool_call_id: call.id } : {}),
+          name: call.name,
+          content:
+            `${call.name} was not run: the call had no ${missing.map((f) => `"${f}"`).join(' and no ')}. ` +
+            `Nothing happened. Call ${call.name} again with ${missing.length === 1 ? 'that field' : 'those fields'} set — ` +
+            `${missing.includes('path') ? '"path" is the workspace-relative file path, like "src/app.js"' : ''}` +
+            `${missing.includes('path') && missing.includes('code') ? ', and ' : ''}` +
+            `${missing.includes('code') ? '"code" is the COMPLETE new contents of the file' : ''}.`,
+        });
+        continue;
+      }
+
       /** @type {import('../core/outputParser').ParsedAction} */
       const action = {
         action: call.name,
@@ -231,6 +291,9 @@ async function run(options) {
         query: typeof call.args.query === 'string' ? call.args.query : undefined,
         code: typeof call.args.code === 'string' ? call.args.code : undefined,
         command: typeof call.args.command === 'string' ? call.args.command : undefined,
+        // Only a real boolean counts — see the same rule in `outputParser.parseAction`.
+        // A model that types "false" must not thereby authorise a recursive delete.
+        recursive: call.args.recursive === true || call.args.recursive === 'true' ? true : undefined,
         // A native tool call carries no `thought` field the way a Tier B action
         // does, but models routinely narrate alongside their calls. Capturing that
         // text gives Tier A the same fallback Tier B has — without it, a rejected
@@ -267,7 +330,8 @@ async function run(options) {
   }
 
   logger.info(`Native tool session ended: ${stopReason} after ${steps.length} step(s).`);
-  return { steps, summary, stopReason };
+  // See the note in `reactLoop`: an unanswered challenge has to reach the user.
+  return { steps, summary, stopReason, doneChallenged };
 }
 
-module.exports = { run, callKey, looksLikeNarratedToolCall, REPEAT_LIMIT, NARRATED_CALL_LIMIT };
+module.exports = { run, callKey, looksLikeNarratedToolCall, missingRequired, REPEAT_LIMIT, NARRATED_CALL_LIMIT };

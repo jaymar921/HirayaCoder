@@ -5,6 +5,460 @@ All notable changes to HirayaCoder are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — 0.4.0
+
+Everything here comes out of one evaluation session: six conversations across two
+workspaces on a MacBook, building the same small TODO app in Java, then Python, then
+HTML, on `deepseek-coder-v2` and `ornith:9b`. The transcripts are worth more than any
+of the individual fixes. Three of the four bugs below had been shipped and unnoticed
+since the features they belong to were written, and each of them silently degraded a
+whole feature rather than failing loudly.
+
+### Added — a record of what was changed, and what it was changed from
+
+A `ChangeSet` holds the before and after of every write for exactly as long as the turn
+lasts. The review UI draws a diff from it and then it is gone. Session memory keeps a
+sentence — "Edited src/todo_manager.py: added priority handling" — which says a file was
+touched and nothing about what happened to it. So "what did it do to this file two turns
+ago" had no answer anywhere.
+
+`core/fileHistory` writes a bounded diff per write to `.hirayacoder/history.jsonl`, and
+**Show File History** renders them newest-first as a diff document. Diffs and not
+snapshots: storing both versions of every file would duplicate the workspace on each
+write, and inside a git repository it would duplicate git. The trade is worth stating
+plainly — a large rewrite is recorded as a truncated diff and cannot be reversed from
+this file. Git is the tool for that; this one is for seeing what happened without
+leaving the editor.
+
+The agent gets the short version, paths and line counts only, under the heading *"files
+you have already changed in this session — do not redo this work"*. That is the half
+that changes behaviour rather than reporting on it. A model asked to modify a file it
+edited three turns ago has no idea it did so, and re-does or undoes its own work —
+observed exactly that way more than once, most memorably a model that had correctly
+wired two classes together and then rewrote the file without the wiring.
+
+This is the one file under `.hirayacoder/` that holds workspace content by design, which
+is why every diff goes through the secrets scanner on the way in and the file is capped.
+`outcomes.jsonl` needs neither, because it holds nothing but counts and enums.
+
+### Added — how long it took, and whether Ollama is still there
+
+Both recorded locally, in the file that already exists for exactly this kind of thing.
+Durations are numbers and states are enums, so `outcomes.jsonl` keeps the property that
+makes it safe to keep: no paths, no commands, no content.
+
+**Timing.** Each turn logs its wall-clock duration and how much of it was spent waiting
+on Ollama — to the output channel as it happens, and to the ledger for afterwards:
+
+    Turn finished in 94.2s (96% waiting on the model) — done, 4 step(s).
+
+The split is what makes the number useful. A four-minute turn is a different bug
+depending on whether the model was thinking or a script was hanging, and this says
+which without anyone having to guess. Steps are timed individually too, confirmation
+waits included: a session that looks slow because a dialog sat unanswered for two
+minutes is not a slow model, and that should be visible rather than inferred.
+
+Timing lives in `ollamaClient.request`, which is the single funnel every call passes
+through — the agent loops, the model list, the status-bar ping, inline completion. The
+per-session figure is a subtraction across that running total rather than a sum of
+instrumented call sites, so the planning and TODO-splitting passes, which happen outside
+any loop, are counted too. They are often where the time went.
+
+**Up, down, or wedged — three states, not a boolean.** The two failures need opposite
+responses, and collapsing them would give the wrong advice half the time:
+
+- **down** — nothing is listening. `OllamaUnreachableError` says so on the first try, so
+  there is no reason to wait for a second. Start Ollama.
+- **unresponsive** — it accepted the connection and then did not answer, twice running.
+  That is the wedged case, and it is the one where restarting actually helps. One
+  timeout is never enough to call it: on CPU inference a large model loading into memory
+  legitimately blows a deadline, and telling someone to restart a server that was merely
+  busy is worse than saying nothing.
+- **up, request failed** — a 4xx or 5xx. The server is healthy and the request was
+  wrong. Reporting an outage here would send the user to restart something that works.
+
+A cancelled request counts for nothing at all. Pressing Stop is not evidence about the
+server, and counting it would have every long session end by declaring an outage.
+
+Transitions are what get written, never individual requests, so a healthy server costs
+nothing and a flapping one is legible as a few flips with timestamps. Notifications fire
+only on entering a state the user can act on, and recovery is a quiet status-bar line
+shown only to someone who saw the failure. **Show Status** carries the glance version:
+last, average, and slowest call, plus any current failure streak.
+
+### Fixed — Tier A ran a tool call that had no path
+
+Tier B validates required fields in `parseAction` and refuses a call without them, with
+a correction naming what was missing. Tier A had no equivalent: Ollama's tool-call format
+arrives structured, so it was trusted, and an argument object missing `path` went
+straight through to `write_file` — which asked the gate to resolve `undefined` and came
+back with "The write to undefined was not applied: A file path is required."
+
+Observed on `gemma4:e4b`: five identical writes with no path, each answered by that same
+sentence. The model then told the user "the persistent failure to write content to
+`index.html` suggests a technical issue with the tool execution environment itself" and
+reported the file as written. It was right that something was broken and wrong about
+what, because nothing had ever told it which field it had left out.
+
+Both tiers now validate against the same `REQUIRED_FIELDS` table, so they cannot
+disagree about what a tool needs, and the correction names the field.
+
+### Fixed — the assent-word exclusion was over-corrected
+
+The previous fix excluded "ok", "sure", "proceed" from the social vocabulary so that
+`"okay proceed"` could not read as small talk. That was right, and it was implemented as
+*any message containing one is work*, which was not. The cost showed up on the next
+test: `"okay thank you"` ran a four-item TODO list that re-analysed five files, and
+`"it's okay"` spent its budget on refused `which java` calls.
+
+Assent is now a third category rather than a disqualifier. A message made only of assent
+is a go-ahead and goes to the agent; assent *plus* a real pleasantry is an
+acknowledgement and does not.
+
+Three more misses from the same session, all of them messages that named no file and
+asked for no work:
+
+- **"how are you"** went to the agent, which read two source files and reported on them.
+  The user's next message was "why are you reading the files, i just asked how are you".
+- **"hello gemma4"** went to the agent because `gemma4` is in no vocabulary and never
+  could be — it is whatever the user has installed. The model replied by asking for "the
+  full task description". A greeting of three words or fewer is now a greeting.
+- **"can you verify our conversation, where are we currently right now?"** was claimed by
+  `verify` in the work-verb list, and the agent re-read one file until the repeat guard
+  stopped it. Twice — the user rephrased, and the rephrasing contained `created`.
+  Questions about the assistant, the conversation, and where the work has got to are now
+  checked *before* the general work-verb rule and after the mutating-verb rule, so
+  "verify the conversation" is conversation and "fix the parser" is still work.
+
+### Fixed — a UI wired to an empty script counted as finished
+
+The third shape of hollow output, and one both existing checks missed. Asked to convert
+a working Python TODO app to a web page with "a cool UI", the agent produced 52 lines of
+real markup — four styled buttons captioned with the menu options from the Python app, a
+text input, a list container — and this:
+
+    <script>
+        // JavaScript functionality will go here later to implement the full application logic.
+    </script>
+
+No string says "coming soon". There are no function bodies to be placeholders, because
+there are no functions. The change set grew. Every signal read it as finished work.
+
+The test is structural and narrow: an HTML page with two or more controls and no
+executable script is a mockup. A page with no controls is untouched, since a static page
+is a legitimate thing to write; a single stray `<button>` is not enough, since a "back"
+link on a content page is not an application; and a page that loads an external script
+or uses inline handlers is assumed wired, because guessing otherwise would fail exactly
+the projects that are organised properly.
+
+Also removed `placeholder` from the placeholder-literal word list, where it had been for
+one commit. It is a standard HTML attribute, so the pattern fired on
+`<input placeholder="Enter a task...">` and reported an ordinary form field as an unbuilt
+feature. Every entry in that list has to be a phrase whose only use is announcing that
+something is missing, and a word from the HTML spec is not one.
+
+### Fixed — "okay proceed" was answered as small talk
+
+Caught on the first real test of the intent router, and it is the exact failure the
+module's own header warns about, committed anyway.
+
+The pleasantry rule matched a social word at the *start* of a message and capped the
+length at six words. `"okay proceed"` satisfied both. Routed to chat, the model had no
+tools — so it replied with the complete HTML file in a code fence and the sentence
+"Saved to `todoapp.html`." Nothing was saved. The user asked three more times, in
+plainer and plainer language, and the session ledger records the turn as
+`stopReason: "conversation", steps: 0`.
+
+A social word at the front of a message says nothing about the rest of it. The test is
+now that the **whole** message is social — every token has to be in a fixed vocabulary —
+so anything left over means there is a request attached.
+
+Assent words are deliberately excluded from that vocabulary and the omission is written
+down as a constant rather than left to inference. "ok", "okay", "sure", "yes",
+"alright", "go ahead", "proceed" all routinely mean *carry on with what I just asked
+for*. Treating one as small talk drops a request; sending it to the agent costs a loop
+that reads a file — and since the conversation is now in the prompt, that loop can see
+what it is being told to carry on with.
+
+### Fixed — an unanswered completion challenge was reported as success
+
+The check added earlier in 0.4.0 fired correctly and then nothing came of it. Asked four
+separate times to create `todoapp.html`, `ornith:9b` read the two Python files, was told
+no file had been written, said it was finished anyway — and the entire summary the user
+received was the word **"Finished."**
+
+Accepting the second `done` is right; a model that cannot produce the work will not be
+argued into it. Reporting it as an ordinary success is not. The summary now states
+plainly that nothing was created, edited, or deleted, and that the text above it
+describes an intention rather than an outcome. Inside a TODO list the item drops from
+"done (no files changed)" to failed, since an item that asked for a file and produced
+none did not happen.
+
+### Fixed — a program that prints "coming soon" counts as unfinished
+
+The completion check looked for deferral *comments*. What the agent actually wrote, when
+asked for a working TODO app, was this:
+
+    case 1 -> System.out.println("Add feature coming soon.");
+    case 2 -> System.out.println("Remove feature coming soon.");
+
+`TodoManager.java` was written correctly — real `add`, `remove`, `modify` over an
+`ArrayList`. `TodoApp.java` never constructed one. The menu drew, took input, and
+announced that the three features the prompt had asked for were not ready. Both files
+compiled; the Python conversion reproduced the same shape faithfully, because it was a
+faithful conversion.
+
+Nothing in the system could see it. No comment to find, no empty function body, the
+change set grew, the compile succeeded, and every guard in `writeFile` is about a file
+being *damaged* rather than hollow. The only tell is the program saying so out loud, so
+that is what is matched — at file level, since the Java version buried these inside a
+`switch` inside a `main` full of real code.
+
+A bare `TODO` in a string is deliberately **not** a match. The program this was found in
+is a todo application; it prints the word constantly.
+
+### Changed — the permissions menu says which prompts each toggle covers
+
+Auto Approve Running Scripts was switched on and the Create/Apply dialogs kept
+appearing, which read as the toggle not working. It was working — file writes are Auto
+Edit's, and the two are independent. Each entry now names the prompts it governs and
+says explicitly which ones it does not.
+
+### Added — the agent answers when it is being talked to
+
+Agent mode constrains Tier B decoding to `outputParser.actionSchema`, a grammar whose
+every branch is a tool call. A greeting cannot produce a greeting, because a greeting is
+not in the language the model is permitted to speak. So "hi", "what model are you", and
+"can you remember our first conversation?" each had exactly one way out: pick a tool.
+The model picked `read_file`, the loop handed back a file, it picked another, and the
+repeat guard ended the turn. An entire evaluation session — nine messages, none of them
+requests for work — came back as nine variations of "I stopped because I kept repeating
+the same step".
+
+The model was never the problem. A 1B model says hello perfectly well. It was not
+allowed to.
+
+`core/intentRouter` now classifies each message before routing, and a conversational one
+is answered directly: one call, no loop, no tools in existence — the same mechanism Ask
+mode uses, chosen by what was typed rather than by a button. The mode selector does not
+move, and the next message is routed on its own merits.
+
+The classifier is patterns, not a model call. It runs before every turn on hardware
+where an inference is seconds, and a round-trip to establish that "hi" is not a refactor
+is a bad trade — and another chance for a small model to be wrong about something the
+caller can simply read. `task` is the default and `chat` requires positive evidence,
+because being wrong toward `task` costs one loop that reads a file and answers, which is
+what every message got before this, while being wrong toward `chat` silently drops a
+request. An imperative anywhere in the message overrides everything: "hey, can you fix
+the bug in app.js" is work with a greeting attached.
+
+Only Agent mode consults it. Plan and Ask are the user saying what they want, and
+second-guessing an explicit choice is not a classifier's job.
+
+### Added — the conversation reaches the model
+
+`chatTab.history` was display state. Its own comment said so: "the model is given memory
+and a freshly built context, never this." The transcript on disk was written and never
+read back. So the agent had no access to anything said before the current message, and
+answered "can you remember our first conversation?" by searching the workspace — the only
+place it had ever been allowed to look.
+
+Session memory was meant to cover this and structurally cannot. It records what the agent
+*did*: "Ran `javac …` (failed)", "Edited src/todo_manager.py". Almost nothing worth
+remembering is an action. Across six evaluation sessions the decision to abandon Java for
+Python, the fact that the deliverable was `todoapp.html`, and every requirement the user
+restated were all absent from it, because none of them are things the agent did.
+
+Earlier turns are now assembled into the prompt as their own budgeted section, on every
+strategy rather than only the conversational one — "do it the way we discussed" and "the
+file I mentioned earlier" are ordinary things to say to an agent mid-task. It outranks
+session memory under budget pressure: the notes are a compression of the same material,
+so when only one survives it should be the primary source.
+
+### Added — `core/factStore`, the half of memory that is not a diary
+
+Session 1 spent its entire step budget discovering that `javac` could not run on the test
+machine. Session 2, same workspace an hour later, spent its budget discovering it again —
+and then proposed `sudo apt-get install default-jdk` on macOS. Nothing carried, because
+the only thing being carried was a list of actions, and "this command failed" is not the
+same statement as "this toolchain is absent".
+
+Facts are typed (`environment`, `decision`, `artifact`, `preference`), stored per
+*workspace* rather than per session, and rendered into the system prompt above the
+session notes — grouped, labelled, and ordered so a user's decision outranks anything
+observed. They survive across sessions and across chat tabs, which is the entire point.
+
+Nothing here involves a model call. A fact is detected by matching what a program
+printed, or it is not recorded, for the same reason the outcome ledger only counts
+evidence: a wrong fact is worse than no fact, because it persists and is stated to every
+future turn as settled. The detector is correspondingly quiet — a compile error teaches
+it nothing, since that is about the code and will be fixed in the next step.
+
+What it does recognise is a missing toolchain, in all three of the ways one announces
+itself, because a detector written from a single macOS transcript would have been
+silently useless on the platforms this also ships to:
+
+    macOS    The operation couldn't be completed. Unable to locate a Java Runtime.
+    Linux    javac: command not found
+    Windows  'javac' is not recognized as an internal or external command
+
+The macOS case is the one no PATH check could ever have caught: Apple ships a `javac`
+stub, so the program really is on PATH and really does exit non-zero. `BINARY_NOT_FOUND`
+now travels with the tool result as an error code too — it is raised inside
+`scriptRunner.run` rather than at validation, so until now it was the one refusal reason
+that reached the loop as prose and nothing else.
+
+"Clear session memory" gains an entry for the workspace's facts, kept separate from the
+per-session ones because they have a different scope. A fact that has become false — "no
+JDK here", after the user installs one — is the case that most needs a way out.
+
+### Added — a `done` is now checked against what the session produced
+
+Two ways a run reported success without producing any.
+
+**It never wrote anything.** Asked five separate times, in escalating detail, to convert
+a Python TODO app into `todoapp.html`, the agent replied:
+
+    2 of 2 item(s) completed.
+    1. Read src/todo_app.py and src/todo_manager.py … — done (no files changed)
+    2. Convert the Python todo app into an HTML webpage … — done (no files changed)
+
+Every word of that is accurate. `judgeItem` derives it from evidence and appends the
+caveat honestly — and a user reading "2 of 2 completed" believes a file exists. The
+fifth attempt ended with the user typing "nothing changed. again."
+
+**It wrote a placeholder.** The file that eventually appeared was 49 lines whose two
+handlers were a comment and a `console.log`:
+
+    function deleteTask(taskId) {
+        // Implement the delete functionality here
+        console.log("Deleting task:", taskId);
+    }
+
+A change set grew, so nothing downstream had any reason to doubt it, and the delete
+feature the user had asked for three times did not exist.
+
+`agent/completionCheck` now runs when either loop is told the work is finished, and can
+send the model back once. Once, never twice: a model that cannot produce the work will
+not be argued into it, and refusing indefinitely burns the budget to arrive at a worse
+report than the honest one. What the single retry buys is the common small-model case —
+the model has read everything it needs, has lost track of never having written, and
+needs telling.
+
+It is deliberately narrow at both ends. A request that only asked to look at, check, or
+explain something finishes correctly having written nothing, so those are never
+challenged; and a `// TODO` in working code is an ordinary thing to leave behind, so the
+placeholder check requires a deferral comment sitting in a function body with nothing
+else of substance in it. Plan mode is exempt outright, since a plan that changed nothing
+is the entire point of Plan mode.
+
+The placeholder scan handles brace languages only. Python's indentation needs a
+different scan, and half a scan would report the wrong bodies rather than none.
+
+### Fixed — a quadratic regex in the placeholder scan
+
+Caught before it shipped, while checking the `security/detect-unsafe-regex` warnings
+rather than waving them through. The first version of the placeholder comment pattern
+had two `\s*` either side of an optional group, both able to claim the same run of
+spaces, so the engine tried every split: **308 ms** on `"// TODO"` followed by 20,000
+spaces, against 0.17 ms for the fixed pattern at twice the length. This scans every file
+the agent writes, and a model emitting a long run of whitespace is not a rare event.
+
+The other five warnings in that report were measured too, and all are false positives —
+none exceeds 0.25 ms on 40,000 characters of adversarial input.
+
+### Fixed — the permissions button in the chat tab never worked, at all
+
+`features/chatTab.js` rendered its own permissions quick pick and applied the answer
+with `modes.toggle(picked.id)`. `PermissionModes` has never had a `toggle` method. Every
+click threw a `TypeError` into an unhandled rejection: no state change, no error
+message, no log line. Auto Approve Running Scripts could be clicked indefinitely and
+stay off, which is exactly what the audit log for the evaluation session shows —
+`"autoApproveScripts":false` on all forty-odd entries, across a run where the user was
+trying to turn it on.
+
+A second implementation was the wrong shape for this setting anyway. Enabling
+auto-approve-scripts requires a deliberate confirmation, which `permissionModes`
+enforces structurally by demanding a confirm callback, and the duplicate had none to
+give — so even a working version of it could not have turned that permission on. The tab
+now delegates to `hirayacoder.permissions`, the same menu the command palette opens.
+One menu, one enforcement path, and the "Reset to safest" option that the duplicate had
+also been missing.
+
+### Fixed — switching model took two clicks
+
+`setModel` writes `model.selected` and returns. Adopting it happens in
+`onConfigChange`, which the configuration listener invokes fire-and-forget, and which
+does an Ollama round-trip before `activeModel` moves. The chat tab awaited
+`selectModel`, immediately repainted the dropdown from `app.activeModel`, and got the
+*previous* model — drawing the `<select>` back to where it started. The second click
+appeared to work only because the listener had caught up by then.
+
+Both halves are fixed. `selectModel` adopts the new setting itself and awaits its own
+refresh, so it does not resolve until the model it names is genuinely active; and
+refreshes are now serialized rather than allowed to overlap, since one model change
+produces two of them and two `/api/tags` round-trips racing each other can settle in
+either order.
+
+### Fixed — Plan mode looked broken because its output was optional
+
+The checklist was built by parsing the loop's closing `done` summary for a numbered
+list. That is two bets on a single turn: that the loop reached `done` at all, and that
+the summary happened to come out in list shape. Small models lose both routinely — a
+Plan run that ends on the repeat guard has no `done`, and its summary is "I stopped
+because I kept repeating the same step", which parses to zero steps.
+
+With zero steps the webview renders the prose and never draws "Run this plan", so the
+feature reads as broken rather than as degraded, with nothing anywhere saying why.
+
+The summary is still preferred. When it yields nothing, the plan is now asked for
+directly instead: one cheap constrained call, given the paths the exploration actually
+opened. That call has one job and a fixed output shape, which is a far easier thing for
+a small model to get right than closing a loop in list form. If it also comes back
+empty, the run falls back to prose rather than inventing steps.
+
+### Added — `create_folder` and `delete_folder`
+
+A folder could not be removed by any route the agent had. `delete_file` refuses
+directories, and 0.3.0's command redirect sent both `rm` and `rmdir` to `delete_file` —
+so `rmdir` pointed at a tool that could only say no. Observed live, asked to remove an
+empty `src/main/java` left behind after its two files were deleted: the model tried
+`delete_file`, was told "HirayaCoder only deletes individual files", and then reported
+to the user that the folder "has been removed from the workspace". It had not. A dead
+end the model cannot see is a dead end it will narrate its way out of.
+
+Creation was the same lesson from the other side. 0.3.0 answered `mkdir` with "you do
+not need to create directories at all", which is true — `write_file` creates every
+folder on the way to the file — and which `ornith:9b` read three times before giving up
+anyway. Being right is not the same as being actionable. The advice still leads, but
+there is now a tool behind the sentence instead of a puzzle.
+
+`delete_folder` is the most conservative tool in the set, because a recursive delete is
+the one mutation the change set cannot undo:
+
+- **Empty by default.** A folder with anything in it is refused unless the call
+  explicitly passes `recursive: true`. The common case — tidying up after a delete —
+  never touches the recursive path.
+- **Always confirms.** Neither Auto Edit nor `alwaysConfirmDeletes` waives it. There is
+  no configuration in which this runs unattended, and the prompt names how many items
+  are at stake.
+- **Bounded.** Past 100 entries it refuses regardless of the answer and tells the user
+  to do it themselves. The distance between `src/main/java` and `src` is one token of
+  model output, and a dialog is a poor last line of defence against a mis-click on a
+  subtree nobody has read.
+
+`recursive` is only honoured as a real boolean or the string `"true"`. Small models emit
+`"false"` as a string routinely, and that value is truthy in JavaScript — reading it as
+consent would authorise a subtree delete on the strength of a typo. It is declared as an
+optional field in the Tier B action schema, too: constrained decoding will not emit a
+property the schema does not mention, so leaving it out would have made a non-empty
+folder permanently unremovable on the tier that needs the help most.
+
+`delete_file` now names `delete_folder` when handed a directory, and the ReAct loop
+treats `FOLDER_NOT_EMPTY` as a retryable refusal — the tool asks for the same call back
+with a flag set, and the generic "do not try that again" hint would otherwise contradict
+it on the very next line.
+
 ## [0.3.0] — 2026-08-12
 
 ### Fixed — a refusal now names the tool that does the job
