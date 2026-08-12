@@ -1,0 +1,32 @@
+# Everything the packaged .vsix does not need at runtime.
+
+.vscode/**
+.vscode-test/**
+.github/**
+.git/**
+.gitignore
+.hirayacoder/**
+
+# Source-of-truth material that isn't shipped code.
+# NOTE: setup/prompts/** is deliberately NOT excluded — promptLoader.js reads the
+# model-facing prompts from there at runtime. Excluding them would silently drop the
+# extension onto its embedded fallback prompts in production. Only the build spec,
+# which is for humans, is left out.
+setup/PROMPT.md
+security/**
+test/**
+builds/**
+doc/**
+
+# Tooling config
+eslint.config.js
+scripts/**
+**/*.map
+**/tsconfig.json
+**/jsconfig.json
+.mocharc*
+
+# Keep: README.md, CHANGELOG.md, LICENSE, package.json, app/**, docs/assets/icon-128.png
+docs/assets/**
+!docs/assets/icon-128.png
+!docs/assets/icon-16.png
