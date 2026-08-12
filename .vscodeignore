@@ -34,3 +34,6 @@ tools/**
 docs/assets/**
 !docs/assets/icon-128.png
 !docs/assets/icon-16.png
+# The activity bar glyph. Referenced by `contributes.viewsContainers`, so leaving it out
+# ships an extension whose sidebar icon is a blank square.
+!docs/assets/activity-bar.svg
