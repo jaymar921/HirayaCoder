@@ -153,6 +153,38 @@ class TranscriptStore {
 }
 
 /**
+ * Which sessions have left a transcript behind.
+ *
+ * Exported because a session's *identity* is not owned by any one of its files. A
+ * conversation that never produced a memorable note still exists, and it is this file
+ * that proves it — so `memoryStore.nextSessionId` asks here too before handing out a
+ * number. The path shape stays owned by this module rather than being re-derived
+ * elsewhere.
+ *
+ * @param {string} workspaceRoot
+ * @returns {Array<{sessionId: number, modifiedAt: Date}>}
+ */
+function listSessionIds(workspaceRoot) {
+  const dir = path.join(workspaceRoot, '.hirayacoder', 'transcripts');
+  /** @type {Array<{sessionId: number, modifiedAt: Date}>} */
+  const found = [];
+
+  try {
+    for (const name of fs.readdirSync(dir)) {
+      const match = /^session(\d+)\.json$/.exec(name);
+      if (!match) continue;
+      found.push({ sessionId: Number(match[1]), modifiedAt: fs.statSync(path.join(dir, name)).mtime });
+    }
+  } catch (err) {
+    if (/** @type {NodeJS.ErrnoException} */ (err).code !== 'ENOENT') {
+      logger.warn(`Could not scan the transcripts directory: ${/** @type {Error} */ (err).message}`);
+    }
+  }
+
+  return found;
+}
+
+/**
  * Keep only what the webview can render, from a file that may have been edited.
  *
  * @param {unknown} parsed
@@ -173,4 +205,4 @@ function sanitize(parsed) {
   return entries.slice(-MAX_ENTRIES);
 }
 
-module.exports = { TranscriptStore, sanitize, MAX_ENTRIES, MAX_TEXT_CHARS };
+module.exports = { TranscriptStore, listSessionIds, sanitize, MAX_ENTRIES, MAX_TEXT_CHARS };
