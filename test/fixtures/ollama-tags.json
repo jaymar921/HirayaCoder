@@ -1,0 +1,90 @@
+{
+  "_comment": "Captured from a real Ollama 0.32.7 instance. Note that llama3.2:1b advertises the 'tools' capability — this fixture is the reason tier classification cannot key on capability alone.",
+  "models": [
+    {
+      "name": "llama3.2:1b",
+      "model": "llama3.2:1b",
+      "modified_at": "2026-08-11T00:38:42.6614257+08:00",
+      "size": 1321098329,
+      "digest": "baf6a787fdffd633537aa2eb51cfd54cb93ff08e28040095462bb63daf552878",
+      "details": {
+        "parent_model": "",
+        "format": "gguf",
+        "family": "llama",
+        "families": ["llama"],
+        "parameter_size": "1.2B",
+        "quantization_level": "Q8_0",
+        "context_length": 131072,
+        "embedding_length": 2048
+      },
+      "capabilities": ["completion", "tools"]
+    },
+    {
+      "name": "stable-code:latest",
+      "model": "stable-code:latest",
+      "modified_at": "2026-04-04T22:25:59.6248687+08:00",
+      "size": 1608579797,
+      "digest": "37681d29a55a15f5fd157695109ad533a6e8826ef5886a6698140df849620461",
+      "details": {
+        "parent_model": "",
+        "format": "gguf",
+        "family": "stablelm",
+        "families": ["stablelm"],
+        "parameter_size": "3B",
+        "quantization_level": "Q4_0",
+        "context_length": 16384,
+        "embedding_length": 2560
+      },
+      "capabilities": ["completion"]
+    },
+    {
+      "name": "llama3.2:latest",
+      "model": "llama3.2:latest",
+      "modified_at": "2026-04-04T22:23:56.7513382+08:00",
+      "size": 2019393189,
+      "digest": "a80c4f17acd55265feec403c7aef86be0c25983ab279d83f3bcd3abbcb5b8b72",
+      "details": {
+        "parent_model": "",
+        "format": "gguf",
+        "family": "llama",
+        "families": ["llama"],
+        "parameter_size": "3.2B",
+        "quantization_level": "Q4_K_M",
+        "context_length": 131072,
+        "embedding_length": 3072
+      },
+      "capabilities": ["completion", "tools"]
+    },
+    {
+      "name": "qwen2.5-coder:7b",
+      "model": "qwen2.5-coder:7b",
+      "modified_at": "2026-03-01T10:00:00.0000000+08:00",
+      "size": 4700000000,
+      "digest": "c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1",
+      "details": {
+        "parent_model": "",
+        "format": "gguf",
+        "family": "qwen2",
+        "families": ["qwen2"],
+        "parameter_size": "7.6B",
+        "quantization_level": "Q4_K_M",
+        "context_length": 32768,
+        "embedding_length": 3584
+      },
+      "capabilities": ["completion", "tools"]
+    },
+    {
+      "name": "legacy-model:latest",
+      "model": "legacy-model:latest",
+      "modified_at": "2025-01-01T00:00:00.0000000+08:00",
+      "size": 900000000,
+      "digest": "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0",
+      "details": {
+        "parent_model": "",
+        "format": "gguf",
+        "family": "llama",
+        "families": ["llama"]
+      }
+    }
+  ]
+}
