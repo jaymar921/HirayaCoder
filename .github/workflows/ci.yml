@@ -1,0 +1,25 @@
+name: CI
+
+# Continuous cross-platform coverage. This is the only place macOS and Linux are
+# exercised at all — `PROMPT.md` §11 requires the packaged extension to work on all
+# three, and the maintainer's machines are Windows.
+on:
+  push:
+    branches: [main]
+    # Tag pushes are handled by release.yml, which calls the same verify workflow.
+    tags-ignore: ['**']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A new push to the same branch makes the previous run irrelevant.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    uses: ./.github/workflows/verify.yml
