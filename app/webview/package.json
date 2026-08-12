@@ -1,0 +1,4 @@
+{
+  "//": "Marks the webview folder as ES modules. The webview is loaded by the browser as <script type=module>, and Node only learns that when a unit test imports one of these files directly — without this it warns MODULE_TYPELESS_PACKAGE_JSON on every run. Scoped here rather than at the repo root because the extension host half is CommonJS.",
+  "type": "module"
+}
