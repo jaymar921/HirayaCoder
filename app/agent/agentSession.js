@@ -30,6 +30,7 @@ const contextBuilder = require('../core/contextBuilder');
 const reactLoop = require('./reactLoop');
 const nativeToolLoop = require('./nativeToolLoop');
 const plannerAgent = require('./plannerAgent');
+const earnedHints = require('./earnedHints');
 const { TodoList } = require('./todoList');
 
 /**
@@ -305,6 +306,8 @@ class AgentSession {
    * @param {import('../core/contextFilesManager').ContextFilesManager} [options.contextFiles]
    * @param {import('../core/modelCapability').ThinkingCapacity} [options.thinkingCapacity]
    * @param {string} [options.sessionId]
+   * @param {import('../core/outcomeLedger').OutcomeLedger} [options.ledger]
+   * @param {{enabled?: boolean, hintThreshold?: number}} [options.adaptation]
    */
   constructor(options) {
     this.client = options.client;
@@ -327,6 +330,15 @@ class AgentSession {
      */
     this.images = Array.isArray(options.images) ? options.images : [];
     this.scriptTimeoutMs = options.scriptTimeoutMs;
+    /**
+     * Where this session's evidence goes, and where the previous ones' came from.
+     *
+     * Null is a supported state, not a degraded one: without a workspace there is
+     * nowhere to keep a ledger, and every call site here treats an absent ledger as
+     * "learn nothing this session" rather than as an error.
+     */
+    this.ledger = options.ledger || null;
+    this.adaptation = options.adaptation || {};
 
     /** @type {AbortController | null} */
     this._controller = null;
@@ -360,6 +372,7 @@ class AgentSession {
         capability: this.capability,
         thinkingCapacity: this.thinkingCapacity,
         memory: this.memory ? await this.memory.renderForPrompt(this._recallDepth()) : '',
+        earnedHints: await this._earnedHints(mode),
       });
 
       emit({ type: 'start', mode, strategy: activeRoute.strategy, maxSteps: activeRoute.budgets.maxSteps });
@@ -369,7 +382,10 @@ class AgentSession {
         const askContext = await this._buildContext(task, activeRoute, options.editor);
         const summary = await this._answerDirectly(task, activeRoute, askContext);
         emit({ type: 'done', summary });
-        return { summary, steps: [], changeSet: new ChangeSet(), stopReason: 'answered', mode };
+        /** @type {SessionResult} */
+        const answered = { summary, steps: [], changeSet: new ChangeSet(), stopReason: 'answered', mode };
+        await this._recordSession(answered);
+        return answered;
       }
 
       const changeSet = new ChangeSet();
@@ -378,7 +394,10 @@ class AgentSession {
       // through them one at a time. Everything else keeps the previous behaviour.
       if (mode === 'agent' && this.capability.canPlanTodos) {
         const todoResult = await this._runWithTodos(task, activeRoute, changeSet, options, emit);
-        if (todoResult) return todoResult;
+        if (todoResult) {
+          await this._recordSession(todoResult);
+          return todoResult;
+        }
       }
 
       const plan =
@@ -428,6 +447,7 @@ class AgentSession {
       // A Plan-mode run produces a checklist, not changes.
       if (mode === 'plan') result.plan = plannerAgent.parsePlanSummary(outcome.summary);
 
+      await this._recordSession(result);
       return result;
     } finally {
       this.running = false;
@@ -617,6 +637,114 @@ class AgentSession {
   }
 
   /**
+   * Is this session allowed to learn?
+   *
+   * The setting turns off *both* halves — no hints are read and no outcomes are
+   * written. Recording while claiming to be off would be the wrong reading of a
+   * switch labelled "let HirayaCoder learn from what happens in this workspace": a
+   * user who declines that should not find a new file in their project.
+   *
+   * @returns {boolean}
+   * @private
+   */
+  _adapting() {
+    return Boolean(this.ledger) && this.adaptation.enabled !== false;
+  }
+
+  /**
+   * The corrective hints this model has earned in this workspace.
+   *
+   * Read once per message, before routing, because the preamble has to be settled
+   * before the first turn is built. A session does not adapt to itself mid-run: the
+   * evidence it produces counts towards the *next* message, which keeps the prompt
+   * stable across the turns of one task.
+   *
+   * @param {'agent' | 'plan' | 'ask'} mode
+   * @returns {Promise<string[]>}
+   * @private
+   */
+  async _earnedHints(mode) {
+    if (!this._adapting() || mode === 'ask') return [];
+
+    try {
+      const profile = await this.ledger.profileFor(this.model);
+      const hints = earnedHints.select(profile, { threshold: this.adaptation.hintThreshold });
+      if (hints.length > 0) {
+        logger.info(
+          `${this.model} has earned ${hints.length} corrective hint(s): ` +
+            hints.map((hint) => `${hint.key}×${hint.count}`).join(', ')
+        );
+      }
+      return hints.map((hint) => hint.text);
+    } catch (err) {
+      // Adaptation is an optimization. A session must never fail to start because the
+      // file it learns from could not be read.
+      logger.warn(`Could not select earned hints: ${/** @type {Error} */ (err).message}`);
+      return [];
+    }
+  }
+
+  /**
+   * Record one executed action as evidence.
+   *
+   * Everything here is what the tools and guards reported — never what the model said
+   * about itself, and never anything naming a file. See `core/outcomeLedger`.
+   *
+   * @param {import('../core/outputParser').ParsedAction} action
+   * @param {import('./toolRegistry').ToolResult} result
+   * @param {import('../core/promptRouter').Route} activeRoute
+   * @param {boolean} mutating Whether the tool could change the workspace.
+   * @private
+   */
+  _recordStep(action, result, activeRoute, mutating) {
+    if (!this._adapting()) return;
+
+    // A permission prompt only decided this step if the tool was one that asks. A
+    // successful read is not the user "approving" anything.
+    let decision;
+    if (result.error === 'USER_DENIED') decision = 'declined';
+    else if (mutating && result.ok) decision = 'approved';
+
+    void this.ledger.recordStep({
+      model: this.model,
+      tier: this.capability ? this.capability.tier : 'B',
+      thinking: this.thinkingCapacity,
+      mode: activeRoute.mode,
+      sessionId: this.sessionId,
+      action: action.action,
+      ok: Boolean(result.ok),
+      code: result.ok ? undefined : result.error,
+      decision,
+    });
+  }
+
+  /**
+   * Record how a whole message ended.
+   *
+   * `changed` comes from the change set rather than from the summary, for the reason
+   * `judgeItem` exists: a model that reports a declined delete as done would also
+   * report a session that changed nothing as a success.
+   *
+   * @param {SessionResult} result
+   * @returns {Promise<void>}
+   * @private
+   */
+  async _recordSession(result) {
+    if (!this._adapting()) return;
+
+    await this.ledger.recordSession({
+      model: this.model,
+      tier: this.capability ? this.capability.tier : 'B',
+      thinking: this.thinkingCapacity,
+      mode: result.mode,
+      sessionId: this.sessionId,
+      stopReason: result.stopReason,
+      steps: result.steps.length,
+      changed: !result.changeSet.isEmpty(),
+    });
+  }
+
+  /**
    * How many memory entries to recall, per thinking capacity.
    *
    * @returns {number}
@@ -737,7 +865,7 @@ class AgentSession {
     const tool = toolRegistry.get(action.action, activeRoute.mode);
     if (!tool) {
       logger.warn(`Refused action "${action.action}" in ${activeRoute.mode} mode.`);
-      return {
+      const unavailable = {
         ok: false,
         observation:
           activeRoute.mode === 'plan'
@@ -745,6 +873,8 @@ class AgentSession {
             : `"${action.action}" is not an available action.`,
         error: 'TOOL_UNAVAILABLE',
       };
+      this._recordStep(action, unavailable, activeRoute, false);
+      return unavailable;
     }
 
     /** @type {import('./toolRegistry').ToolContext} */
@@ -759,14 +889,21 @@ class AgentSession {
       signal: this._controller ? this._controller.signal : undefined,
     };
 
+    /** @type {import('./toolRegistry').ToolResult} */
+    let result;
     try {
-      return await tool.handler(action, context);
+      result = await tool.handler(action, context);
     } catch (err) {
       // A tool throwing must not kill the session; the model may recover.
       const message = /** @type {Error} */ (err).message;
       logger.error(`Tool ${action.action} threw: ${message}`);
-      return { ok: false, observation: `${action.action} failed: ${message}`, error: 'TOOL_ERROR' };
+      result = { ok: false, observation: `${action.action} failed: ${message}`, error: 'TOOL_ERROR' };
     }
+
+    // Recorded here rather than in the loops, because this is the one place every
+    // action passes through regardless of which tier produced it.
+    this._recordStep(action, result, activeRoute, Boolean(tool.mutating));
+    return result;
   }
 
   /**
