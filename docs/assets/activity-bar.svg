@@ -1,0 +1,25 @@
+<!--
+  The activity bar icon.
+
+  Deliberately not `icon.svg`: that one is the Marketplace tile — 128px, full colour,
+  on an opaque rounded background. The activity bar recolours a 24px glyph to match the
+  theme and the active/inactive state, so it needs monochrome line art on transparency.
+  A filled background here would render as a solid block.
+
+  `currentColor` is what lets VS Code do that recolouring. The gradient, the dark plate,
+  and the code brackets from the tile are all dropped: at 24px they turn to mush, and
+  the spark alone — "hiraya", the flash of imagination — is the part that reads.
+-->
+<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+  <g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+    <circle cx="12" cy="12" r="3.25" fill="currentColor" stroke="none"/>
+    <line x1="12" y1="2.5" x2="12" y2="5.5"/>
+    <line x1="12" y1="18.5" x2="12" y2="21.5"/>
+    <line x1="2.5" y1="12" x2="5.5" y2="12"/>
+    <line x1="18.5" y1="12" x2="21.5" y2="12"/>
+    <line x1="5.4" y1="5.4" x2="7.5" y2="7.5"/>
+    <line x1="16.5" y1="16.5" x2="18.6" y2="18.6"/>
+    <line x1="5.4" y1="18.6" x2="7.5" y2="16.5"/>
+    <line x1="16.5" y1="7.5" x2="18.6" y2="5.4"/>
+  </g>
+</svg>
