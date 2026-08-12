@@ -29,6 +29,54 @@ const { truncateToTokens } = require('../utils/tokenBudget');
 /** Guards against a model that calls the same tool with the same arguments forever. */
 const REPEAT_LIMIT = 3;
 
+/** How many times a model is told its answer was a tool call before the loop gives up. */
+const NARRATED_CALL_LIMIT = 2;
+
+/**
+ * Does this "answer" look like a tool call the model typed instead of calling?
+ *
+ * Observed on `llama3.2:latest`, which ended a session with `stopReason: done` and
+ * this as its entire summary:
+ *
+ *   {"name": "edit_file", "parameters": {"file": "src/greet.js", "new_content": "…"}}
+ *
+ * No tool was called, so nothing was written, and the user was shown raw JSON as the
+ * report of a task that never happened. `edit_file` is not even one of this project's
+ * tools — the model invented a plausible name and wrote it out as prose.
+ *
+ * A reply with no tool calls normally means the model is finished, which is why this
+ * has to be checked before that conclusion is drawn: the one case where it does not
+ * mean finished is when the reply is itself an attempt to call something.
+ *
+ * @param {string} content
+ * @returns {boolean}
+ */
+function looksLikeNarratedToolCall(content) {
+  const text = String(content || '')
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/, '')
+    .trim();
+
+  if (!text.startsWith('{') || !text.endsWith('}')) return false;
+
+  /** @type {any} */
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return false;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
+
+  // The shapes models actually emit: Ollama's own call format, OpenAI's, and this
+  // project's own Tier B action format.
+  const named = typeof parsed.name === 'string' && (parsed.parameters || parsed.arguments);
+  const wrapped = parsed.function && typeof parsed.function === 'object';
+  const tierB = typeof parsed.action === 'string';
+  return Boolean(named || wrapped || tierB);
+}
+
 /**
  * @param {string} name
  * @param {Record<string, unknown>} args
@@ -80,6 +128,7 @@ async function run(options) {
 
   let summary = '';
   let stopReason = 'budget';
+  let narratedCalls = 0;
 
   for (let stepIndex = 0; stepIndex < budgets.maxSteps; stepIndex += 1) {
     if (options.signal && options.signal.aborted) {
@@ -123,8 +172,36 @@ async function run(options) {
     const calls = parseToolCalls(message);
 
     if (calls.length === 0) {
+      const answer = String(message.content || '').trim();
+
+      // A typed-out tool call is not an answer. Accepting it as one ends the session
+      // reporting success for work that never happened, with JSON as the summary.
+      if (looksLikeNarratedToolCall(answer)) {
+        narratedCalls += 1;
+        logger.warn(`Native loop got a tool call as text (${narratedCalls}/${NARRATED_CALL_LIMIT}).`);
+
+        if (narratedCalls > NARRATED_CALL_LIMIT) {
+          summary =
+            'I wrote out tool calls as text instead of calling the tools, so nothing was actually ' +
+            `changed. I stopped after ${steps.length} step(s).`;
+          stopReason = 'narrated-tool-calls';
+          break;
+        }
+
+        messages.push(message);
+        messages.push({
+          role: 'user',
+          content:
+            'That was a tool call written as text, so nothing ran. Use the tool-calling interface, ' +
+            'and only the tools you were given — write_file, read_file, list_files, search_workspace, ' +
+            'delete_file, run_script, run_tests. To change a file, call write_file with "path" and the ' +
+            'complete new contents in "code".',
+        });
+        continue;
+      }
+
       // No tools requested: the model is answering, which means it is done.
-      summary = String(message.content || '').trim() || 'Finished.';
+      summary = answer || 'Finished.';
       stopReason = 'done';
       emit({ type: 'done', summary });
       break;
@@ -193,4 +270,4 @@ async function run(options) {
   return { steps, summary, stopReason };
 }
 
-module.exports = { run, callKey, REPEAT_LIMIT };
+module.exports = { run, callKey, looksLikeNarratedToolCall, REPEAT_LIMIT, NARRATED_CALL_LIMIT };
