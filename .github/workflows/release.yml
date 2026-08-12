@@ -1,0 +1,127 @@
+name: Release
+
+# Tagging is the trigger, so a release is always traceable to a commit:
+#
+#   npm version 0.1.0 --no-git-tag-version   # if the manifest is not already right
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# `workflow_dispatch` builds and verifies without publishing, which is the safe way to
+# try this pipeline before a real tag exists.
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build and verify only — do not create a GitHub Release'
+        type: boolean
+        default: true
+
+# Read-only by default; the release job widens this for itself alone.
+permissions:
+  contents: read
+
+jobs:
+  # The same three-platform check CI runs, so a release can never be packaged from code
+  # that has not passed on the platform it will be installed on.
+  verify:
+    uses: ./.github/workflows/verify.yml
+
+  release:
+    name: Package and publish
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      # Only this job may write, and only to create the release.
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # A tag that disagrees with the manifest produces a `.vsix` whose filename and
+      # internal version do not match the release it is attached to. Caught here rather
+      # than discovered by whoever installs it.
+      - name: Tag must match the manifest version
+        if: github.event_name == 'push'
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          MANIFEST="v$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "$MANIFEST" ]; then
+            echo "::error::Tag $TAG does not match package.json ($MANIFEST). Bump the manifest or retag."
+            exit 1
+          fi
+          echo "Releasing $TAG"
+
+      - name: Package the extension
+        run: npm run package
+
+      - name: Locate the artifact
+        id: artifact
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          NAME="$(node -p "require('./package.json').name")"
+          VSIX="builds/v${VERSION}/${NAME}-${VERSION}.vsix"
+          test -f "$VSIX" || { echo "::error::Expected $VSIX to exist"; exit 1; }
+          echo "path=$VSIX" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(sha256sum "$VSIX" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      # Kept even on a dry run: the build is the thing worth inspecting.
+      - name: Upload the .vsix as a build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hirayacoder-${{ steps.artifact.outputs.version }}-vsix
+          path: ${{ steps.artifact.outputs.path }}
+          if-no-files-found: error
+
+      - name: Create the GitHub Release
+        # Never on a dry run, and never for anything but a real tag.
+        if: github.event_name == 'push'
+        env:
+          # The runner's built-in token. No PAT is stored in this repository —
+          # Marketplace publishing stays a deliberate manual step (doc/PUBLISHING.md).
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VSIX: ${{ steps.artifact.outputs.path }}
+          SHA256: ${{ steps.artifact.outputs.sha256 }}
+          VERSION: ${{ steps.artifact.outputs.version }}
+        run: |
+          cat > notes.md <<EOF
+          HirayaCoder v${VERSION} — a fully offline, local-first AI coding agent for VS Code.
+
+          ### Install
+
+          Download \`$(basename "$VSIX")\` below, then:
+
+          \`\`\`bash
+          code --install-extension $(basename "$VSIX")
+          \`\`\`
+
+          Requires [Ollama](https://ollama.com) running locally with at least one model
+          pulled. Nothing leaves your machine: the endpoint is loopback-enforced in code.
+
+          \`\`\`
+          SHA-256  ${SHA256}
+          \`\`\`
+
+          ### Verified by CI
+
+          Linted, unit-tested, and integration-tested against a real VS Code on
+          **Ubuntu, macOS, and Windows**, with zero production-dependency advisories.
+
+          See \`CHANGELOG.md\` for what changed, \`doc/FEATURES.md\` for what it does, and
+          \`security/\` for the threat model and SAST report.
+          EOF
+
+          gh release create "${GITHUB_REF_NAME}" "$VSIX" \
+            --title "HirayaCoder ${GITHUB_REF_NAME}" \
+            --notes-file notes.md \
+            --generate-notes
