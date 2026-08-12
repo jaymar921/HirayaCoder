@@ -75,6 +75,27 @@ describe('AuditLog', () => {
     assert.strictEqual(paths.size, 60, 'every entry landed intact');
   });
 
+  it('records the workspace root as a target rather than dropping it', async () => {
+    // `list_files` and `search_workspace` on the whole project resolve to an empty
+    // relative path. A truthiness test dropped the key, so a real session logged ten
+    // of fourteen reads with no indication of what had been read.
+    const log = new AuditLog(root);
+    log.append({ action: 'read_file', decision: 'auto-approved', path: '', sessionId: '1' });
+    await log.flush();
+
+    const [entry] = await log.read();
+    assert.strictEqual(entry.path, '.', 'the root was recorded as no path at all');
+  });
+
+  it('still omits a path for actions that genuinely have none', async () => {
+    const log = new AuditLog(root);
+    log.append({ action: 'run_script', decision: 'denied', command: 'npm test', sessionId: '1' });
+    await log.flush();
+
+    const [entry] = await log.read();
+    assert.ok(!('path' in entry), 'a command action should not invent a path');
+  });
+
   it('redacts credentials out of logged commands', async () => {
     // Otherwise a token lands in plain text on disk and outlives the session.
     await log.append({
