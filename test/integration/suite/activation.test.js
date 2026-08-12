@@ -28,6 +28,8 @@ const COMMANDS = [
   'hirayacoder.document',
   'hirayacoder.fix',
   'hirayacoder.generateTests',
+  'hirayacoder.openSession',
+  'hirayacoder.refreshSessions',
 ];
 
 describe('activation', () => {
@@ -56,6 +58,40 @@ describe('activation', () => {
     const registered = await vscode.commands.getCommands(true);
     const missing = COMMANDS.filter((id) => !registered.includes(id));
     assert.deepStrictEqual(missing, [], `commands declared but not registered: ${missing.join(', ')}`);
+  });
+
+  it('contributes an activity bar container whose icon actually ships', async () => {
+    const fs = require('fs');
+    const path = require('path');
+    const extension = vscode.extensions.getExtension(EXTENSION_ID);
+    const { contributes } = extension.packageJSON;
+
+    const container = (contributes.viewsContainers.activitybar || []).find((c) => c.id === 'hirayacoder');
+    assert.ok(container, 'no HirayaCoder container in the activity bar');
+
+    // A missing icon file renders as a blank square rather than failing loudly, and
+    // `.vscodeignore` excludes docs/assets/** by default — so this is checked on disk,
+    // relative to the installed extension, not merely declared in the manifest.
+    const icon = path.join(extension.extensionPath, container.icon);
+    assert.ok(fs.existsSync(icon), `the container icon is missing at ${container.icon}`);
+
+    const svg = fs.readFileSync(icon, 'utf8');
+    // The activity bar recolours the glyph; a hardcoded fill would ignore the theme.
+    assert.match(svg, /currentColor/, 'the icon will not follow the theme');
+  });
+
+  it('registers the sessions view the container points at', async () => {
+    const { contributes } = vscode.extensions.getExtension(EXTENSION_ID).packageJSON;
+    const views = contributes.views.hirayacoder || [];
+    assert.ok(
+      views.some((v) => v.id === 'hirayacoder.sessions'),
+      'the container would open onto nothing'
+    );
+
+    // Registered for real, not just declared — an unregistered view shows an error
+    // where the welcome content should be.
+    await vscode.extensions.getExtension(EXTENSION_ID).activate();
+    await vscode.commands.executeCommand('hirayacoder.refreshSessions');
   });
 
   it('builds a permission gate bound to the open workspace', async () => {
