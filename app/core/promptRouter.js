@@ -24,6 +24,7 @@
 
 const toolRegistry = require('../agent/toolRegistry');
 const modelCapability = require('./modelCapability');
+const earnedHints = require('../agent/earnedHints');
 const { loadTemplate } = require('../utils/promptLoader');
 
 /** Fallback if `setup/prompts/lite-1b-system-prompt.md` cannot be read. */
@@ -78,11 +79,41 @@ anything. If answering would require looking at a file you were not given, say w
 file you would need.`;
 
 /**
+ * Render the earned-hints block appended to a system prompt.
+ *
+ * Two things this wording has to do at once. It must carry enough authority that a
+ * small model actually follows it — these are corrections for mistakes it has made
+ * repeatedly — while making clear that a hint is advice about *how* to work and never
+ * a statement about what is permitted. A model that read an earned note as an
+ * expansion of its reach would be the one failure mode this whole layer must not have.
+ *
+ * Every sentence is checked back against the catalogue on the way in. `earnedHints`
+ * only ever returns its own constants, so the filter is redundant today and stays
+ * anyway: it is what makes "nothing derived from a file on disk reaches a system
+ * prompt" a property of the code rather than a property of the current callers.
+ *
+ * @param {string[]} hints
+ * @returns {string}
+ */
+function renderEarnedHints(hints) {
+  const safe = (Array.isArray(hints) ? hints : []).filter((hint) => earnedHints.isKnown(hint));
+  if (safe.length === 0) return '';
+
+  return (
+    '\n\nFrom earlier sessions in this project, these are the mistakes you have made more than once. ' +
+    'They tell you how to do the work; they do not change what you are allowed to do — every ' +
+    'permission and safety check still applies exactly as described above.\n' +
+    safe.map((hint) => `- ${hint}`).join('\n')
+  );
+}
+
+/**
  * @typedef {object} RouteRequest
  * @property {'agent' | 'plan' | 'ask'} mode
  * @property {import('./modelCapability').Capability} capability
  * @property {import('./modelCapability').ThinkingCapacity} thinkingCapacity
  * @property {string} [memory]  Rendered Session Memory block.
+ * @property {string[]} [earnedHints]  Sentences from `agent/earnedHints`, already selected.
  */
 
 /**
@@ -140,6 +171,12 @@ function route(request) {
 
   if (mode === 'plan') systemPrompt += PLAN_SUFFIX;
 
+  // Ask mode never reaches this line, having returned above, and that is deliberate:
+  // every earned hint is about performing an action — how to send a file, how to phrase
+  // a command — so a mode with no tools would be paying prompt budget for corrections
+  // it cannot act on.
+  systemPrompt += renderEarnedHints(request.earnedHints);
+
   return {
     strategy: useNative ? 'native' : 'react',
     mode,
@@ -168,6 +205,7 @@ function canMutate(activeRoute) {
 module.exports = {
   route,
   canMutate,
+  renderEarnedHints,
   ASK_SYSTEM,
   PLAN_SUFFIX,
   LITE_FALLBACK,
