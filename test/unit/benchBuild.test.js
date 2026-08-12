@@ -12,6 +12,19 @@
  * prints the wrong thing, and a program that does not run at all. Only the first may
  * pass. The language tests skip themselves when the toolchain is missing, which is the
  * same rule the benchmark itself applies to a machine without a JDK.
+ *
+ * ## These tests start real compilers, so the default timeout does not apply
+ *
+ * Everything else in this suite is pure logic against a stubbed `vscode` and finishes in
+ * microseconds. This file spawns `javac`, `java`, `node`, and `python` for real, and on a
+ * cold CI runner the first spawn of a JVM alone can take several seconds — the
+ * `windows-latest` job failed in exactly that way, timing out at 2000ms inside the
+ * toolchain probe before a single Java test ran.
+ *
+ * Two things follow, and both are here rather than in a config file so the reason travels
+ * with the code: the probes run once at load time instead of inside a hook, and the whole
+ * describe gets a timeout sized for starting a compiler rather than for calling a
+ * function.
  */
 
 const assert = require('assert');
@@ -21,6 +34,13 @@ const path = require('path');
 
 const { LANGUAGES, findFiles, parseArgs, slug, exec } = require('../../tools/bench-build');
 
+/**
+ * Deliberately above the harness's own 60s per-spawn cap in `exec`, so that a compiler
+ * which genuinely hangs fails with the harness's reason rather than as an opaque Mocha
+ * timeout that says nothing about which command stopped responding.
+ */
+const TOOLCHAIN_TIMEOUT_MS = 120000;
+
 /** @param {string[]} argv */
 function toolchainPresent(argv) {
   try {
@@ -29,6 +49,19 @@ function toolchainPresent(argv) {
     return false;
   }
 }
+
+/**
+ * Which toolchains this machine has, resolved once at load time.
+ *
+ * Probing inside a `before` hook put a process spawn under Mocha's 2000ms budget, which
+ * is a budget for assertions, not for starting a JDK. Module load is not timed, and the
+ * answer cannot change during a run.
+ */
+const AVAILABLE = {
+  node: toolchainPresent(['node', '--version']),
+  python: toolchainPresent(LANGUAGES.python.probe()),
+  java: toolchainPresent(['javac', '-version']),
+};
 
 /** A temp workspace with the given files, cleaned up by the caller. */
 function workspaceWith(files) {
@@ -48,7 +81,10 @@ function grade(spec, root, phaseIndex) {
   return { passed: verified.ok && missing.length === 0, verified, missing };
 }
 
-describe('bench-build verification', () => {
+// A regular function, not an arrow: `this.timeout` needs Mocha's context.
+describe('bench-build verification', function benchBuildVerification() {
+  this.timeout(TOOLCHAIN_TIMEOUT_MS);
+
   /** @type {string[]} */
   const created = [];
   const make = (files) => {
@@ -63,7 +99,7 @@ describe('bench-build verification', () => {
 
   describe('javascript', () => {
     before(function skipWithoutNode() {
-      if (!toolchainPresent(['node', '--version'])) this.skip();
+      if (!AVAILABLE.node) this.skip();
     });
 
     it('passes a program that prints what the task asked for', () => {
@@ -101,7 +137,7 @@ describe('bench-build verification', () => {
 
   describe('python', () => {
     before(function skipWithoutPython() {
-      if (!toolchainPresent(LANGUAGES.python.probe())) this.skip();
+      if (!AVAILABLE.python) this.skip();
     });
 
     it('passes a program that prints what the task asked for', () => {
@@ -117,7 +153,7 @@ describe('bench-build verification', () => {
 
   describe('java', () => {
     before(function skipWithoutJdk() {
-      if (!toolchainPresent(['javac', '-version'])) this.skip();
+      if (!AVAILABLE.java) this.skip();
     });
 
     const APP = (body) => `public class TodoApp {\n  public static void main(String[] a) {\n${body}\n  }\n}\n`;
