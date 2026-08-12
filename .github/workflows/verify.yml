@@ -42,14 +42,22 @@ jobs:
       - name: Unit tests
         run: npm run test:unit
 
-      # A real VS Code is ~330 MB. Cached per OS, keyed on the manifest so a version
-      # bump re-downloads rather than silently testing against a stale editor.
-      - name: Cache the VS Code download
-        uses: actions/cache@v4
+      # A real VS Code is ~330 MB, so it is worth caching — but carefully.
+      #
+      # Restore and save are split on purpose. `actions/cache` would otherwise persist
+      # the tree even when the job failed, and there are no partial-credit outcomes
+      # here: a half-extracted macOS app bundle looks like a cache hit and then fails
+      # with a bare ENOENT on a binary inside it. There are also no `restore-keys`, so
+      # a near-miss can never be layered underneath a fresh download.
+      #
+      # Only the downloaded editor is cached. The throwaway profile is deliberately
+      # left out, so no state survives between runs.
+      - name: Restore the VS Code download
+        id: vscode-cache
+        uses: actions/cache/restore@v4
         with:
-          path: .vscode-test
+          path: .vscode-test/vscode-*
           key: vscode-test-${{ runner.os }}-${{ hashFiles('package.json') }}
-          restore-keys: vscode-test-${{ runner.os }}-
 
       # Linux runners have no display and the integration suite launches a real editor.
       # macOS and Windows runners already have a session.
@@ -60,6 +68,15 @@ jobs:
       - name: Integration tests
         if: runner.os != 'Linux'
         run: npm run test:integration
+
+      # Saved only after the editor has actually been used to run a suite, so a broken
+      # download is never promoted into the cache for every later run to trip over.
+      - name: Save the VS Code download
+        if: success() && steps.vscode-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .vscode-test/vscode-*
+          key: vscode-test-${{ runner.os }}-${{ hashFiles('package.json') }}
 
       # The shipped tree has no production dependencies, so this stays at zero. Dev-only
       # advisories are reviewed in security/sast-report-*.md and must not block a
