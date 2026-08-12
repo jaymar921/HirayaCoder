@@ -37,9 +37,14 @@ module.exports = async function deleteFile(args, context) {
     try {
       const stats = await fs.promises.stat(probe.resolved.absolute);
       if (stats.isDirectory()) {
+        // Until 0.4.0 this said "HirayaCoder only deletes individual files" and stopped
+        // there, which was a dead end with no way out — and a model with no way out
+        // narrates one. Observed live: told exactly this about an empty `src/main/java`,
+        // the model reported to the user that the folder had been removed. It had not.
         return {
           ok: false,
-          observation: `${args.path} is a folder. HirayaCoder only deletes individual files.`,
+          observation: `${args.path} is a folder, not a file. Use the delete_folder tool to remove it.`,
+          error: 'IS_DIRECTORY',
         };
       }
       previous = await fs.promises.readFile(probe.resolved.absolute, 'utf8');

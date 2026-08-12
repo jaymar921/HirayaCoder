@@ -140,6 +140,51 @@ describe('AgentSession', () => {
       assert.ok(fs.existsSync(path.join(root, 'src', 'old.js')), 'plan mode deleted a file');
     });
 
+    it('asks for the plan directly when the loop never produced a list', async () => {
+      // The failure this replaces: Plan mode's only source of a checklist used to be
+      // the closing `done` summary happening to come out as a numbered list. A run that
+      // hits the repeat guard has no `done` at all, so the plan was empty, the webview
+      // rendered the stop notice as prose, and "Run this plan" never appeared — Plan
+      // mode looking broken rather than degraded.
+      const client = scriptedClient([
+        json({ thought: 'look', action: 'read_file', path: 'src/app.js' }),
+        json({ thought: 'look again', action: 'read_file', path: 'src/app.js' }),
+        json({ thought: 'and again', action: 'read_file', path: 'src/app.js' }),
+        // The follow-up planning call, once the loop has given up.
+        '1. Add validation to src/app.js\n2. Remove src/old.js',
+      ]);
+      const session = makeSession({ client });
+
+      const result = await session.run('Add validation and clean up', { mode: 'plan' });
+
+      assert.strictEqual(result.stopReason, 'repeating');
+      assert.deepStrictEqual(result.plan, ['Add validation to src/app.js', 'Remove src/old.js']);
+    });
+
+    it('tells the follow-up planner which files the run actually looked at', async () => {
+      const client = scriptedClient([
+        json({ thought: 'look', action: 'read_file', path: 'src/app.js' }),
+        json({ action: 'done', summary: 'I had a look around.' }),
+        '1. Add validation to src/app.js',
+      ]);
+
+      await makeSession({ client }).run('Add validation', { mode: 'plan' });
+
+      const planningPrompt = JSON.stringify(client.bodies[client.bodies.length - 1].messages);
+      assert.match(planningPrompt, /src\/app\.js/);
+    });
+
+    it('falls back to prose rather than inventing steps', async () => {
+      const client = scriptedClient([
+        json({ action: 'done', summary: 'There is nothing to do here.' }),
+        'I could not think of any steps.',
+      ]);
+
+      const result = await makeSession({ client }).run('Do something', { mode: 'plan' });
+
+      assert.deepStrictEqual(result.plan, []);
+    });
+
     it('refuses a mutation at the executor even if the loop produces one', async () => {
       // Defense in depth: the tool is not offered, the parser rejects it, and the
       // executor refuses it. This asserts the last of the three.

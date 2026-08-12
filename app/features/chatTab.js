@@ -263,29 +263,26 @@ class ChatTab {
     this._postStatus();
   }
 
-  /** @private */
+  /**
+   * The permissions menu.
+   *
+   * Delegated to `hirayacoder.permissions` rather than reimplemented here. This tab
+   * used to render its own quick pick and apply the result with `modes.toggle(id)` —
+   * a method `PermissionModes` has never had, so every click threw a TypeError into
+   * an unhandled rejection and both permissions were unreachable from the chat tab
+   * for as long as it has existed. Auto-approve-scripts in particular could be
+   * clicked indefinitely with nothing happening and no error shown.
+   *
+   * A second implementation is also the wrong shape for this setting: enabling
+   * auto-approve-scripts requires a deliberate confirmation, which `permissionModes`
+   * enforces by demanding a confirm callback, and the duplicate had none to give.
+   * One menu, one enforcement path.
+   *
+   * @private
+   */
   async _showPermissionMenu() {
-    const modes = this.app.modes;
-    const snapshot = modes.snapshot();
-    const picked = await vscode.window.showQuickPick(
-      [
-        {
-          label: snapshot.autoEdit ? '$(check) Auto-apply edits' : 'Auto-apply edits',
-          detail: 'Write and delete without asking. Deletes still confirm.',
-          id: 'autoEdit',
-        },
-        {
-          label: snapshot.autoApproveScripts ? '$(check) Auto-approve scripts' : 'Auto-approve scripts',
-          detail: 'Run allow-listed commands without asking. Off by default, deliberately.',
-          id: 'autoApproveScripts',
-        },
-      ],
-      { title: 'Permissions', placeHolder: 'Toggle a permission' }
-    );
-    if (!picked) return;
-
-    modes.toggle(picked.id);
-    this._post({ type: 'permissions', permissions: modes.snapshot() });
+    await vscode.commands.executeCommand('hirayacoder.permissions');
+    this._post({ type: 'permissions', permissions: this.app.modes.snapshot() });
   }
 
   /**

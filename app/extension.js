@@ -199,11 +199,26 @@ class HirayaCoder {
   }
 
   /**
+   * Switch the active model and do not resolve until it actually is the active model.
+   *
+   * `setModel` only writes the setting. Adopting it happens in `onConfigChange`,
+   * which the listener invokes fire-and-forget — so a caller that repainted straight
+   * after this resolved read the *previous* `activeModel` and drew the dropdown back
+   * to where it started. Clicking again appeared to work only because the listener
+   * had caught up in the meantime.
+   *
+   * Reading the settings here rather than waiting for the listener matters too:
+   * `_refresh` picks the active model out of `this.settings.selectedModel`, so
+   * refreshing before that field is adopted would re-select the old model from the
+   * new list.
+   *
    * @param {string} name
    * @returns {Promise<void>}
    */
   async selectModel(name) {
     await this.setModel(name);
+    this.settings = readSettings();
+    await this.refresh({ force: true });
   }
 
   /**
@@ -342,10 +357,31 @@ class HirayaCoder {
   /**
    * Probe Ollama, refresh the model list, classify the active model, and repaint.
    *
+   * Refreshes are serialized rather than allowed to overlap. One model change
+   * produces two of them — `selectModel` awaits one directly, and the configuration
+   * listener fires another for the same write — and two `/api/tags` round-trips
+   * racing each other can settle in either order, so the later-finishing one installs
+   * whichever `settings.selectedModel` it captured. That is half of the two-click
+   * model switch; the other half is `selectModel` not adopting the new setting first.
+   *
    * @param {{force?: boolean, notifyRecommendation?: boolean}} [opts]
    * @returns {Promise<void>}
    */
   async refresh(opts = {}) {
+    const run = () => this._refresh(opts);
+    // Both arms run `run`: a failed refresh must not stall every refresh after it.
+    this._refreshQueue = (this._refreshQueue || Promise.resolve()).then(run, run);
+    return this._refreshQueue;
+  }
+
+  /**
+   * One refresh pass. Never call directly — go through `refresh`.
+   *
+   * @param {{force?: boolean, notifyRecommendation?: boolean}} opts
+   * @returns {Promise<void>}
+   * @private
+   */
+  async _refresh(opts) {
     if (this.configError || !this.client || !this.discovery) {
       this.statusBar.update({ connection: 'offline', error: this.configError || 'Client not initialized.' });
       return;

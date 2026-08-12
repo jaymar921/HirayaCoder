@@ -26,6 +26,8 @@
 const readFile = require('./tools/readFile');
 const writeFile = require('./tools/writeFile');
 const deleteFile = require('./tools/deleteFile');
+const createFolder = require('./tools/createFolder');
+const deleteFolder = require('./tools/deleteFolder');
 const listFiles = require('./tools/listFiles');
 const searchWorkspace = require('./tools/searchWorkspace');
 const runScript = require('./tools/runScript');
@@ -127,6 +129,40 @@ const TOOLS = [
       required: ['path'],
     },
     handler: deleteFile,
+  },
+  {
+    name: 'create_folder',
+    description:
+      'Create an empty folder. You usually do not need this — write_file makes any missing folders on the way to ' +
+      'the file — but use it when the task asks for a folder that will not immediately hold a file you are writing.',
+    mutating: true,
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Workspace-relative folder path, e.g. src/main/java' },
+      },
+      required: ['path'],
+    },
+    handler: createFolder,
+  },
+  {
+    name: 'delete_folder',
+    description:
+      'Remove a folder. Empty folders are removed directly; to remove one with anything inside it, set "recursive" ' +
+      'to true, which asks the user for confirmation every time.',
+    mutating: true,
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Workspace-relative folder path.' },
+        recursive: {
+          type: 'boolean',
+          description: 'Required to remove a folder that is not empty. Removes everything inside it.',
+        },
+      },
+      required: ['path'],
+    },
+    handler: deleteFolder,
   },
   {
     name: 'run_script',

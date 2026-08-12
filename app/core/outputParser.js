@@ -36,6 +36,8 @@ const ACTIONS = new Set([
   'search_workspace',
   'write_file',
   'delete_file',
+  'create_folder',
+  'delete_folder',
   'run_script',
   'run_tests',
   'done',
@@ -46,12 +48,25 @@ const REQUIRED_FIELDS = new Map([
   ['read_file', ['path']],
   ['write_file', ['path', 'code']],
   ['delete_file', ['path']],
+  ['create_folder', ['path']],
+  ['delete_folder', ['path']],
   ['search_workspace', ['query']],
   ['run_script', ['command']],
   ['list_files', []],
   ['run_tests', []],
   ['done', []],
 ]);
+
+/**
+ * Fields an action accepts but does not demand.
+ *
+ * They need declaring for the same reason the required ones do: schema-constrained
+ * decoding will not emit a property the schema does not mention, so an optional field
+ * left out here is a field the model on Tier B can never set. `recursive` is the whole
+ * safety interlock on `delete_folder` — the tool refuses a non-empty folder without it
+ * — so a model that cannot express it would be permanently unable to remove one.
+ */
+const OPTIONAL_FIELDS = new Map([['delete_folder', ['recursive']]]);
 
 /** Keys that must never be copied out of parsed JSON onto an object. */
 const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
@@ -69,6 +84,7 @@ const MAX_PATH_LENGTH = 200;
  * @property {string} [query]
  * @property {string} [code]
  * @property {string} [command]
+ * @property {boolean} [recursive]
  * @property {string} [thought]
  * @property {string} [summary]
  */
@@ -299,6 +315,13 @@ function parseAction(raw, opts = {}) {
   const code = asString(fields.code);
   if (code !== undefined) result.code = code;
 
+  // A genuine boolean, and only a genuine boolean. `recursive` authorises removing a
+  // subtree, so the string "false" — which small models emit routinely, and which is
+  // truthy — must not read as consent. Anything that is not exactly `true` or the
+  // string "true" leaves the flag unset, and the tool then refuses a non-empty folder,
+  // which is the safe direction to be wrong in.
+  if (fields.recursive === true || fields.recursive === 'true') result.recursive = true;
+
   // An empty `code` is a missing one. Observed on `qwen3.5:2b`, which repeatedly
   // emitted `write_file` with `"code": ""` — without this it reaches the gate and
   // comes back as a confusing "0 characters replacing 40" truncation refusal
@@ -346,6 +369,13 @@ const FIELD_SCHEMAS = new Map([
   ['code', { type: 'string', description: 'The COMPLETE new contents of the file — every line, not just the changed part.' }],
   ['query', { type: 'string', description: 'Text to search for across the project.' }],
   ['command', { type: 'string', description: 'The shell command to run.' }],
+  [
+    'recursive',
+    {
+      type: 'boolean',
+      description: 'Set true only to remove a folder that still has files in it, along with everything inside.',
+    },
+  ],
 ]);
 
 /**
@@ -380,7 +410,7 @@ function actionSchema(allowedActions) {
       thought: { type: 'string', description: 'One sentence on why you are doing this.' },
       action: { type: 'string', const: name },
     };
-    for (const field of required) {
+    for (const field of [...required, ...(OPTIONAL_FIELDS.get(name) || [])]) {
       const schema = FIELD_SCHEMAS.get(field);
       if (schema) properties[String(field)] = schema;
     }
@@ -442,4 +472,5 @@ module.exports = {
   stripWrappers,
   ACTIONS,
   REQUIRED_FIELDS,
+  OPTIONAL_FIELDS,
 };

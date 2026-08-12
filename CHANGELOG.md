@@ -5,6 +5,110 @@ All notable changes to HirayaCoder are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — 0.4.0
+
+Everything here comes out of one evaluation session: six conversations across two
+workspaces on a MacBook, building the same small TODO app in Java, then Python, then
+HTML, on `deepseek-coder-v2` and `ornith:9b`. The transcripts are worth more than any
+of the individual fixes. Three of the four bugs below had been shipped and unnoticed
+since the features they belong to were written, and each of them silently degraded a
+whole feature rather than failing loudly.
+
+This is the first half of 0.4.0 — the defects. The conversational routing and the
+structured memory the same session argued for are the second half.
+
+### Fixed — the permissions button in the chat tab never worked, at all
+
+`features/chatTab.js` rendered its own permissions quick pick and applied the answer
+with `modes.toggle(picked.id)`. `PermissionModes` has never had a `toggle` method. Every
+click threw a `TypeError` into an unhandled rejection: no state change, no error
+message, no log line. Auto Approve Running Scripts could be clicked indefinitely and
+stay off, which is exactly what the audit log for the evaluation session shows —
+`"autoApproveScripts":false` on all forty-odd entries, across a run where the user was
+trying to turn it on.
+
+A second implementation was the wrong shape for this setting anyway. Enabling
+auto-approve-scripts requires a deliberate confirmation, which `permissionModes`
+enforces structurally by demanding a confirm callback, and the duplicate had none to
+give — so even a working version of it could not have turned that permission on. The tab
+now delegates to `hirayacoder.permissions`, the same menu the command palette opens.
+One menu, one enforcement path, and the "Reset to safest" option that the duplicate had
+also been missing.
+
+### Fixed — switching model took two clicks
+
+`setModel` writes `model.selected` and returns. Adopting it happens in
+`onConfigChange`, which the configuration listener invokes fire-and-forget, and which
+does an Ollama round-trip before `activeModel` moves. The chat tab awaited
+`selectModel`, immediately repainted the dropdown from `app.activeModel`, and got the
+*previous* model — drawing the `<select>` back to where it started. The second click
+appeared to work only because the listener had caught up by then.
+
+Both halves are fixed. `selectModel` adopts the new setting itself and awaits its own
+refresh, so it does not resolve until the model it names is genuinely active; and
+refreshes are now serialized rather than allowed to overlap, since one model change
+produces two of them and two `/api/tags` round-trips racing each other can settle in
+either order.
+
+### Fixed — Plan mode looked broken because its output was optional
+
+The checklist was built by parsing the loop's closing `done` summary for a numbered
+list. That is two bets on a single turn: that the loop reached `done` at all, and that
+the summary happened to come out in list shape. Small models lose both routinely — a
+Plan run that ends on the repeat guard has no `done`, and its summary is "I stopped
+because I kept repeating the same step", which parses to zero steps.
+
+With zero steps the webview renders the prose and never draws "Run this plan", so the
+feature reads as broken rather than as degraded, with nothing anywhere saying why.
+
+The summary is still preferred. When it yields nothing, the plan is now asked for
+directly instead: one cheap constrained call, given the paths the exploration actually
+opened. That call has one job and a fixed output shape, which is a far easier thing for
+a small model to get right than closing a loop in list form. If it also comes back
+empty, the run falls back to prose rather than inventing steps.
+
+### Added — `create_folder` and `delete_folder`
+
+A folder could not be removed by any route the agent had. `delete_file` refuses
+directories, and 0.3.0's command redirect sent both `rm` and `rmdir` to `delete_file` —
+so `rmdir` pointed at a tool that could only say no. Observed live, asked to remove an
+empty `src/main/java` left behind after its two files were deleted: the model tried
+`delete_file`, was told "HirayaCoder only deletes individual files", and then reported
+to the user that the folder "has been removed from the workspace". It had not. A dead
+end the model cannot see is a dead end it will narrate its way out of.
+
+Creation was the same lesson from the other side. 0.3.0 answered `mkdir` with "you do
+not need to create directories at all", which is true — `write_file` creates every
+folder on the way to the file — and which `ornith:9b` read three times before giving up
+anyway. Being right is not the same as being actionable. The advice still leads, but
+there is now a tool behind the sentence instead of a puzzle.
+
+`delete_folder` is the most conservative tool in the set, because a recursive delete is
+the one mutation the change set cannot undo:
+
+- **Empty by default.** A folder with anything in it is refused unless the call
+  explicitly passes `recursive: true`. The common case — tidying up after a delete —
+  never touches the recursive path.
+- **Always confirms.** Neither Auto Edit nor `alwaysConfirmDeletes` waives it. There is
+  no configuration in which this runs unattended, and the prompt names how many items
+  are at stake.
+- **Bounded.** Past 100 entries it refuses regardless of the answer and tells the user
+  to do it themselves. The distance between `src/main/java` and `src` is one token of
+  model output, and a dialog is a poor last line of defence against a mis-click on a
+  subtree nobody has read.
+
+`recursive` is only honoured as a real boolean or the string `"true"`. Small models emit
+`"false"` as a string routinely, and that value is truthy in JavaScript — reading it as
+consent would authorise a subtree delete on the strength of a typo. It is declared as an
+optional field in the Tier B action schema, too: constrained decoding will not emit a
+property the schema does not mention, so leaving it out would have made a non-empty
+folder permanently unremovable on the tier that needs the help most.
+
+`delete_file` now names `delete_folder` when handed a directory, and the ReAct loop
+treats `FOLDER_NOT_EMPTY` as a retryable refusal — the tool asks for the same call back
+with a flag set, and the generic "do not try that again" hint would otherwise contradict
+it on the very next line.
+
 ## [0.3.0] — 2026-08-12
 
 ### Fixed — a refusal now names the tool that does the job

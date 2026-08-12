@@ -449,6 +449,14 @@ function composeNote(step, phrase) {
       return `${step.isNew ? 'Created' : 'Edited'} ${step.path}${failed}${detail}`;
     case 'delete_file':
       return step.path ? `Deleted ${step.path}${failed}${detail}` : null;
+    // Folder notes carry no `detail`: the phrase a translator invents about a mkdir is
+    // filler ("set up the project structure"), and the path already says everything the
+    // note is for. The bare sentence is also what `subjectOf` reads back to supersede an
+    // earlier note about the same folder.
+    case 'create_folder':
+      return step.path ? `Created the folder ${step.path}${failed}` : null;
+    case 'delete_folder':
+      return step.path ? `Removed the folder ${step.path}${failed}` : null;
     case 'run_script':
       return step.command ? `Ran \`${step.command}\`${failed}${detail}` : null;
     case 'run_tests':

@@ -445,7 +445,7 @@ class AgentSession {
       };
 
       // A Plan-mode run produces a checklist, not changes.
-      if (mode === 'plan') result.plan = plannerAgent.parsePlanSummary(outcome.summary);
+      if (mode === 'plan') result.plan = await this._derivePlan(task, outcome);
 
       await this._recordSession(result);
       return result;
@@ -634,6 +634,72 @@ class AgentSession {
       mode: 'agent',
       todos: todos.items,
     };
+  }
+
+  /**
+   * The checklist a Plan-mode run hands back.
+   *
+   * Plan mode's whole output is the checklist, and until now the only way to get one
+   * was for the model's closing `done` summary to happen to be a numbered list. That
+   * is two bets on one turn: that the loop reached `done` at all, and that the summary
+   * came out in list shape. Small models lose both routinely — a Plan run that hits
+   * the repeat guard ends with "I stopped because I kept repeating the same step",
+   * which parses to zero steps — and the failure is silent, because the webview simply
+   * renders the prose and never draws the "Run this plan" button. The feature reads as
+   * broken rather than as degraded.
+   *
+   * So the summary is still preferred, and when it yields nothing the plan is asked
+   * for directly instead: one cheap constrained call, given what the exploration
+   * actually turned up. That call has one job and a fixed output shape, which is a far
+   * easier thing for a 1B model to get right than closing a loop in list form.
+   *
+   * Returns `[]` when even that produces nothing, so the caller falls back to prose
+   * rather than inventing steps.
+   *
+   * @param {string} task
+   * @param {{summary: string, steps: AgentStep[]}} outcome
+   * @returns {Promise<string[]>}
+   * @private
+   */
+  async _derivePlan(task, outcome) {
+    const fromSummary = plannerAgent.parsePlanSummary(outcome.summary);
+    if (fromSummary.length > 0) return fromSummary;
+
+    logger.debug('Plan-mode summary held no numbered steps; asking for the plan directly.');
+
+    try {
+      return await plannerAgent.plan({
+        client: this.client,
+        model: this.model,
+        task,
+        context: this._explorationNotes(outcome.steps),
+        signal: this._controller ? this._controller.signal : undefined,
+      });
+    } catch (err) {
+      // A missing checklist degrades Plan mode to prose. It must never fail the turn.
+      logger.warn(`Could not derive a plan: ${/** @type {Error} */ (err).message}`);
+      return [];
+    }
+  }
+
+  /**
+   * What a read-only run learned, compressed for one follow-up prompt.
+   *
+   * Paths and outcomes only. The observations themselves are file contents, which
+   * would blow the budget of the very models this exists for — and the second pass
+   * needs to know *which files matter*, not what is in them.
+   *
+   * @param {AgentStep[]} steps
+   * @returns {string}
+   * @private
+   */
+  _explorationNotes(steps) {
+    const lines = (steps || [])
+      .filter((step) => step.action && step.action.path)
+      .map((step) => `- ${step.action.path}${step.result && step.result.ok ? '' : ' (could not be read)'}`);
+
+    const unique = [...new Set(lines)].slice(0, 15);
+    return unique.length > 0 ? `Files you looked at while exploring:\n${unique.join('\n')}` : '';
   }
 
   /**

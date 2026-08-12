@@ -232,4 +232,64 @@ describe('actionSchema', () => {
     assert.ok(!names.includes('write_file'), 'plan mode was offered a write');
     assert.ok(names.includes('done'), 'no way to end the session');
   });
+
+  it('offers recursive on delete_folder without requiring it', () => {
+    // Constrained decoding will not emit a property the schema does not mention, so a
+    // missing declaration here would leave Tier B permanently unable to remove a
+    // non-empty folder — the flag is the only way past the tool's refusal.
+    const schema = actionSchema(new Set(['delete_folder', 'done']));
+    const branch = schema.anyOf.find((b) => b.properties.action.const === 'delete_folder');
+
+    assert.strictEqual(branch.properties.recursive.type, 'boolean');
+    assert.deepStrictEqual(branch.required, ['thought', 'action', 'path']);
+  });
+});
+
+describe('folder actions', () => {
+  const { parseAction } = require('../../app/core/outputParser');
+
+  it('parses create_folder', () => {
+    const result = parseAction(JSON.stringify({ thought: 'make it', action: 'create_folder', path: 'src/main/java' }));
+
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.action.action, 'create_folder');
+    assert.strictEqual(result.action.path, 'src/main/java');
+  });
+
+  it('carries recursive through when it is a real boolean', () => {
+    const result = parseAction(JSON.stringify({ action: 'delete_folder', path: 'old', recursive: true }));
+
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.action.recursive, true);
+  });
+
+  it('accepts the string "true", which small models emit for booleans', () => {
+    const result = parseAction(JSON.stringify({ action: 'delete_folder', path: 'old', recursive: 'true' }));
+
+    assert.strictEqual(result.action.recursive, true);
+  });
+
+  it('does not read the string "false" as consent', () => {
+    // The value is truthy in JavaScript, and it authorises removing a subtree. Anything
+    // short of an unambiguous yes leaves the flag unset, and the tool then refuses.
+    const result = parseAction(JSON.stringify({ action: 'delete_folder', path: 'old', recursive: 'false' }));
+
+    assert.strictEqual(result.action.recursive, undefined);
+  });
+
+  it('leaves recursive unset when it is absent', () => {
+    const result = parseAction(JSON.stringify({ action: 'delete_folder', path: 'old' }));
+
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.action.recursive, undefined);
+  });
+
+  it('refuses a folder action in a mode that was not offered it', () => {
+    const result = parseAction(JSON.stringify({ action: 'delete_folder', path: 'old' }), {
+      allowedActions: new Set(['read_file', 'list_files']),
+    });
+
+    assert.strictEqual(result.ok, false);
+    assert.match(result.error, /not available in this mode/);
+  });
 });

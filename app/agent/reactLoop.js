@@ -52,6 +52,10 @@ const RETRYABLE_ERRORS = new Set([
   'FULLY_COMMENTED',
   'MISSING_CONTENT',
   'ECHOED_OBSERVATION',
+  // `delete_folder` refuses a non-empty folder and asks for the same call back with
+  // `recursive: true`. That is the tool naming the one thing that would work, so it
+  // belongs with the content refusals rather than with the misdirected actions.
+  'FOLDER_NOT_EMPTY',
 ]);
 
 /** How many corrected retries a single action/path is forgiven before the repeat guard applies. */
@@ -147,6 +151,17 @@ function nextStepHint(action, result, repeats, activeRoute) {
   // while this function simultaneously told it never to write that path again. It
   // obeyed the loop, went back to read_file, and the session ended having done
   // nothing.
+  // The folder case is a retryable refusal with a different remedy: nothing is wrong
+  // with the payload, a flag is missing. Sending it through the "corrected content"
+  // wording below would ask a small model to fix something that is not broken.
+  if (!result.ok && result.error === 'FOLDER_NOT_EMPTY') {
+    return (
+      `${action.path || 'That folder'} still exists — it is not empty, so it was left alone. ` +
+      'If you meant to remove it and everything inside it, send delete_folder for the same path with ' +
+      '"recursive": true. If you only wanted particular files gone, use delete_file on each of them.'
+    );
+  }
+
   if (!result.ok && RETRYABLE_ERRORS.has(result.error)) {
     return (
       `${action.path || 'The file'} was NOT changed — the content you sent was rejected for the reason above. ` +
