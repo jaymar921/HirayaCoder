@@ -4,6 +4,7 @@
 .hirayacoder/context-files/
 .hirayacoder/tmp/
 .hirayacoder/audit.log
+.hirayacoder/outcomes.jsonl
 *.hirayacoder.tmp
 
 .ignore/
