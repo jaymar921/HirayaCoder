@@ -285,6 +285,9 @@ function recoveryHint(error) {
  * @param {string} options.task
  * @param {string} options.context           Prebuilt context block from contextBuilder.
  * @param {(action: import('../core/outputParser').ParsedAction) => Promise<import('../agent/toolRegistry').ToolResult>} options.execute
+ * @param {(summary: string) => string | null} [options.verifyDone]
+ *   Consulted when the model says it has finished. A returned string is fed back as a
+ *   correction and the loop continues; null accepts the `done`. Called at most once.
  * @param {(event: object) => void} [options.onEvent]
  * @param {AbortSignal} [options.signal]
  * @returns {Promise<{steps: import('./agentSession').AgentStep[], summary: string, stopReason: string}>}
@@ -311,6 +314,8 @@ async function run(options) {
   let summary = '';
   let stopReason = 'budget';
   let parseFailures = 0;
+  /** A `done` has already been sent back once for want of evidence. */
+  let doneChallenged = false;
   // Two independent nudges. `hint` is about the task ("you have the file, now edit
   // it") and survives a bad reply; `parseNudge` is about the last reply's shape and
   // is cleared as soon as one parses. Folding them into one variable meant a parse
@@ -448,6 +453,20 @@ async function run(options) {
     const action = parsed.action;
 
     if (action.action === 'done') {
+      // Raised once, never twice — see `agent/completionCheck`. A model that cannot
+      // produce the work will not be argued into it, and refusing indefinitely ends
+      // with a worse report than the honest one.
+      const objection = doneChallenged || !options.verifyDone ? null : options.verifyDone(action.summary || '');
+      if (objection) {
+        doneChallenged = true;
+        logger.info('Challenged a "done" that nothing supports; giving the model one more turn.');
+        hint = objection;
+        // The observation is deliberately left standing: the model's last action really
+        // did happen, and clearing it is how a small model loses the file it just read
+        // and goes back to reading it again.
+        continue;
+      }
+
       summary = action.summary || 'Finished.';
       stopReason = 'done';
       emit({ type: 'done', summary, thought: action.thought });

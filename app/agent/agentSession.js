@@ -31,6 +31,7 @@ const contextBuilder = require('../core/contextBuilder');
 const reactLoop = require('./reactLoop');
 const nativeToolLoop = require('./nativeToolLoop');
 const plannerAgent = require('./plannerAgent');
+const completionCheck = require('./completionCheck');
 const earnedHints = require('./earnedHints');
 const { TodoList } = require('./todoList');
 
@@ -349,6 +350,14 @@ class AgentSession {
      */
     this.ledger = options.ledger || null;
     this.adaptation = options.adaptation || {};
+    /**
+     * Whether a `done` is checked against what the session actually produced.
+     *
+     * On by default and settable off, because it costs a turn in the case where the
+     * model was right and the check was wrong — and because a user who has decided they
+     * want the model's word taken at face value should be able to have that.
+     */
+    this.verifyCompletion = options.verifyCompletion !== false;
 
     /**
      * Earlier turns of this chat, set per `run` call.
@@ -475,6 +484,9 @@ class AgentSession {
         task: effectiveTask,
         context,
         execute: (action) => this._execute(action, activeRoute, changeSet),
+        // Agent mode only. A Plan run that changed nothing did exactly what it was for,
+        // and challenging it would be the check firing on its own success condition.
+        verifyDone: mode === 'agent' ? this._doneVerifier(task, changeSet, 0) : undefined,
         onEvent: emit,
         signal: this._controller.signal,
         images: this.images,
@@ -635,6 +647,10 @@ class AgentSession {
         task: itemTask,
         context,
         execute: (action) => this._execute(action, itemRoute, changeSet),
+        // Judged against this item's own text and this item's own starting point: the
+        // list runs one loop per item, and an earlier item's file is not evidence that
+        // this one did anything.
+        verifyDone: this._doneVerifier(item.text, changeSet, before),
         onEvent: emitForItem,
         signal: this._controller.signal,
         // Only the first item sees the image. By item two the work is grounded in
@@ -681,6 +697,30 @@ class AgentSession {
       mode: 'agent',
       todos: todos.items,
     };
+  }
+
+  /**
+   * The check a loop runs before accepting the model's word that it has finished.
+   *
+   * Bound to a starting size rather than to emptiness, so within a TODO list each item
+   * is judged on what *it* produced. Plan mode gets no verifier at all: a plan changing
+   * nothing is the entire point of it.
+   *
+   * @param {string} task What this loop was asked to do.
+   * @param {ChangeSet} changeSet
+   * @param {number} sizeBefore
+   * @returns {((summary: string) => string | null) | undefined}
+   * @private
+   */
+  _doneVerifier(task, changeSet, sizeBefore) {
+    if (this.verifyCompletion === false) return undefined;
+
+    return () =>
+      completionCheck.objectTo({
+        task,
+        changed: changeSet.size() > sizeBefore,
+        written: changeSet.list().filter((change) => change.kind !== 'delete'),
+      });
   }
 
   /**

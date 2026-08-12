@@ -363,6 +363,8 @@ class FactStore {
       for (const fact of recalled) {
         if (fact.kind !== kind) continue;
         // Neutralized again on the way out: the cache can outlive an edit to the file.
+        // `kind` comes from KIND_ORDER, a module constant, never from the file.
+        // eslint-disable-next-line security/detect-object-injection
         lines.push(`- [${KIND_LABEL[kind]}] ${neutralize(fact.text)}`);
       }
     }

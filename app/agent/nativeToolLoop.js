@@ -129,6 +129,8 @@ async function run(options) {
   let summary = '';
   let stopReason = 'budget';
   let narratedCalls = 0;
+  /** A finish has already been sent back once for want of evidence. */
+  let doneChallenged = false;
 
   for (let stepIndex = 0; stepIndex < budgets.maxSteps; stepIndex += 1) {
     if (options.signal && options.signal.aborted) {
@@ -197,6 +199,16 @@ async function run(options) {
             'delete_file, create_folder, delete_folder, run_script, run_tests. To change a file, call ' +
             'write_file with "path" and the complete new contents in "code".',
         });
+        continue;
+      }
+
+      // Raised once, never twice — see `agent/completionCheck`.
+      const objection = doneChallenged || !options.verifyDone ? null : options.verifyDone(answer);
+      if (objection) {
+        doneChallenged = true;
+        logger.info('Challenged a "done" that nothing supports; giving the model one more turn.');
+        messages.push(message);
+        messages.push({ role: 'user', content: objection });
         continue;
       }
 

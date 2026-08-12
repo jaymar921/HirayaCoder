@@ -102,12 +102,60 @@ that reached the loop as prose and nothing else.
 per-session ones because they have a different scope. A fact that has become false — "no
 JDK here", after the user installs one — is the case that most needs a way out.
 
-### Still to come in 0.4.0
+### Added — a `done` is now checked against what the session produced
 
-Verification of `done` against the change set, so "2 of 2 item(s) completed" cannot be
-reported for a run that wrote nothing; and stub detection in `write_file`, for the
-generated `todoapp.html` whose handlers were `console.log` under
-`// Implement the delete functionality here`.
+Two ways a run reported success without producing any.
+
+**It never wrote anything.** Asked five separate times, in escalating detail, to convert
+a Python TODO app into `todoapp.html`, the agent replied:
+
+    2 of 2 item(s) completed.
+    1. Read src/todo_app.py and src/todo_manager.py … — done (no files changed)
+    2. Convert the Python todo app into an HTML webpage … — done (no files changed)
+
+Every word of that is accurate. `judgeItem` derives it from evidence and appends the
+caveat honestly — and a user reading "2 of 2 completed" believes a file exists. The
+fifth attempt ended with the user typing "nothing changed. again."
+
+**It wrote a placeholder.** The file that eventually appeared was 49 lines whose two
+handlers were a comment and a `console.log`:
+
+    function deleteTask(taskId) {
+        // Implement the delete functionality here
+        console.log("Deleting task:", taskId);
+    }
+
+A change set grew, so nothing downstream had any reason to doubt it, and the delete
+feature the user had asked for three times did not exist.
+
+`agent/completionCheck` now runs when either loop is told the work is finished, and can
+send the model back once. Once, never twice: a model that cannot produce the work will
+not be argued into it, and refusing indefinitely burns the budget to arrive at a worse
+report than the honest one. What the single retry buys is the common small-model case —
+the model has read everything it needs, has lost track of never having written, and
+needs telling.
+
+It is deliberately narrow at both ends. A request that only asked to look at, check, or
+explain something finishes correctly having written nothing, so those are never
+challenged; and a `// TODO` in working code is an ordinary thing to leave behind, so the
+placeholder check requires a deferral comment sitting in a function body with nothing
+else of substance in it. Plan mode is exempt outright, since a plan that changed nothing
+is the entire point of Plan mode.
+
+The placeholder scan handles brace languages only. Python's indentation needs a
+different scan, and half a scan would report the wrong bodies rather than none.
+
+### Fixed — a quadratic regex in the placeholder scan
+
+Caught before it shipped, while checking the `security/detect-unsafe-regex` warnings
+rather than waving them through. The first version of the placeholder comment pattern
+had two `\s*` either side of an optional group, both able to claim the same run of
+spaces, so the engine tried every split: **308 ms** on `"// TODO"` followed by 20,000
+spaces, against 0.17 ms for the fixed pattern at twice the length. This scans every file
+the agent writes, and a model emitting a long run of whitespace is not a rare event.
+
+The other five warnings in that report were measured too, and all are false positives —
+none exceeds 0.25 ms on 40,000 characters of adversarial input.
 
 ### Fixed — the permissions button in the chat tab never worked, at all
 

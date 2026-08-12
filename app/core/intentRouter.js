@@ -51,6 +51,31 @@
 const WORK_VERB =
   /\b(?:add|create|write|implement|update|edit|change|fix|refactor|delete|remove|rename|move|install|generate|build|make|run|compile|convert|migrate|rewrite|replace|set\s?up|scaffold|debug|test|deploy|open|show\s+me|list|find|search|read|check|review|explain|describe|analy[sz]e)\b/i;
 
+/**
+ * The subset of `WORK_VERB` that asks for the project to be *different* afterwards.
+ *
+ * `WORK_VERB` is deliberately broad — it decides whether the agent runs at all, and
+ * "explain the auth flow" needs tools even though it changes nothing. This narrower set
+ * answers a different question: if the model reports it has finished and the change set
+ * is empty, was that a legitimate answer or a claim about work that never happened?
+ *
+ * Reading, checking, and explaining are absent for exactly that reason. They finish
+ * correctly having written nothing, and treating them as unfinished would make the
+ * check fire on the cases it is most likely to be wrong about.
+ */
+const MUTATING_VERB =
+  /\b(?:add|create|write|implement|update|edit|change|fix|refactor|delete|remove|rename|move|install|generate|build|compile|convert|migrate|rewrite|replace|scaffold|make)\b/i;
+
+/**
+ * Does this request only count as finished if something on disk changed?
+ *
+ * @param {string} text
+ * @returns {boolean}
+ */
+function requiresChange(text) {
+  return MUTATING_VERB.test(String(text || ''));
+}
+
 /** A filename, an extension, or a path — a message about the project's contents. */
 const NAMES_A_FILE = /(?:[\w-]+\.[a-z0-9]{1,6}\b|\b[\w-]+\/[\w./-]+)/i;
 
@@ -76,7 +101,11 @@ const PLEASANTRY =
  * all the work of the sentence.
  */
 const ABOUT_THE_ASSISTANT =
-  /\b(?:who\s+are\s+you|what\s+are\s+you|are\s+you\s+(?:a|an|the)?\s*\w*(?:model|llm|ai|bot|human)|what(?:'s| is)?\s+your\s+name|wh(?:at|ich)\s+(?:model|llm|ai)\b|you\s+are\s+\S+:\S+)\b/i;
+  // The "are you a … model" branch keeps its optional qualifier anchored to a trailing
+  // space (`[\w-]+\s+`) rather than letting `\w*` sit directly against the alternation.
+  // Adjacent quantifiers that can both claim the same characters are the shape that
+  // backtracks exponentially, and this pattern runs on every message the user types.
+  /\b(?:who\s+are\s+you|what\s+are\s+you|are\s+you\s+(?:an?\s+|the\s+)?(?:[\w-]+\s+)?(?:model|llm|ai|bot|human)|what(?:'s| is)?\s+your\s+name|wh(?:at|ich)\s+(?:model|llm|ai)\b|you\s+are\s+\S+:\S+)\b/i;
 
 /**
  * Questions about the conversation rather than about the project.
@@ -147,7 +176,9 @@ function classify(text) {
 
 module.exports = {
   classify,
+  requiresChange,
   WORK_VERB,
+  MUTATING_VERB,
   NAMES_A_FILE,
   GREETING,
   PLEASANTRY,
