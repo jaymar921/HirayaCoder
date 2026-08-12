@@ -150,6 +150,20 @@ const MIN_STEPS_PER_TODO_ITEM = 3;
 const MAX_TODO_ITEMS_WITH_FULL_BUDGET = 4;
 
 /**
+ * The checklist as the UI should draw it right now.
+ *
+ * A copy, not the live items: the event travels to a webview through
+ * `postMessage`, and handing out the array the session is still mutating would let
+ * a later item's status appear on an earlier render.
+ *
+ * @param {TodoList} todos
+ * @returns {{text: string, status: string, outcome?: string}[]}
+ */
+function snapshotTodos(todos) {
+  return todos.items.map((item) => ({ text: item.text, status: item.status, outcome: item.outcome }));
+}
+
+/**
  * Decide whether a TODO item actually got done.
  *
  * From evidence, not from the model's account of itself. Three things are known for
@@ -160,21 +174,53 @@ const MAX_TODO_ITEMS_WITH_FULL_BUDGET = 4;
  * check or confirm something legitimately changes no files, and calling that a
  * failure would be wrong more often than it would be right.
  *
+ * ## The third state
+ *
+ * Reproduced on `qwen3.5:2b` in three consecutive runs: the model writes the file
+ * correctly, re-reads it "to verify", spends the rest of the item's steps doing that,
+ * and never emits `done`. Flat `failed` is defensible — the item was not closed — but
+ * it reads as "nothing happened" for an item that, in substance, happened.
+ *
+ * `done-with-warning` is the honest answer, and it is still evidence-based: the change
+ * set grew and no step failed. What is missing is only the model's sign-off, which was
+ * never worth anything anyway. The one thing this must not become is trusting the
+ * model's own claim of completion — that is the failure the whole judgement exists to
+ * avoid, so a run that changed nothing can never reach this state.
+ *
  * @param {{stopReason: string, steps: AgentStep[], summary: string}} outcome
  * @param {ChangeSet} changeSet
  * @param {number | null} sizeBefore
- * @returns {{status: 'done' | 'failed', outcomeText: string}}
+ * @returns {{status: 'done' | 'done-with-warning' | 'failed', outcomeText: string}}
  */
 function judgeItem(outcome, changeSet, sizeBefore) {
   const changed = changeSet.size() > (sizeBefore === null ? 0 : sizeBefore);
   const anySucceeded = outcome.steps.some((step) => step.result && step.result.ok);
+  const anyFailed = outcome.steps.some((step) => step.result && step.result.ok === false);
 
   if (outcome.stopReason === 'done') {
+    // Reaching `done` is the model's claim, and it is worth exactly as much as the
+    // evidence behind it. Observed on `gemma4:e2b`: the user declined the delete, the
+    // file stayed, and the model closed the item with `done` — the checklist then read
+    // "Delete the obsolete file — done" for a file that is still there.
+    //
+    // The narrow case that catches it: nothing changed *and* something failed. An
+    // item that changed nothing without failing anything is a legitimate check, and an
+    // item that landed its change after recovering from a failed step is an ordinary
+    // success — flagging either would make the caveat meaningless.
+    if (!changed && anyFailed) {
+      return { status: 'failed', outcomeText: 'the model reported it finished, but its actions failed' };
+    }
     return { status: 'done', outcomeText: changed ? '' : 'no files changed' };
   }
+  if (changed && anySucceeded && !anyFailed) {
+    return {
+      status: 'done-with-warning',
+      outcomeText: `changes landed, but the model never closed the item off (${outcome.stopReason})`,
+    };
+  }
   if (changed && anySucceeded) {
-    // Work landed but the loop did not close the item off cleanly. Reporting this as
-    // done would overclaim; reporting it as untouched would hide a real edit.
+    // Work landed *and* something failed along the way. Reporting this as done would
+    // overclaim; reporting it as untouched would hide a real edit.
     return { status: 'failed', outcomeText: `stopped early (${outcome.stopReason}) after making changes` };
   }
   return { status: 'failed', outcomeText: `stopped: ${outcome.stopReason}` };
@@ -427,7 +473,16 @@ class AgentSession {
 
       const item = todos.current();
       const position = todos.position();
-      emit({ type: 'todo-item', index: position, total: todos.items.length, text: item.text });
+      // The snapshot rides along with the event because the UI has no other way to
+      // learn the list changed: it holds the items it was given at `todo` time and
+      // nothing else, so an index alone would leave it guessing at the other rows.
+      emit({
+        type: 'todo-item',
+        index: position,
+        total: todos.items.length,
+        text: item.text,
+        items: snapshotTodos(todos),
+      });
 
       // Never below a read-think-modify, or the item cannot succeed even in
       // principle and the run would only look like it tried.
@@ -466,7 +521,7 @@ class AgentSession {
       // off an item they never touched.
       const { status, outcomeText } = judgeItem(outcome, changeSet, before);
       todos.finishCurrent(status, outcomeText, outcome.steps.length);
-      emit({ type: 'todo-item-done', index: position, status, text: item.text });
+      emit({ type: 'todo-item-done', index: position, status, text: item.text, items: snapshotTodos(todos) });
 
       await this._remember(outcome.steps);
 
@@ -479,8 +534,12 @@ class AgentSession {
     if (todos.current()) todos.skipRemaining('the session ran out of steps');
 
     const progress = todos.progress();
+    const caveat =
+      progress.warned > 0
+        ? ` ${progress.warned} of those changed files without the model confirming it had finished — check them.`
+        : '';
     const summary =
-      `${progress.done} of ${progress.total} item(s) completed.\n\n${todos.describe()}` +
+      `${progress.done} of ${progress.total} item(s) completed.${caveat}\n\n${todos.describe()}` +
       (summaries.length > 0 ? `\n\nDetail:\n${summaries.join('\n')}` : '');
 
     return {
