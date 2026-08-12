@@ -23,6 +23,47 @@ const { redact } = require('../../security/secretsScanner');
 const OUTPUT_TOKENS = 400;
 
 /**
+ * What to do about a refusal the same command can never survive.
+ *
+ * The refusal messages were already informative — "not in the allowed program list",
+ * with the list — and models retried the identical command anyway. Observed on
+ * `ornith:9b`, asked to compile some Java: `javac …` was refused, and it sent the exact
+ * same line three more times until the repeat guard ended the item. The user got
+ * "stopped: repeating" instead of "you need a JDK, here is the command to run".
+ *
+ * Saying the reason is not the same as saying what to do instead. Each of these is a
+ * dead end for *this* command, so each says so outright and names the way forward. It
+ * is the same lesson as the declined-delete hint: a refusal is a decision to work
+ * within, not an obstacle to route around.
+ *
+ * @param {string | undefined} code
+ * @returns {string} Text to append to the observation, or '' when a retry is sensible.
+ */
+function nextStepAfterRefusal(code) {
+  switch (code) {
+    case 'BINARY_NOT_ALLOWED':
+      return (
+        ' Sending it again will be refused identically — do not retry it. Either use one of the allowed ' +
+        'programs, or stop and tell the user which command they should run themselves and why.'
+      );
+    case 'BINARY_NOT_FOUND':
+      return (
+        ' It is allowed but not installed on this machine, so no retry will find it. Tell the user what ' +
+        'to install, and continue with whatever you can do without it.'
+      );
+    case 'SHELL_METACHARACTER':
+      return ' Do not resend this line. Propose one plain command, with no operators, redirects, or chaining.';
+    case 'USER_DENIED':
+      return (
+        ' That was the user deciding, not an error to work around. Do not retry it and do not achieve the ' +
+        'same effect another way. Carry on with the rest of the task.'
+      );
+    default:
+      return '';
+  }
+}
+
+/**
  * Turn a completed run into an observation.
  *
  * @param {string} command
@@ -73,9 +114,7 @@ module.exports = async function runScript(args, context) {
   if (!decision.allowed) {
     return {
       ok: false,
-      // The reason is deliberately actionable: "not in the allowed program list"
-      // teaches the model to propose something else rather than retry verbatim.
-      observation: `\`${command}\` was not run: ${decision.reason}`,
+      observation: `\`${command}\` was not run: ${decision.reason}${nextStepAfterRefusal(decision.code)}`,
       error: decision.code,
     };
   }
@@ -112,3 +151,4 @@ module.exports = async function runScript(args, context) {
 };
 
 module.exports.describeRun = describeRun;
+module.exports.nextStepAfterRefusal = nextStepAfterRefusal;

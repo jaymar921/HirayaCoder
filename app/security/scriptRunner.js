@@ -55,6 +55,12 @@ const DEFAULT_ALLOWED_BINARIES = [
   'pytest', 'jest', 'mocha', 'vitest', 'ava',
   'tsc', 'eslint', 'prettier',
   'go', 'cargo', 'dotnet', 'mvn', 'gradle', 'make',
+  // `mvn` and `gradle` were already here, and both compile and run arbitrary Java —
+  // including whatever a build script says. Refusing `javac`/`java` therefore blocked
+  // the simple case while permitting the far more capable one. Observed on a real
+  // session: a user asked for two plain `.java` files and a `Main.java` to exercise
+  // them, and the agent could write the code but never compile it.
+  'java', 'javac',
 ];
 
 /**
