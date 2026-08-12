@@ -13,6 +13,7 @@
 # extension onto its embedded fallback prompts in production. Only the build spec,
 # which is for humans, is left out.
 setup/PROMPT.md
+setup/FOLLOWUP-PROMPT.md
 security/**
 test/**
 builds/**
@@ -21,6 +22,9 @@ doc/**
 # Tooling config
 eslint.config.js
 scripts/**
+# The live-model benchmark harness. Development-only: nothing under app/ requires it,
+# and it was shipping in the .vsix because only source *folders* were excluded.
+tools/**
 **/*.map
 **/tsconfig.json
 **/jsconfig.json
