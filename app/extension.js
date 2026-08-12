@@ -23,6 +23,8 @@ const { PermissionGate } = require('./security/permissionGate');
 const { AuditLog } = require('./security/auditLog');
 const { DEFAULT_ALLOWED_BINARIES } = require('./security/scriptRunner');
 const { MemoryStore, nextSessionId, listSessions } = require('./core/memoryStore');
+const { OutcomeLedger } = require('./core/outcomeLedger');
+const earnedHints = require('./agent/earnedHints');
 const { ContextFilesManager } = require('./core/contextFilesManager');
 const { ContextTranslator } = require('./core/contextTranslator');
 const { ChatTab } = require('./features/chatTab');
@@ -46,6 +48,17 @@ const openChatTabs = new Map();
 let sessionsProvider = null;
 
 /**
+ * The session whose tab the user last had focused.
+ *
+ * "Show Session Memory" has to mean the conversation on screen. It used to mean the
+ * session activation happened to open, which was the right answer only for the first
+ * tab of a window and silently wrong for every one after it.
+ *
+ * @type {number | null}
+ */
+let lastActiveSessionId = null;
+
+/**
  * @typedef {object} Settings
  * @property {string} endpoint
  * @property {number} requestTimeoutMs
@@ -58,6 +71,7 @@ let sessionsProvider = null;
  * @property {'agent' | 'plan' | 'ask'} mode
  * @property {{autoEdit: boolean, autoApproveScripts: boolean}} permissions
  * @property {boolean} statusBarEnabled
+ * @property {{enabled: boolean, hintThreshold: number}} adaptation
  * @property {import('./utils/logger').LogLevel} logLevel
  */
 
@@ -87,6 +101,10 @@ function readSettings() {
     scriptTimeoutMs: cfg.get('scripts.timeoutMs', 120000),
     protectedPaths: cfg.get('security.protectedPaths', ['.git', '.hirayacoder']),
     statusBarEnabled: cfg.get('statusBar.enabled', true),
+    adaptation: {
+      enabled: cfg.get('adaptation.enabled', true),
+      hintThreshold: cfg.get('adaptation.hintThreshold', earnedHints.DEFAULT_THRESHOLD),
+    },
     logLevel: cfg.get('logLevel', 'info'),
   };
 }
@@ -137,12 +155,26 @@ class HirayaCoder {
     this.memory = null;
     /** @type {ContextFilesManager | null} */
     this.contextFiles = null;
-    /** @type {ContextTranslator | null} */
-    this.translator = null;
+
+    /** @type {OutcomeLedger | null} */
+    this.ledger = null;
 
     this.buildClient();
     this.buildSecurityLayer();
+    this.buildLedger();
     this.buildSession();
+  }
+
+  /**
+   * The workspace's outcome ledger, which every chat tab shares.
+   *
+   * One per workspace rather than one per session: what the extension learns is about
+   * a *model in this project*, and splitting the evidence per chat tab would mean a
+   * model had to earn the same hint again in every new conversation.
+   */
+  buildLedger() {
+    const root = workspaceRoot();
+    this.ledger = root ? new OutcomeLedger(root) : null;
   }
 
   /** The workspace folder, or null when none is open. */
@@ -206,30 +238,39 @@ class HirayaCoder {
     if (!root) {
       this.memory = null;
       this.contextFiles = null;
-      this.translator = null;
       return;
     }
 
     const id = sessionId || nextSessionId(root);
-    this.memory = new MemoryStore(root, id);
+    this.memory = this.memoryFor(id);
     this.contextFiles = new ContextFilesManager(root);
     void this.contextFiles.load();
-    this.refreshTranslator();
     logger.info(`Session ${id} ready (memory: ${this.memory.filePath}).`);
   }
 
   /**
-   * The translator runs against whichever model is currently selected, so it is
-   * rebuilt whenever that changes.
+   * The translator that condenses one session's work into *that session's* memory.
+   *
+   * Per session, not per extension. There used to be a single `app.translator` bound to
+   * whichever session activation happened to open, while each chat tab was given its
+   * own memory store to recall from — so a tab recalled from its own file and wrote its
+   * new notes into a different one. Open session 2 from the sidebar while activation
+   * had reserved session 4, and session 2's work was remembered into `session4.txt`.
+   *
+   * Built fresh per call rather than cached: it is three fields over the shared,
+   * cached `MemoryStore`, so there is nothing to keep warm and no stale copy to
+   * invalidate when the model changes.
+   *
+   * @param {number} sessionId
+   * @returns {ContextTranslator | null}
    */
-  refreshTranslator() {
-    if (!this.client || !this.memory || !this.activeModel) {
-      this.translator = null;
-      return;
-    }
-    this.translator = new ContextTranslator({
+  translatorFor(sessionId) {
+    const store = this.memoryFor(sessionId);
+    if (!this.client || !store || !this.activeModel) return null;
+
+    return new ContextTranslator({
       client: this.client,
-      memoryStore: this.memory,
+      memoryStore: store,
       model: this.activeModel,
     });
   }
@@ -365,8 +406,8 @@ class HirayaCoder {
       );
     }
 
-    // The translator talks to the selected model, so it follows model changes.
-    this.refreshTranslator();
+    // Nothing to rebuild for the model change: `translatorFor` reads `activeModel` at
+    // the moment a turn starts, so it cannot be left pointing at the previous model.
 
     this.statusBar.update({
       connection: 'online',
@@ -520,6 +561,10 @@ function activate(context) {
 
     vscode.commands.registerCommand('hirayacoder.showAuditLog', () => showAuditLogCommand(app)),
 
+    vscode.commands.registerCommand('hirayacoder.showAdaptation', () => showAdaptationCommand(app)),
+
+    vscode.commands.registerCommand('hirayacoder.resetAdaptation', () => resetAdaptationCommand(app)),
+
     vscode.commands.registerCommand('hirayacoder.showMemory', () => showMemoryCommand(app)),
 
     vscode.commands.registerCommand('hirayacoder.clearMemory', () => clearMemoryCommand(app)),
@@ -572,12 +617,29 @@ function activate(context) {
 }
 
 /**
+ * A session number nothing has claimed — on disk, or by a tab open in this window.
+ *
+ * Both of a session's files are written lazily, so the open tabs are the only record
+ * of a session that exists but has not been used yet.
+ *
+ * @param {string} root
+ * @returns {number}
+ */
+function newSessionId(root) {
+  return nextSessionId(root, { reserved: [...openChatTabs.keys()] });
+}
+
+/**
  * Send a task from an editor feature into a chat tab.
  *
  * Reuses an open tab where there is one, so a Refactor and a Fix on the same file
  * land in the same conversation and share its memory. Only when nothing is open does
  * it start a session — an editor action should not silently create a new memory file
  * every time it is used.
+ *
+ * *Which* open tab is the one the user was last looking at. Taking the first entry of
+ * the map meant that with several sessions open, a Refactor could land in whichever tab
+ * happened to be opened earliest — a conversation the user was not watching.
  *
  * @param {vscode.ExtensionContext} context
  * @param {HirayaCoder} app
@@ -591,15 +653,21 @@ async function sendToChat(context, app, task, opts) {
     return;
   }
 
-  let tab = [...openChatTabs.values()][0];
+  let tab =
+    (lastActiveSessionId !== null ? openChatTabs.get(lastActiveSessionId) : undefined) ||
+    [...openChatTabs.values()][0];
   if (!tab) {
-    const sessionId = nextSessionId(root);
-    tab = new ChatTab({ context, app, sessionId });
-    openChatTabs.set(sessionId, tab);
-    const panel = tab.reveal();
-    panel.onDidDispose(() => openChatTabs.delete(sessionId));
+    // Through `openSession` rather than building the tab here, so an editor-started
+    // session is registered, tracked, and listed exactly like one opened from the
+    // command. The second copy of this wiring was already drifting: it never refreshed
+    // the activity bar.
+    const sessionId = newSessionId(root);
+    openSession(context, app, sessionId);
+    tab = openChatTabs.get(sessionId);
+    if (!tab) return;
   } else {
     tab.reveal();
+    lastActiveSessionId = tab.sessionId;
   }
 
   await tab.runExternalTask(task, opts.mode);
@@ -626,7 +694,7 @@ async function openChatCommand(context, app) {
   let sessionId;
 
   if (existing.length === 0) {
-    sessionId = nextSessionId(root);
+    sessionId = newSessionId(root);
   } else {
     const picked = await vscode.window.showQuickPick(
       [
@@ -634,13 +702,19 @@ async function openChatCommand(context, app) {
         ...existing.map((session) => ({
           label: `$(comment-discussion) Session ${session.sessionId}`,
           id: session.sessionId,
-          detail: `${session.entries} remembered fact(s)`,
+          // A session that has been talked to but has produced nothing worth
+          // remembering is a real session, and now appears here. "0 remembered
+          // fact(s)" would read as an empty slot rather than a conversation.
+          detail:
+            session.entries === 0
+              ? 'No notes yet'
+              : `${session.entries} remembered fact${session.entries === 1 ? '' : 's'}`,
         })),
       ],
       { title: 'HirayaCoder', placeHolder: 'Resume a session or start a new one' }
     );
     if (!picked) return;
-    sessionId = picked.id === -1 ? nextSessionId(root) : picked.id;
+    sessionId = picked.id === -1 ? newSessionId(root) : picked.id;
   }
 
   openSession(context, app, sessionId);
@@ -660,13 +734,24 @@ function openSession(context, app, sessionId) {
   const open = openChatTabs.get(sessionId);
   if (open) {
     open.reveal();
+    lastActiveSessionId = sessionId;
     return;
   }
 
   const tab = new ChatTab({ context, app, sessionId });
   openChatTabs.set(sessionId, tab);
   const panel = tab.reveal();
-  panel.onDidDispose(() => openChatTabs.delete(sessionId));
+  lastActiveSessionId = sessionId;
+  panel.onDidDispose(() => {
+    openChatTabs.delete(sessionId);
+    if (lastActiveSessionId === sessionId) lastActiveSessionId = null;
+  });
+  // Which session the memory commands mean is decided by which tab the user is
+  // looking at, so it has to follow focus rather than be sampled when a command runs —
+  // by then the quick-pick has taken focus and every panel reports inactive.
+  panel.onDidChangeViewState(() => {
+    if (panel.active) lastActiveSessionId = sessionId;
+  });
 
   // A brand-new session has no memory file until something is remembered, so the list
   // would not show it otherwise.
@@ -870,6 +955,97 @@ async function showAuditLogCommand(app) {
 }
 
 /**
+ * Show what the extension has learned about each model in this workspace.
+ *
+ * The design rule this command exists to satisfy: profiles are advisory, visible, and
+ * resettable. A learning layer the user cannot inspect is one they cannot disagree
+ * with, and a hint that makes things worse must be as easy to discard as it was to
+ * acquire — hence the reset offered at the bottom.
+ *
+ * @param {HirayaCoder} app
+ */
+async function showAdaptationCommand(app) {
+  if (!app.ledger) {
+    vscode.window.showWarningMessage('HirayaCoder: no workspace folder is open, so nothing has been recorded.');
+    return;
+  }
+
+  await app.ledger.flush();
+  const profiles = await app.ledger.profiles();
+  if (profiles.size === 0) {
+    vscode.window.showInformationMessage(
+      'HirayaCoder: no outcomes recorded yet — the profile fills in as the agent works.'
+    );
+    return;
+  }
+
+  const threshold = app.settings.adaptation.hintThreshold;
+  const lines = [];
+  for (const profile of profiles.values()) {
+    const hints = earnedHints.select(profile, { threshold });
+    lines.push(`${profile.model}`);
+    lines.push(
+      `  ${profile.sessions} session(s), ${profile.steps} action(s), ${profile.failures} failed, ` +
+        `${profile.sessionsThatChanged} changed files, ${profile.declined} declined by you`
+    );
+
+    if (profile.stops.size > 0) {
+      const stops = [...profile.stops].sort((a, b) => b[1] - a[1]).map(([reason, n]) => `${reason} ×${n}`);
+      lines.push(`  Ended: ${stops.join(', ')}`);
+    }
+    if (profile.trips.size > 0) {
+      const trips = [...profile.trips].sort((a, b) => b[1] - a[1]).map(([code, n]) => `${code} ×${n}`);
+      lines.push(`  Guards tripped: ${trips.join(', ')}`);
+    }
+
+    if (hints.length === 0) {
+      lines.push(`  Hints in force: none (a hint is earned at ${threshold} trips of the same guard)`);
+    } else {
+      lines.push('  Hints in force, added to this model\'s prompt:');
+      for (const hint of hints) lines.push(`    - [${hint.key} ×${hint.count}] ${hint.text}`);
+    }
+    lines.push('');
+  }
+
+  const document = await vscode.workspace.openTextDocument({
+    content:
+      'HirayaCoder — what has been learned in this workspace\n\n' +
+      'Built only from what the tools and guards reported, never from what a model said\n' +
+      'about itself. Hints adjust how a model is prompted; they never affect permissions,\n' +
+      'path confinement, or the allow-list. Run "HirayaCoder: Reset Learned Adaptation" to\n' +
+      'discard all of it.\n\n' +
+      `${lines.join('\n')}`,
+    language: 'log',
+  });
+  await vscode.window.showTextDocument(document, { preview: true });
+}
+
+/**
+ * Throw away every recorded outcome, and with it every earned hint.
+ *
+ * @param {HirayaCoder} app
+ */
+async function resetAdaptationCommand(app) {
+  if (!app.ledger) {
+    vscode.window.showWarningMessage('HirayaCoder: no workspace folder is open, so there is nothing to reset.');
+    return;
+  }
+
+  const confirm = 'Reset';
+  const choice = await vscode.window.showWarningMessage(
+    'Discard everything HirayaCoder has learned about your models in this workspace? ' +
+      'Earned hints go with it. Your audit log and session memory are untouched.',
+    { modal: true },
+    confirm
+  );
+  if (choice !== confirm) return;
+
+  await app.ledger.clear();
+  logger.info('Outcome ledger cleared; every earned hint has been discarded.');
+  vscode.window.showInformationMessage('HirayaCoder: learned adaptation reset.');
+}
+
+/**
  * Open this session's memory file. It is deliberately plain text and
  * user-editable — being able to read and correct what the agent "remembers" is
  * the point of not storing it as JSON.
@@ -877,22 +1053,37 @@ async function showAuditLogCommand(app) {
  * @param {HirayaCoder} app
  */
 async function showMemoryCommand(app) {
-  if (!app.memory) {
+  const store = currentSessionMemory(app);
+  if (!store) {
     vscode.window.showWarningMessage('HirayaCoder: no workspace folder is open, so there is no session memory.');
     return;
   }
 
-  const entries = await app.memory.readAll();
+  const entries = await store.readAll();
   if (entries.length === 0) {
     vscode.window.showInformationMessage(
-      `HirayaCoder: session ${app.memory.sessionId} has no memory yet — it fills in as the agent works.`
+      `HirayaCoder: session ${store.sessionId} has no memory yet — it fills in as the agent works.`
     );
     return;
   }
 
-  await app.memory.flush();
-  const document = await vscode.workspace.openTextDocument(vscode.Uri.file(app.memory.filePath));
+  await store.flush();
+  const document = await vscode.workspace.openTextDocument(vscode.Uri.file(store.filePath));
   await vscode.window.showTextDocument(document, { preview: true });
+}
+
+/**
+ * The memory store the memory commands mean: the session the user is looking at,
+ * falling back to the one activation opened when no chat tab is in play.
+ *
+ * @param {HirayaCoder} app
+ * @returns {MemoryStore | null}
+ */
+function currentSessionMemory(app) {
+  if (lastActiveSessionId !== null && openChatTabs.has(lastActiveSessionId)) {
+    return app.memoryFor(lastActiveSessionId);
+  }
+  return app.memory;
 }
 
 /**
@@ -911,8 +1102,9 @@ async function clearMemoryCommand(app) {
     return;
   }
 
+  const current = currentSessionMemory(app);
   const items = sessions.map((session) => ({
-    label: `Session ${session.sessionId}${session.sessionId === app.memory.sessionId ? ' (current)' : ''}`,
+    label: `Session ${session.sessionId}${current && session.sessionId === current.sessionId ? ' (current)' : ''}`,
     description: `${session.entries} entr${session.entries === 1 ? 'y' : 'ies'}`,
     detail: `Last updated ${session.modifiedAt.toLocaleString()}`,
     sessionId: session.sessionId,
@@ -932,16 +1124,25 @@ async function clearMemoryCommand(app) {
   );
   if (choice !== confirm) return;
 
-  const store =
-    picked.sessionId === app.memory.sessionId ? app.memory : new MemoryStore(workspaceRoot(), picked.sessionId);
-  await store.clear();
+  // The cached store for that session, not a second one onto the same file. A fresh
+  // instance clears the file while the one a running tab holds keeps its own entries
+  // in memory — and writes them back on its next append, un-forgetting what the user
+  // just asked to forget.
+  await app.memoryFor(picked.sessionId).clear();
 
   // The conversation goes with it. Leaving the transcript behind would show the user
   // an exchange the agent has been made to forget — two different answers on screen to
   // "what happened in this session".
-  await new TranscriptStore(workspaceRoot(), picked.sessionId).clear();
-
+  //
+  // Through the open tab's own store when there is one, for the same reason as the
+  // memory above: a second instance deletes the file while the tab keeps its entries
+  // in memory and writes them back on the next message.
   const openTab = openChatTabs.get(picked.sessionId);
+  if (openTab && openTab.transcript) {
+    await openTab.transcript.clear();
+  } else {
+    await new TranscriptStore(root, picked.sessionId).clear();
+  }
   if (openTab) openTab.history = [];
 
   vscode.window.showInformationMessage(`HirayaCoder: cleared memory for session ${picked.sessionId}.`);
