@@ -84,6 +84,35 @@ describe('TodoList', () => {
     const todos = new TodoList(['One', 'Two', 'Three']);
     todos.finishCurrent('done');
     todos.finishCurrent('failed');
-    assert.deepStrictEqual(todos.progress(), { done: 1, failed: 1, skipped: 0, total: 3 });
+    assert.deepStrictEqual(todos.progress(), { done: 1, warned: 0, failed: 1, skipped: 0, total: 3 });
+  });
+
+  it('counts an item that landed without being closed off as completed', () => {
+    const todos = new TodoList(['One', 'Two']);
+    todos.finishCurrent('done-with-warning', 'changes landed, but the model never closed the item off');
+    todos.finishCurrent('done');
+
+    // The files changed, so the headline count says two. The caveat is carried
+    // separately rather than by calling finished work incomplete.
+    const progress = todos.progress();
+    assert.strictEqual(progress.done, 2);
+    assert.strictEqual(progress.warned, 1);
+    assert.strictEqual(progress.failed, 0);
+  });
+
+  it('describes a caveated item distinctly from a clean one', () => {
+    const todos = new TodoList(['One', 'Two']);
+    todos.finishCurrent('done-with-warning', 'the model never closed the item off');
+    todos.finishCurrent('done');
+
+    const described = todos.describe();
+    assert.match(described, /1\. One — done, with a caveat/);
+    assert.match(described, /2\. Two — done$/m);
+  });
+
+  it('renders a caveated item as ticked, so the model does not redo it', () => {
+    const todos = new TodoList(['One', 'Two']);
+    todos.finishCurrent('done-with-warning');
+    assert.match(todos.render(), /\[x\] 1\. One/);
   });
 });
