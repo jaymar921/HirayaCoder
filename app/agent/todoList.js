@@ -36,7 +36,13 @@ const MIN_ITEMS = 2;
 /** Above this, a small model loses the thread regardless of how the list is held. */
 const MAX_ITEMS = 6;
 
-/** @typedef {'pending' | 'active' | 'done' | 'failed' | 'skipped'} TodoStatus */
+/**
+ * `done-with-warning` means the work landed and no step failed, but the model never
+ * closed the item off. It counts as completed — the files changed — while staying
+ * visibly distinct from an item the run finished cleanly. See `judgeItem`.
+ *
+ * @typedef {'pending' | 'active' | 'done' | 'done-with-warning' | 'failed' | 'skipped'} TodoStatus
+ */
 
 /**
  * @typedef {object} TodoItem
@@ -124,17 +130,37 @@ class TodoList {
    */
   render() {
     const lines = this.items.map((item, index) => {
-      const mark = { done: '[x]', failed: '[!]', skipped: '[-]', active: '[>]', pending: '[ ]' }[item.status];
+      const mark = {
+        done: '[x]',
+        'done-with-warning': '[x]',
+        failed: '[!]',
+        skipped: '[-]',
+        active: '[>]',
+        pending: '[ ]',
+      }[item.status];
       const suffix = item.status === 'active' ? '   <- do this one now' : '';
       return `${mark} ${index + 1}. ${item.text}${suffix}`;
     });
     return `Your TODO list:\n${lines.join('\n')}`;
   }
 
-  /** @returns {{done: number, failed: number, skipped: number, total: number}} */
+  /**
+   * `done` counts `done-with-warning` too: the files changed, so calling it
+   * incomplete in the headline would understate what happened to the workspace. The
+   * separate count is there for anything that wants to say how many needed a caveat.
+   *
+   * @returns {{done: number, warned: number, failed: number, skipped: number, total: number}}
+   */
   progress() {
     const count = (status) => this.items.filter((item) => item.status === status).length;
-    return { done: count('done'), failed: count('failed'), skipped: count('skipped'), total: this.items.length };
+    const warned = count('done-with-warning');
+    return {
+      done: count('done') + warned,
+      warned,
+      failed: count('failed'),
+      skipped: count('skipped'),
+      total: this.items.length,
+    };
   }
 
   /**
@@ -144,9 +170,14 @@ class TodoList {
    */
   describe() {
     const lines = this.items.map((item, index) => {
-      const label = { done: 'done', failed: 'not completed', skipped: 'not attempted', active: 'unfinished', pending: 'not attempted' }[
-        item.status
-      ];
+      const label = {
+        done: 'done',
+        'done-with-warning': 'done, with a caveat',
+        failed: 'not completed',
+        skipped: 'not attempted',
+        active: 'unfinished',
+        pending: 'not attempted',
+      }[item.status];
       return `${index + 1}. ${item.text} — ${label}${item.outcome ? ` (${item.outcome})` : ''}`;
     });
     return lines.join('\n');
