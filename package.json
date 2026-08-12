@@ -1,0 +1,324 @@
+{
+  "name": "hirayacoder",
+  "displayName": "HirayaCoder",
+  "description": "A fully offline, privacy-first AI coding agent powered by your local Ollama instance. Agentic on every model — even 1B.",
+  "version": "0.1.0",
+  "publisher": "jaymar921",
+  "author": {
+    "name": "jaymar921",
+    "url": "https://github.com/jaymar921"
+  },
+  "license": "MIT",
+  "icon": "docs/assets/icon-128.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jaymar921/HirayaCoder.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jaymar921/HirayaCoder/issues"
+  },
+  "homepage": "https://github.com/jaymar921/HirayaCoder#readme",
+  "engines": {
+    "vscode": "^1.85.0",
+    "node": ">=18"
+  },
+  "categories": [
+    "AI",
+    "Programming Languages",
+    "Machine Learning",
+    "Other"
+  ],
+  "keywords": [
+    "ollama",
+    "offline",
+    "local llm",
+    "ai agent",
+    "privacy",
+    "copilot alternative",
+    "code assistant"
+  ],
+  "main": "./app/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "HirayaCoder can read, write, and delete workspace files and run permission-gated shell commands, so it requires a trusted workspace."
+    }
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "hirayacoder.openChat",
+        "title": "Open Chat",
+        "category": "HirayaCoder"
+      },
+      {
+        "command": "hirayacoder.selectModel",
+        "title": "Select Model",
+        "category": "HirayaCoder"
+      },
+      {
+        "command": "hirayacoder.refreshModels",
+        "title": "Refresh Installed Models",
+        "category": "HirayaCoder"
+      },
+      {
+        "command": "hirayacoder.showStatus",
+        "title": "Show Connection Status",
+        "category": "HirayaCoder"
+      },
+      {
+        "command": "hirayacoder.showLogs",
+        "title": "Show Logs",
+        "category": "HirayaCoder"
+      },
+      {
+        "command": "hirayacoder.permissions",
+        "title": "Permissions…",
+        "category": "HirayaCoder"
+      },
+      {
+        "command": "hirayacoder.showAuditLog",
+        "title": "Show Audit Log",
+        "category": "HirayaCoder"
+      },
+      {
+        "command": "hirayacoder.showMemory",
+        "title": "Show Session Memory",
+        "category": "HirayaCoder"
+      },
+      {
+        "command": "hirayacoder.clearMemory",
+        "title": "Clear Session Memory",
+        "category": "HirayaCoder"
+      },
+      {
+        "command": "hirayacoder.attachContextFile",
+        "title": "Attach Context File",
+        "category": "HirayaCoder"
+      },
+      {
+        "command": "hirayacoder.pullModel",
+        "title": "Pull a Model…",
+        "category": "HirayaCoder"
+      },
+      {
+        "command": "hirayacoder.explain",
+        "title": "Explain Selection",
+        "category": "HirayaCoder"
+      },
+      {
+        "command": "hirayacoder.refactor",
+        "title": "Refactor Selection",
+        "category": "HirayaCoder"
+      },
+      {
+        "command": "hirayacoder.document",
+        "title": "Document Selection",
+        "category": "HirayaCoder"
+      },
+      {
+        "command": "hirayacoder.fix",
+        "title": "Fix Selection",
+        "category": "HirayaCoder"
+      },
+      {
+        "command": "hirayacoder.generateTests",
+        "title": "Generate Tests for This File",
+        "category": "HirayaCoder"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "submenu": "hirayacoder.editorSubmenu",
+          "group": "navigation@9",
+          "when": "editorHasSelection"
+        }
+      ],
+      "hirayacoder.editorSubmenu": [
+        { "command": "hirayacoder.explain", "group": "1_read@1" },
+        { "command": "hirayacoder.refactor", "group": "2_write@1" },
+        { "command": "hirayacoder.document", "group": "2_write@2" },
+        { "command": "hirayacoder.fix", "group": "2_write@3" },
+        { "command": "hirayacoder.generateTests", "group": "2_write@4" }
+      ]
+    },
+    "submenus": [
+      {
+        "id": "hirayacoder.editorSubmenu",
+        "label": "HirayaCoder"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "hirayacoder.openChat",
+        "key": "ctrl+shift+h",
+        "mac": "cmd+shift+h"
+      }
+    ],
+    "configuration": {
+      "title": "HirayaCoder",
+      "properties": {
+        "hirayacoder.ollama.endpoint": {
+          "type": "string",
+          "default": "http://127.0.0.1:11434",
+          "markdownDescription": "Base URL of your local Ollama instance. **Must be a loopback address** (`127.0.0.1`, `localhost`, or `::1`) — HirayaCoder rejects any non-loopback host by design, so no code or context ever leaves your machine."
+        },
+        "hirayacoder.ollama.requestTimeoutMs": {
+          "type": "number",
+          "default": 300000,
+          "minimum": 1000,
+          "description": "How long to wait for a single Ollama request before aborting, in milliseconds."
+        },
+        "hirayacoder.model.selected": {
+          "type": "string",
+          "default": "",
+          "description": "The Ollama model HirayaCoder uses. Leave empty to auto-select the first installed model."
+        },
+        "hirayacoder.model.liteTierMaxParams": {
+          "type": "number",
+          "default": 3,
+          "minimum": 0,
+          "markdownDescription": "Models at or below this parameter count (in billions) always run the Tier B lite ReAct loop, **even if they advertise native tool-calling support**. Small models often claim tool support but are unreliable at multi-tool orchestration. Set to `0` to classify purely on advertised capability."
+        },
+        "hirayacoder.inlineCompletion.enabled": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Suggest ghost-text completions while you type. **Off by default**: completions run against your local model on every typing pause, and on CPU-only inference a suggestion often arrives after you have already typed the line. Turn it on if your machine has a GPU or you are running a small, fast model."
+        },
+        "hirayacoder.model.todoMinParams": {
+          "type": "number",
+          "default": 2,
+          "minimum": 0,
+          "markdownDescription": "Smallest model (in billions of parameters) allowed to break a multi-part request into a TODO list and work through it one item at a time. The model must **also** report Ollama's `thinking` capability. Models below this still handle multi-part requests in a single pass — a model that cannot finish one item reliably does worse, not better, when given a list of them."
+        },
+        "hirayacoder.model.tierOverrides": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": {
+            "type": "string",
+            "enum": [
+              "A",
+              "B"
+            ]
+          },
+          "markdownDescription": "Force a specific tier per model, bypassing auto-detection. Example: `{ \"llama3.2:1b\": \"A\" }`."
+        },
+        "hirayacoder.model.recommendAboveParams": {
+          "type": "number",
+          "default": 7,
+          "minimum": 0,
+          "description": "If an installed model exceeds this parameter count (in billions) and it is not the selected model, show a one-time, dismissible suggestion to switch to it."
+        },
+        "hirayacoder.thinkingCapacity": {
+          "type": "string",
+          "default": "medium",
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "enumDescriptions": [
+            "Smallest context and step budget — fastest, least memory recall.",
+            "Balanced step budget with one up-front planning pass and moderate memory recall.",
+            "Largest step budget, re-planning checkpoints, and the deepest memory recall."
+          ],
+          "description": "Controls step budget and how much persisted session memory is recalled per turn."
+        },
+        "hirayacoder.mode": {
+          "type": "string",
+          "default": "agent",
+          "enum": [
+            "agent",
+            "plan",
+            "ask"
+          ],
+          "enumDescriptions": [
+            "Full agentic loop — read, write, delete, and run scripts, subject to your permission settings.",
+            "Read-only exploration that produces a reviewable plan checklist. Write/delete/script tools are structurally unavailable.",
+            "Single-response Q&A with no agent loop and no tool calls at all."
+          ],
+          "description": "Default mode for new chat messages."
+        },
+        "hirayacoder.permissions.autoEdit": {
+          "type": "boolean",
+          "default": false,
+          "description": "When off (default), every file write and delete requires explicit approval. When on, proposed edits apply automatically — still logged, still path-guarded."
+        },
+        "hirayacoder.permissions.alwaysConfirmDeletes": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Ask before deleting a file **even when Auto Edit is on**. A wrong write is visible in the diff and recoverable; a wrong delete of an uncommitted file is not — and small models do misidentify delete targets. Turn this off only if you want Auto Edit to cover deletions too."
+        },
+        "hirayacoder.permissions.autoApproveScripts": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "When off (default), every shell command requires explicit approval. **Highest-risk setting** — commands still run only from the allow-listed binary set, but without a confirmation click."
+        },
+        "hirayacoder.scripts.allowedBinaries": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Extra programs the agent may run, added to the built-in allow-list (`node`, `npm`, `git`, `pytest`, …). The model can never extend this list — only you can. Commands that reach the network or publish code (`git push`, `npm publish`) always require confirmation regardless of this setting."
+        },
+        "hirayacoder.scripts.timeoutMs": {
+          "type": "number",
+          "default": 120000,
+          "minimum": 1000,
+          "description": "How long a single agent-run command may take before it is terminated."
+        },
+        "hirayacoder.security.protectedPaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            ".git",
+            ".hirayacoder"
+          ],
+          "markdownDescription": "Workspace-relative paths the agent may never write to or delete. Reads are still permitted. `.hirayacoder` is listed so the agent cannot rewrite its own audit log or memory."
+        },
+        "hirayacoder.statusBar.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the HirayaCoder status bar item (connection state, active model, and tier)."
+        },
+        "hirayacoder.logLevel": {
+          "type": "string",
+          "default": "info",
+          "enum": [
+            "error",
+            "warn",
+            "info",
+            "debug"
+          ],
+          "description": "Verbosity of the HirayaCoder output channel."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "lint": "eslint app test",
+    "test:unit": "mocha \"test/unit/**/*.test.js\"",
+    "test": "npm run lint && npm run test:unit",
+    "audit:security": "npm audit --omit=dev"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^20.19.9",
+    "@types/vscode": "^1.85.0",
+    "@vscode/test-electron": "^2.5.2",
+    "@vscode/vsce": "^3.6.0",
+    "eslint": "^9.34.0",
+    "eslint-plugin-no-unsanitized": "^4.1.2",
+    "eslint-plugin-security": "^3.0.1",
+    "mocha": "^11.7.1",
+    "sinon": "^21.0.0"
+  },
+  "dependencies": {}
+}
