@@ -4,10 +4,14 @@ The local Ollama models HirayaCoder has been developed and verified against, wha
 one exposed, and how they compare. Keep this current — most of the hard bugs in this
 project were found by running a real model, not by testing against a mock.
 
-## The test machine
+## The test machines
 
-Every timing in this document comes from one laptop, and the timings mean nothing
-without it:
+A timing means nothing without the machine that produced it. There are two, and both
+are kept: the laptop is the low-spec target the whole design is shaped around, and
+losing its numbers would lose the ability to tell whether a change helped the machine
+that needed it.
+
+**Machine A — laptop (the design constraint)**
 
 | | |
 |---|---|
@@ -18,7 +22,17 @@ without it:
 | OS | Windows 11 |
 | Ollama | 0.32.7, CPU-only |
 
-Two consequences shape every result below.
+**Machine B — desktop**
+
+| | |
+|---|---|
+| CPU | AMD Ryzen 5 3600X (6 cores / 12 threads) |
+| RAM | 32 GB DDR4-3200 |
+| GPU | NVIDIA GTX 1650 Super, **4 GB VRAM** |
+| OS | Windows 11 |
+| Ollama | 0.32.9, partial GPU offload |
+
+Two consequences shape every laptop result below.
 
 **Inference is CPU-bound and memory-bandwidth-bound.** LPDDR5-4800 shared between the
 CPU and the iGPU is the real ceiling — token generation on this class of machine
@@ -29,6 +43,44 @@ not merely twice as slow as a 2B one.
 Code, and a browser. Anything at or above ~9 GB on disk will page, and paging on this
 machine is worse than a slower model: during testing, running a 9.6 GB model made the
 whole system unresponsive enough that unrelated commands timed out.
+
+### What 4 GB of VRAM actually buys
+
+On the desktop, **VRAM is the constraint, not the 32 GB of system RAM.** Ollama offloads
+as many layers as fit and runs the rest on the CPU, so every model lands somewhere on a
+spectrum rather than being "on the GPU" or not. Measured with `ollama ps` during each
+run, at the default 8192-token context:
+
+| Model | On disk | Resident | CPU/GPU split |
+|---|---|---|---|
+| `qwen3.5:0.8b` | 1.0 GB | 1.6 GB | **100% GPU** |
+| `llama3.2:1b` | 1.3 GB | 2.4 GB | **100% GPU** |
+| `llama3.2:latest` | 2.0 GB | 3.4 GB | 32% / 68% |
+| `stable-code:latest` | 1.6 GB | 3.1 GB | 49% / 51% |
+| `qwen3.5:2b` | 2.7 GB | 3.0 GB | 39% / 61% |
+| `qwen3.5:4b` | 3.4 GB | 4.4 GB | 54% / 46% |
+| `gemma4:e2b` | 7.2 GB | 6.8 GB | 78% / 22% |
+| `gemma4:e4b` | 9.6 GB | 9.2 GB | 85% / 15% |
+
+Only the two smallest models fit entirely. Note that **resident size exceeds the
+on-disk size** — the KV cache for the context window is what pushes a 2.7 GB model to
+3.0 GB resident and past the 4 GB budget. That is why `qwen3.5:2b` is only 61% offloaded
+despite looking like it should fit.
+
+The speedups do not track the GPU share, which is the surprise worth recording:
+`gemma4:e2b` runs at 78% *CPU* and is still 4–7× faster than the laptop. Six full cores
+and dual-channel DDR4 are doing most of that work. **A dedicated GPU helps here, but on
+4 GB it is not the main reason this machine is faster.**
+
+**`OLLAMA_GPU_ONLY` is not a real Ollama variable.** It was set to `1` on this machine
+and changed nothing — `qwen3.5:2b` measured a byte-identical 39%/61% split before and
+after, and the name does not appear in `ollama serve`'s own list of environment
+variables. Ollama ignores unrecognised `OLLAMA_*` names silently, so there is no error
+to reveal the mistake. The variables that genuinely move the split at 4 GB are
+`OLLAMA_KV_CACHE_TYPE=q8_0` (roughly halves the cache), `OLLAMA_FLASH_ATTENTION=1`, and
+lowering `OLLAMA_CONTEXT_LENGTH` — the extension's own Tier B prompt target is about
+1.8k tokens, so the 8192 default is already more than it asks for. None of those were
+set for the numbers below.
 
 ---
 
@@ -97,6 +149,11 @@ failures are all timeouts, measure a write before suspecting the code.
 
 ## Results
 
+### Machine A — laptop (baseline, pre-TODO-list)
+
+**Do not overwrite this table.** It is the record of the machine the design targets,
+taken before the TODO path existed.
+
 | Model | Simple | Full | Time | Notes |
 |---|---|---|---|---|
 | `qwen3.5:0.8b` | **fails** | **fails** | 45–105s (0.8–1.8 min) | Emits a well-formed action every turn and still cannot finish one file. Its writes are refused for commenting out the code they were meant to edit |
@@ -107,14 +164,67 @@ failures are all timeouts, measure a write before suspecting the code.
 | `gemma4:e2b` forced to Tier B | passes | not run | ~183s (3.1 min) | Succeeds on the ReAct loop too |
 | `gemma4:e4b` | **not measured** | **not measured** | — | 9.6 GB will not run comfortably on 16 GB; see below |
 
-All timings are **pre-TODO-list** single-pass runs. The TODO path had not yet been
-built when they were taken, and re-measuring it is the open item below.
+All timings above are **pre-TODO-list** single-pass runs. The TODO path had not yet been
+built when they were taken.
 
-### Open: the TODO path is not yet benchmarked
+### Machine B — desktop (current, with the TODO path and all write guards)
 
-`gemma4:e4b` and the TODO-list runs for `qwen3.5:2b` and `qwen3.5:4b` are unmeasured.
-Both attempts were abandoned rather than recorded, because the machine had degraded to
-the point where the numbers would have described the laptop rather than the models:
+One sweep, one code state, 17 runs, nothing else running, 20s cool-down between runs.
+Each cell is judged by reading the file the model produced, not by whether the session
+reported success.
+
+| Model | Tier | Simple | Full | CPU/GPU | Verdict |
+|---|---|---|---|---|---|
+| `qwen3.5:0.8b` | B react | 11.5s | 7.9s | 100% GPU | **fails.** The simple run produced a correct file — the first time it ever has — but the full run wrote `"Hello " + (name ? name : '')`, which returns `"Hello "` for an empty name while a comment claims otherwise. Still below the floor |
+| `llama3.2:1b` | B react | 27.1s | 5.5s | 100% GPU | **fails.** Every write it attempted was refused by a guard; the workspace was left exactly as it started, which is the system working |
+| `qwen3.5:2b` | B react | 54.9s | 81.9s | 39% / 61% | **fails on correctness.** Both files keep their exports and both are wrong: the simple run returns `'Hello there'` for *every* non-numeric name, the full run returns `'Error: Invalid input'` for an empty one. It did edit the README correctly |
+| `qwen3.5:4b` | A native | 51.4s | 68.3s | 54% / 46% | **passes both.** Correct guard clause, README noted, declined delete reported honestly |
+| `gemma4:e2b` | A native | 43.2s | 25.5s | 78% / 22% | **passes both.** The best time-to-correctness on this machine |
+| `gemma4:e2b` forced Tier B | B react | — | 71.9s | 78% / 22% | **passes.** Same correct result on the ReAct loop, ~2.8× the Tier A time |
+| `gemma4:e4b` | A native | 79.0s | 63.0s | 85% / 15% | **passes both.** The model the laptop could not run at all |
+| `llama3.2:latest` | A native | 24.3s | 20.3s | 32% / 68% | **fails.** Reports `done` having never edited `greet.js`. The full run edited only the README |
+| `stable-code:latest` | B react | 37.1s | 36.5s | 49% / 51% | **passes with a caveat.** Correct behaviour and exports intact, but only after a guard refused its ESM rewrite; the result defines the function twice |
+
+Comparing the two machines on the rows the laptop measured:
+
+| Model | Task | Laptop | Desktop | Change |
+|---|---|---|---|---|
+| `qwen3.5:2b` | simple | ~125s (2.1 min) | 54.9s (0.9 min) | 2.3× |
+| `qwen3.5:4b` | full | 299s (5.0 min) | 68.3s (1.1 min) | **4.4×** |
+| `gemma4:e2b` | full | 180–200s (3.0–3.3 min) | 25.5s (0.4 min) | **7.1×** |
+| `gemma4:e2b` forced B | simple/full | ~183s (3.1 min) | 71.9s (1.2 min) | 2.5× |
+| `gemma4:e4b` | either | could not run | 63–79s (1.0–1.3 min) | — |
+
+**The four predictions made before this sweep, against what happened.**
+
+1. *"Models under ~4 GB should fit almost entirely on the GPU and speed up
+   dramatically."* **Half right.** Only `qwen3.5:0.8b` and `llama3.2:1b` fit entirely.
+   `qwen3.5:2b` at 2.7 GB on disk is 3.0 GB resident with its KV cache and lands at 61%.
+   The speedups are real but come from the whole machine, not the offload share.
+2. *"`gemma4:e2b` and `e4b` will only partially offload, expect a much smaller gain."*
+   **Wrong, and the most useful correction here.** They offload the *least* — 22% and
+   15% — and gained the *most*, 7.1× and "previously impossible". Six cores at 3.8 GHz
+   with dual-channel DDR4 beat four P-cores sharing LPDDR5 with an iGPU by more than the
+   GPU contributes at this VRAM size.
+3. *"32 GB finally makes `gemma4:e4b` runnable."* **Right, and it is genuinely usable** —
+   63–79s per task, correct on both, with no system-wide stall.
+4. *"A Ryzen 5 3600X is slower per-core than the i5-12450H; do not assume the desktop
+   wins on raw CPU."* **Wrong in effect.** Whatever the per-core deficit, more full
+   cores and better memory bandwidth won comfortably on the CPU-resident portion.
+
+**Correctness did not improve with the hardware, and in one case looked worse.**
+`qwen3.5:2b` passed the simple task on the laptop and produced plausible-but-wrong logic
+in both runs here. Nothing about a faster machine makes a 2B model reason better; this
+is ordinary run-to-run variance, and it is the reason the guards matter more than the
+timings. Every one of the 17 runs left the workspace either correct or untouched.
+
+### Open: the laptop's TODO-path numbers
+
+These rows are now measured on the desktop, but they remain **unmeasured on the
+laptop**, and that gap still matters: the laptop is the machine the design is for.
+Both attempts there were abandoned rather than recorded, because the machine had
+degraded to the point where the numbers would have described the laptop rather than the
+models:
 
 - A `qwen3.5:2b` turn that took **~40s** earlier in the day timed out at **300s**, with
   nothing else running.
@@ -252,6 +362,48 @@ loop was throwing away its own context.
   before the hint existed. The hint reduces how often a model goes looking for a way
   around a refusal; the allow-list is what stops it succeeding.
 
+**The desktop sweep** — eight models, sixteen runs, six damaged files, one green test
+suite. Every defect below was invisible to 565 passing unit tests, and all four write
+failures produce a file that *parses*.
+
+- **`llama3.2:1b` and `llama3.2:latest` deleted the exports.** Correct-looking logic,
+  no `module.exports`:
+  `function greet(name) { return name === '' ? 'Hello there' : name; }` — 67 bytes
+  against 80, so the shrink ratio cannot see it; brackets balanced; nothing commented
+  out. Every importer breaks. → a guard requiring a module's export style to survive
+  an edit.
+- **`stable-code:latest` switched the module system, twice.** A CommonJS module came
+  back as `export default greet;`. It still exports *something*, so a check for "does
+  this export anything" waves it through while `require()` breaks completely. → CommonJS
+  and ESM are tracked separately, and losing either is refused.
+- **`qwen3.5:2b` left the export pointing at nothing.** Asked only to handle an empty
+  name, it renamed the function and left the export list alone:
+  `const greeting = (name) => {…}; module.exports = { greet };`. The file parses, it has
+  `module.exports`, and `require('./greet').greet` is `undefined`. This is the renamed
+  twin of the commented-out module that kept its exports. → shorthand export names must
+  be defined somewhere in the file.
+- **`llama3.2:1b` deleted the implementation and kept the exports** — *after* two worse
+  attempts had already been refused, it wrote `module.exports = { name: '' };` and
+  nothing else. Export style survives, the entry has a colon so it is not a shorthand
+  name, 30 against 80 bytes clears the shrink ratio. → a file that used to define
+  something callable and now defines nothing is refused; `delete_file` exists for
+  removing a module, behind a confirmation this bypassed.
+- **`llama3.2:latest` typed a tool call instead of making one.** It ended a Tier A
+  session with `stopReason: done` whose entire summary was
+  `{"name": "edit_file", "parameters": {…}}`. No tool ran, nothing changed, and the user
+  was shown raw JSON as the report of a task that never happened — `edit_file` is not
+  one of this project's tools. → the native loop recognises a tool call written as text,
+  corrects the model, and stops honestly if it keeps narrating.
+- **Both planners invented work.** On the *single-file* task, `qwen3.5:2b` produced
+  "Read src/greet.js" / "Check if obsolete.js is still needed" / "Run tests to ensure…",
+  and `gemma4:e2b` produced "Open src/greet.js." / "Save changes to src/greet.js." —
+  three or four loops to make one edit, most of which could only re-read a file and be
+  stopped as repeating. → the TODO list is filtered for deliverables, and a task that
+  drops below two items runs as a single pass, which is what it should have been.
+
+The guards are worth the refusals they cost: given the first one, `stable-code:latest`
+read the message and resent a valid CommonJS module.
+
 **`gemma4:e2b`** — the first model to exercise the native tool loop end to end.
 - Reported "`src/obsolete.js` was deleted" in its final summary **after the user
   declined the confirmation**. The summary is the one part of a session the model
@@ -269,10 +421,14 @@ loop was throwing away its own context.
 
 ```bash
 ollama pull <model>
-node scratchpad/smoke-agent.js <model> agent auto simple   # single-file task
-node scratchpad/smoke-agent.js <model> agent auto full     # three-part task
-node scratchpad/smoke-agent.js <model> agent auto full B   # force Tier B
+node tools/bench-agent.js <model> agent auto simple   # single-file task
+node tools/bench-agent.js <model> agent auto full     # three-part task
+node tools/bench-agent.js <model> agent auto full B   # force Tier B
 ```
+
+Run one at a time with nothing else competing, and let the machine cool between long
+runs. Record `ollama ps` for each run — the CPU/GPU split explains a timing better than
+any other single number.
 
 Watch for, in order of how much trouble they cause:
 
@@ -292,7 +448,34 @@ worse than it started.
 
 ---
 
-## Recommendation for this machine
+## Recommendation for the desktop (Machine B)
+
+**Use `gemma4:e2b` as the daily driver.** It is the fastest model to a *correct* result
+on this machine — 25–43s — and the only one besides `qwen3.5:4b` that passed both tasks.
+Reach for `gemma4:e4b` when a task is genuinely hard; at 63–79s it costs little more and
+is the strongest model that runs here at all. `qwen3.5:4b` is the best sub-4 GB option
+if VRAM pressure matters.
+
+This inverts the laptop's ranking, and the reason is worth stating plainly: on the
+laptop the choice was governed by **what fits and how long you will wait**, so a 2B
+model won. Here, every model in the matrix answers in about a minute, so the constraint
+moves to **which one is right**, and the small models lose that comparison badly.
+`qwen3.5:2b` produced plausible-but-wrong logic in both of its runs.
+
+Do not read that as "the small models got worse". They are unchanged; the machine
+stopped making their speed advantage matter.
+
+**Two extension defaults are worth revisiting on hardware like this**, though neither is
+changed yet — both deserve their own measurement rather than an inference from these
+numbers:
+
+- `hirayacoder.inlineCompletion.enabled` is off by default because CPU inference is too
+  slow for it. With `qwen3.5:0.8b` and `llama3.2:1b` fully GPU-resident and answering in
+  7–27s for a whole agent session, single-turn completion may now be viable.
+- The TODO path's extra planning call cost a full inference on the laptop. At these
+  speeds that is a few seconds.
+
+## Recommendation for the laptop (Machine A)
 
 **Use `qwen3.5:2b` as the daily driver, and keep `llama3.2:1b` for quick single-file
 edits.** Reach for `gemma4:e2b` when a task genuinely spans several files and you are
@@ -323,14 +506,27 @@ at a time.
 A dedicated GPU with 8 GB+ of VRAM would change this ranking completely; on this
 machine, model size is the constraint that matters most.
 
+Machine B has since tested half of that claim. A **4 GB** card did change the ranking —
+but mostly by removing the waiting, and mostly through cores and memory bandwidth rather
+than the GPU itself. The models that gained most were the ones that offloaded *least*.
+
 ---
 
-## Recommendation
+## Across both machines
 
 `llama3.2:1b` remains the project's low-spec target and the design constraint that
-shapes everything — but it suits **focused single-file work**. Anything below it,
-such as `qwen3.5:0.8b`, is not usable for editing: it stays inside the guards but
-does not finish tasks. Multi-step, multi-file
-tasks want a larger model; `gemma4:e2b` is the best of those tested here, at roughly
-4–5× the latency. The `>7B installed` recommendation surfaced by
-`core/modelDiscovery.js` exists for exactly this trade-off.
+shapes everything — but it suits **focused single-file work**. Anything below it, such
+as `qwen3.5:0.8b`, is not usable for editing: it stays inside the guards but does not
+finish tasks. Multi-step, multi-file tasks want a larger model. The `>7B installed`
+recommendation surfaced by `core/modelDiscovery.js` exists for exactly this trade-off.
+
+**A faster machine is not a reason to stop supporting a slow one.** Nothing in the
+desktop numbers changes what a 1B model can do — it changes only how quickly it does
+it, and the sweep that produced those numbers also produced six damaged files from four
+different models. The guards, not the hardware, are what make a small model safe to run,
+and they earn their keep on both machines equally.
+
+The one thing hardware genuinely decides is **which constraint you are optimising
+against**. On 16 GB with no dGPU it is fit-and-latency, and a 2B model wins. With 32 GB
+and any dedicated GPU it is correctness, and the largest model that runs wins. Both
+tables above are true; they are answering different questions.
