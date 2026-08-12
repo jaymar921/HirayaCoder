@@ -448,9 +448,17 @@ select.control {
   width: 1.2em;
 }
 
-.todo-item.done .todo-text {
+.todo-item.done .todo-text,
+.todo-item.done-with-warning .todo-text {
   opacity: 0.65;
   text-decoration: line-through;
+}
+
+/* Struck through like any finished item, but the tick is tinted: the work landed and
+   the model never confirmed it. Enough to invite a look at the diff, not enough to
+   read as a failure. */
+.todo-item.done-with-warning .todo-mark {
+  color: var(--vscode-editorWarning-foreground, #d29922);
 }
 
 .todo-item.active .todo-text {
