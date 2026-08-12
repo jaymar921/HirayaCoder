@@ -7,6 +7,20 @@
 .gitignore
 .hirayacoder/**
 
+# Local scratch space. `.gitignore` covers it for git, and a `.vscodeignore` file does
+# NOT inherit those rules — so this was shipping inside the .vsix while being invisible
+# to `git status`: real evaluation transcripts, complete with the absolute paths of the
+# machine they were recorded on. Anything untracked is more likely to be private, not
+# less, so it is excluded first and explicitly.
+.ignore/**
+
+# Agent tooling for people working on this repo, not for people installing it.
+.claude/**
+
+# The benchmark corpus and its results. Development-only, in the same way `tools/**`
+# below is — nothing under `app/` reads either.
+benchmarks/**
+
 # Source-of-truth material that isn't shipped code.
 # NOTE: setup/prompts/** is deliberately NOT excluded — promptLoader.js reads the
 # model-facing prompts from there at runtime. Excluding them would silently drop the
