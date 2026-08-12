@@ -72,16 +72,16 @@ even if everything else passed.
 | CPU | Intel Core i5-12450H (4P + 4E) | AMD Ryzen 5 3600X (6C / 12T) | Apple M4 Pro, 14-core (10P + 4E) |
 | RAM | 16 GB LPDDR5-4800 | 32 GB DDR4-3200 | 24 GB **unified** |
 | GPU | Intel UHD — **not used** | NVIDIA GTX 1650 Super, **4 GB VRAM** | 20-core, shares the 24 GB |
-| Inference | CPU-only | Partial GPU offload | *measurement in progress* |
+| Inference | CPU-only | Partial GPU offload | **100% GPU, every model** |
 
 **Machine A is the design constraint.** Every guard and budget in this project exists
 because of something that happened there.
 
-**Machine C is being measured now** and has no rows below yet. Unified memory removes
-the split that shapes Machine B — the GPU addresses the same 24 GB the CPU does — so
-every model in the matrix is expected to be GPU-resident, a configuration neither other
-machine can produce. Numbers will be published when they exist rather than predicted
-here.
+**Machine C settles what unified memory buys.** Because the GPU addresses the same 24 GB
+the CPU does, **every model in the matrix ran fully GPU-resident** — all nineteen runs,
+including `gemma4:e4b` at 9.5 GB resident, which Machine A could not load at all. No
+model split, so this sweep never found the boundary. Model size stops being a constraint
+on this machine.
 
 ### Results
 
@@ -97,9 +97,25 @@ here.
 | `ornith:9b` | A | B | 64.5s | 91.9s | 63% / 37% | **passes both** |
 | `gemma4:e4b` | A | B | 79.0s | 63.0s | 85% / 15% | **passes both** — the strongest that runs here |
 
-Every row above is Machine B. Machine A, for comparison, on the rows it measured:
+Every row above is Machine B. The same sweep on **Machine C** (M4 Pro, 24 GB unified):
+
+| Model | Tier | Machine | Simple | Full | Resident | CPU/GPU | Verdict |
+|---|---|---|---|---|---|---|---|
+| `qwen3.5:0.8b` | B lite | C | 6.1s | 2.8s | 1.1 GB | 100% GPU | **fails** — below the usable floor |
+| `llama3.2:1b` | B lite | C | 23.8s | 8.5s | 1.5 GB | 100% GPU | **fails** — every write refused by a guard, workspace untouched |
+| `qwen3.5:2b` | B lite | C | 8.4s | 25.5s | 2.4 GB | 100% GPU | **passes both** — disagrees with Machine B; run-to-run variance, not hardware |
+| `stable-code:latest` | B lite | C | 7.9s | 5.9s | 2.9 GB | 100% GPU | passes with a caveat — correct code, but the full run never noted the README |
+| `llama3.2:latest` | A | C | 14.3s | 7.0s | 2.5 GB | 100% GPU | **fails** — reported success having edited nothing |
+| `qwen3.5:4b` | A | C | 12.6s | 19.9s | 3.1 GB | 100% GPU | **passes both** |
+| `gemma4:e2b` | A | C | 14.3s | 12.4s | 7.0 GB | 100% GPU | **passes both** — fastest to a correct result |
+| `ornith:9b` | A | C | 17.8s | 29.0s | 5.9 GB | 100% GPU | **passes both** — tightest diff in the sweep |
+| `gemma4:e4b` | A | C | 16.9s | 23.6s | 9.5 GB | 100% GPU | **passes both** — the correctness ceiling |
+
+Machine C is **2.1×–6.5× faster than Machine B** on the shared rows, and **correctness
+did not change**: nine of the ten rows reach the same verdict on both machines, and tier
+assignment is identical on all ten. Machine A, for comparison, on the rows it measured:
 `qwen3.5:2b` ~125s simple, `qwen3.5:4b` 299s full, `gemma4:e2b` 180–200s full, and
-`gemma4:e4b` could not run at all on 16 GB. Machine C is pending. Full detail, including
+`gemma4:e4b` could not run at all on 16 GB. Full detail, including
 what each model broke and how, is in
 [MODELS.md](https://github.com/jaymar921/HirayaCoder/blob/main/doc/MODELS.md).
 
@@ -115,10 +131,17 @@ reaching for on harder work.
 single-file edits, and reach for `gemma4:e2b` when a task genuinely spans several files
 and you're willing to wait.
 
-The two rankings differ, and the reason is worth stating: on a slow machine the choice is
+**On Apple Silicon with 24 GB unified memory: use `gemma4:e2b`** — it is both the fastest
+correct result (12.4s on the full task) and correct on both tasks, so there is no
+trade-off to make. Reach for `gemma4:e4b` on harder work; at 23.6s and fully
+GPU-resident it is an everyday option here rather than a stretch.
+
+The rankings differ, and the reason is worth stating: on a slow machine the choice is
 governed by **what fits and how long you'll wait**, so a small model wins. When every
 model answers in about a minute, the constraint becomes **which one is right**, and the
-small models lose that comparison badly.
+small models lose that comparison badly. On a Mac with unified memory *neither*
+constraint binds — everything fits and everything is fast — so you pick on correctness
+alone and the latency follows.
 
 **Avoid below ~1B.** `qwen3.5:0.8b` stays inside the guards and still cannot finish a
 single-file edit.
