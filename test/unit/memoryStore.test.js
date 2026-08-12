@@ -14,6 +14,7 @@ const {
   MAX_FILE_BYTES,
   MAX_ENTRY_CHARS,
 } = require('../../app/core/memoryStore');
+const { TranscriptStore } = require('../../app/core/transcriptStore');
 
 describe('memoryStore.neutralize', () => {
   it('leaves an ordinary note untouched', () => {
@@ -229,6 +230,53 @@ describe('MemoryStore', () => {
       await third.flush();
 
       assert.strictEqual(nextSessionId(root), 4);
+    });
+
+    it('does not hand out a number a transcript already claims', async () => {
+      // The reported bug. Both of a session's files are written lazily, and a session
+      // that produced no *remembered note* has only a transcript. Scanning memory alone
+      // handed out 3, then 3 again, then 3 again — so "New session" either revealed the
+      // tab already open on 3 or opened a "new" session onto the previous
+      // conversation's transcript.
+      const memory = new MemoryStore(root, 1);
+      await memory.append('a');
+      await memory.flush();
+
+      const transcript = new TranscriptStore(root, 3);
+      transcript.append('user', 'a conversation that never became a note');
+      await transcript.flush();
+
+      assert.strictEqual(nextSessionId(root), 4);
+    });
+
+    it('does not hand out a number an open tab has reserved', async () => {
+      // A tab opened a moment ago and not yet typed into has written nothing at all.
+      assert.strictEqual(nextSessionId(root, { reserved: [1, 2] }), 3);
+      assert.strictEqual(nextSessionId(root, { reserved: [] }), 1);
+      assert.strictEqual(nextSessionId(root, { reserved: [/** @type {any} */ ('x'), null] }), 1);
+    });
+
+    it('lists a session that has been talked to but has no notes yet', async () => {
+      const transcript = new TranscriptStore(root, 2);
+      transcript.append('user', 'hello');
+      await transcript.flush();
+
+      const sessions = listSessions(root);
+      assert.deepStrictEqual(sessions.map((s) => s.sessionId), [2]);
+      assert.strictEqual(sessions[0].entries, 0, 'no notes, but a real session');
+    });
+
+    it('lists a session with both files once', async () => {
+      const memory = new MemoryStore(root, 1);
+      await memory.append('a note');
+      await memory.flush();
+      const transcript = new TranscriptStore(root, 1);
+      transcript.append('user', 'hello');
+      await transcript.flush();
+
+      const sessions = listSessions(root);
+      assert.strictEqual(sessions.length, 1);
+      assert.strictEqual(sessions[0].entries, 1);
     });
 
     it('lists existing sessions with their sizes', async () => {

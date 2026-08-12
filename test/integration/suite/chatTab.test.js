@@ -204,6 +204,26 @@ describe('chat tab', () => {
     assert.match(init.history[1].text, /Hello, World!/);
   });
 
+  it('gives each session a translator bound to the memory that session recalls', async () => {
+    // The bug this pins: there was one `app.translator`, built for whichever session
+    // activation happened to open, while every tab got its own store to recall from.
+    // A tab therefore read its own memory file and wrote its new notes into a
+    // different one — open session 2 while activation had reserved session 4, and
+    // session 2's work was remembered into `session4.txt`.
+    stub = await startStubOllama({ replies: ['ok'] });
+    const app = await useEndpoint(stub.endpoint);
+
+    const translator = app.translatorFor(930);
+    assert.ok(translator, 'no translator was built for the session');
+    assert.strictEqual(
+      translator.memoryStore,
+      app.memoryFor(930),
+      'the session would have written its notes into another session’s memory'
+    );
+    assert.strictEqual(translator.memoryStore.sessionId, 930);
+    assert.notStrictEqual(app.translatorFor(931).memoryStore, translator.memoryStore);
+  });
+
   it('writes an audit record for the action it took', async () => {
     const auditPath = path.join(workspaceRoot(), '.hirayacoder', 'audit.log');
     assert.ok(fs.existsSync(auditPath), 'no audit log was written for a completed turn');

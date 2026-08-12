@@ -1,10 +1,5 @@
 'use strict';
 
-/* eslint-disable security/detect-non-literal-fs-filename --
- * Every fs call in this module targets `this.filePath`, which is the VS Code
- * workspace root joined with a fixed filename. No part of it derives from model
- * output or from a tool argument. */
-
 /**
  * Append-only local record of every agent-initiated action.
  *
@@ -12,30 +7,25 @@
  * it exists so the user can answer "what did this thing actually do?" after the
  * fact, including in auto modes where nothing prompted them at the time.
  *
- * Three properties the implementation guarantees:
+ * The file plumbing — serialized appends, rotation, tolerant reads, and the rule that
+ * a logging failure never fails the action being logged — lives in `utils/jsonlLog`
+ * and is shared with `core/outcomeLedger`. What stays here is the part that is
+ * specific to an audit record:
  *
- *  - **Serialized.** Appends run through a promise chain, so concurrent tool calls
- *    can't interleave partial lines and corrupt the JSONL.
  *  - **Redacted.** Entries pass through `secretsScanner` before hitting disk. A
  *    command like `npm config set _authToken=…` would otherwise persist a live
  *    credential in plain text.
- *  - **Non-fatal.** A logging failure never blocks or fails the action being
- *    logged; it degrades to a warning.
+ *  - **Append-only.** Deliberately no `clear()`. The ledger next door has one because
+ *    a learned profile must be discardable; a record of what was done to the user's
+ *    files must not be erasable from inside the extension.
  *
  * @module security/auditLog
  */
 
-const fs = require('fs');
 const path = require('path');
 
-const logger = require('../utils/logger');
+const { JsonlLog, MAX_LOG_BYTES, MAX_FIELD_CHARS } = require('../utils/jsonlLog');
 const { redact } = require('./secretsScanner');
-
-/** Rotate once the log passes this size, keeping one previous generation. */
-const MAX_LOG_BYTES = 5 * 1024 * 1024;
-
-/** Values longer than this are truncated — the log is a record, not a backup. */
-const MAX_FIELD_CHARS = 2000;
 
 /**
  * @typedef {object} AuditEntry
@@ -50,7 +40,7 @@ const MAX_FIELD_CHARS = 2000;
  * @property {object} [detail]      Anything else worth recording.
  */
 
-class AuditLog {
+class AuditLog extends JsonlLog {
   /**
    * @param {string} workspaceRoot
    * @param {object} [opts]
@@ -58,32 +48,11 @@ class AuditLog {
    * @param {number} [opts.maxBytes]
    */
   constructor(workspaceRoot, opts = {}) {
+    super(path.join(workspaceRoot, opts.fileName || path.join('.hirayacoder', 'audit.log')), {
+      maxBytes: opts.maxBytes,
+      label: 'audit log',
+    });
     this.root = workspaceRoot;
-    this.filePath = path.join(workspaceRoot, opts.fileName || path.join('.hirayacoder', 'audit.log'));
-    this.maxBytes = opts.maxBytes || MAX_LOG_BYTES;
-    /** @type {Promise<void>} Tail of the serialized write chain. */
-    this._queue = Promise.resolve();
-    this._enabled = true;
-  }
-
-  /**
-   * Record an action. Resolves once the line is durably queued; callers may await
-   * it, but nothing depends on it succeeding.
-   *
-   * @param {AuditEntry} entry
-   * @returns {Promise<void>}
-   */
-  append(entry) {
-    if (!this._enabled) return Promise.resolve();
-
-    const line = JSON.stringify(this._sanitize(entry));
-    this._queue = this._queue
-      .then(() => this._write(line))
-      .catch((err) => {
-        // Never let an audit failure take down the action it was describing.
-        logger.warn(`Audit log write failed: ${/** @type {Error} */ (err).message}`);
-      });
-    return this._queue;
   }
 
   /**
@@ -91,7 +60,7 @@ class AuditLog {
    *
    * @param {AuditEntry} entry
    * @returns {object}
-   * @private
+   * @protected
    */
   _sanitize(entry) {
     const safe = {
@@ -130,83 +99,6 @@ class AuditLog {
     }
 
     return safe;
-  }
-
-  /**
-   * @param {string} value
-   * @returns {string}
-   * @private
-   */
-  _bound(value) {
-    const text = String(value);
-    return text.length > MAX_FIELD_CHARS ? `${text.slice(0, MAX_FIELD_CHARS)}…[truncated]` : text;
-  }
-
-  /**
-   * @param {string} line
-   * @returns {Promise<void>}
-   * @private
-   */
-  async _write(line) {
-    await fs.promises.mkdir(path.dirname(this.filePath), { recursive: true });
-    await this._rotateIfNeeded();
-    await fs.promises.appendFile(this.filePath, `${line}\n`, 'utf8');
-  }
-
-  /**
-   * @returns {Promise<void>}
-   * @private
-   */
-  async _rotateIfNeeded() {
-    try {
-      const stats = await fs.promises.stat(this.filePath);
-      if (stats.size < this.maxBytes) return;
-      await fs.promises.rename(this.filePath, `${this.filePath}.1`);
-      logger.info('Rotated the HirayaCoder audit log.');
-    } catch (err) {
-      const code = /** @type {NodeJS.ErrnoException} */ (err).code;
-      if (code !== 'ENOENT') throw err;
-    }
-  }
-
-  /**
-   * Read entries back, newest last. Malformed lines are skipped rather than
-   * throwing — the file is treated as untrusted input, since a user or another
-   * process may have edited it.
-   *
-   * @param {number} [limit]
-   * @returns {Promise<object[]>}
-   */
-  async read(limit = 200) {
-    let raw;
-    try {
-      raw = await fs.promises.readFile(this.filePath, 'utf8');
-    } catch (err) {
-      if (/** @type {NodeJS.ErrnoException} */ (err).code === 'ENOENT') return [];
-      throw err;
-    }
-
-    const entries = [];
-    for (const line of raw.split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      try {
-        entries.push(JSON.parse(trimmed));
-      } catch {
-        /* skip a corrupted line */
-      }
-    }
-    return entries.slice(-limit);
-  }
-
-  /** Resolves once every queued write has landed. */
-  flush() {
-    return this._queue;
-  }
-
-  /** @param {boolean} enabled */
-  setEnabled(enabled) {
-    this._enabled = Boolean(enabled);
   }
 }
 

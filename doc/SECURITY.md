@@ -27,6 +27,8 @@ See `/security/threat-model.md` for the full matrix. Key threats considered:
 | Malicious/compromised npm dependency | Minimal dependency surface; every dependency justified in the threat model; `npm audit` run in CI. |
 | Webview XSS | Strict CSP (`default-src 'none'`, nonce'd scripts, no remote resources); no `innerHTML` with unsanitized model output — rendered via safe DOM APIs / sanitized markdown renderer. |
 | Malformed/adversarial JSON from a small model breaking the parser | `outputParser.js` validates against a fixed schema; any failure is treated as "no action," never as a crash or an auto-apply. |
+| The learning layer relaxing a guard it keeps seeing refused | Adaptation adjusts what a model is *told*, never what it is *allowed to do*: no permission decision, path check, or allow-list entry takes any input from `outcomes.jsonl`. `earnedHints.NEVER_EARNED` puts the sharpest case in code — a repeatedly declined action can never promote a hint, because a system that can learn "the user approves every time, so stop asking" is a data-loss incident with a progress bar. |
+| Prompt injection *laundered through the outcome ledger* | The ledger is a file on disk and therefore untrusted input, the same as session memory. It is answered structurally rather than by sanitizing: the ledger contributes only counts, and every earned hint is a constant in `agent/earnedHints`. `promptRouter` re-checks each hint against the catalogue before rendering it, so a hand-edited or corrupted ledger can change *which* hint appears — never introduce a sentence of its own. The record shape is an allow-list of enum-shaped fields, so no path, command, or file content is ever stored there to leak in the first place. |
 
 ## What HirayaCoder Will Never Do
 

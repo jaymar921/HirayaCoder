@@ -15,6 +15,7 @@ const { AgentSession, ChangeSet } = require('../../app/agent/agentSession');
 const { PermissionGate } = require('../../app/security/permissionGate');
 const { PermissionModes } = require('../../app/security/permissionModes');
 const { AuditLog } = require('../../app/security/auditLog');
+const { OutcomeLedger } = require('../../app/core/outcomeLedger');
 
 const TIER_B = { tier: 'B', strategy: 'react', label: 'Lite', model: 'llama3.2:1b' };
 const TIER_A = { tier: 'A', strategy: 'native', label: 'Agentic', model: 'qwen2.5-coder:7b' };
@@ -69,12 +70,14 @@ describe('AgentSession', () => {
 
     return new AgentSession({
       client: /** @type {any} */ (opts.client),
-      model: 'test-model',
+      model: opts.model || 'test-model',
       capability: opts.capability || TIER_B,
       gate,
       workspaceRoot: root,
       thinkingCapacity: opts.thinkingCapacity || 'medium',
       sessionId: '1',
+      ledger: opts.ledger,
+      adaptation: opts.adaptation,
     });
   }
 
@@ -358,6 +361,166 @@ describe('AgentSession', () => {
       await makeSession({ client, capability: TIER_A, thinkingCapacity: 'low' }).run('Something');
       assert.ok(Array.isArray(client.bodies[0].tools));
       assert.ok(client.bodies[0].tools.length > 0);
+    });
+  });
+
+  describe('learning from outcomes', () => {
+    /** @type {OutcomeLedger} */
+    let ledger;
+
+    beforeEach(() => {
+      ledger = new OutcomeLedger(root);
+    });
+
+    /** @param {string} model @param {string} code @param {number} times */
+    async function seedTrips(model, code, times) {
+      for (let i = 0; i < times; i += 1) {
+        await ledger.recordStep({
+          model,
+          tier: 'B',
+          thinking: 'medium',
+          mode: 'agent',
+          sessionId: '1',
+          action: 'write_file',
+          ok: false,
+          code,
+        });
+      }
+      await ledger.flush();
+    }
+
+    /** The system prompt of the first turn of a run. */
+    const firstSystemPrompt = (client) => client.bodies[0].messages[0].content;
+
+    it('records what the guards reported, not what the model claimed', async () => {
+      // The model finishes by announcing success for a command that was never run.
+      // The ledger has to disagree with it — that is the entire point of taking the
+      // signal from evidence.
+      const client = scriptedClient([
+        json({ thought: 'clean up', action: 'run_script', command: 'rm -rf src' }),
+        json({ action: 'done', summary: 'Cleaned up the source directory.' }),
+      ]);
+      await makeSession({ client, ledger, autoApproveScripts: true }).run('Clean up');
+      await ledger.flush();
+
+      const records = await ledger.read();
+      const step = records.find((record) => record.kind === 'step');
+      assert.strictEqual(step.ok, false);
+      assert.strictEqual(step.code, 'BINARY_NOT_ALLOWED');
+      assert.strictEqual(step.action, 'run_script');
+      assert.ok(!('command' in step), 'the ledger keeps no command text');
+
+      const session = records.find((record) => record.kind === 'session');
+      assert.strictEqual(session.stopReason, 'done', 'how the loop ended is still recorded honestly');
+      assert.strictEqual(session.changed, false, 'nothing was changed, whatever the summary says');
+      assert.strictEqual(session.steps, 1);
+    });
+
+    it('records the tier and thinking capacity the run actually used', async () => {
+      const client = scriptedClient([json({ action: 'done', summary: 'Nothing to do.' })]);
+      await makeSession({ client, ledger, capability: TIER_A, thinkingCapacity: 'low' }).run('Look around');
+      await ledger.flush();
+
+      const [session] = await ledger.read();
+      assert.strictEqual(session.tier, 'A');
+      assert.strictEqual(session.thinking, 'low');
+      assert.strictEqual(session.model, 'test-model');
+    });
+
+    it('records a declined action as a decision by the user', async () => {
+      const client = scriptedClient([
+        json({ action: 'delete_file', path: 'src/old.js' }),
+        json({ action: 'done', summary: 'Removed it.' }),
+      ]);
+      await makeSession({ client, ledger, autoEdit: false, answer: false }).run('Delete the legacy file');
+      await ledger.flush();
+
+      const step = (await ledger.read()).find((record) => record.kind === 'step');
+      assert.strictEqual(step.decision, 'declined');
+      assert.ok(fs.existsSync(path.join(root, 'src', 'old.js')));
+    });
+
+    it('adds a hint to the prompt once the same guard has been tripped enough times', async () => {
+      await seedTrips('test-model', 'SUSPICIOUS_TRUNCATION', 3);
+
+      const client = scriptedClient([json({ action: 'done', summary: 'Done.' })]);
+      await makeSession({ client, ledger }).run('Update the app');
+
+      assert.match(firstSystemPrompt(client), /must hold the entire file/);
+    });
+
+    it('adds nothing while the model is still below the threshold', async () => {
+      await seedTrips('test-model', 'SUSPICIOUS_TRUNCATION', 2);
+
+      const client = scriptedClient([json({ action: 'done', summary: 'Done.' })]);
+      await makeSession({ client, ledger }).run('Update the app');
+
+      assert.ok(!/must hold the entire file/.test(firstSystemPrompt(client)));
+    });
+
+    it('keeps hints earned by one model out of another model\'s prompt', async () => {
+      // The extension learns about a model, not about a workspace. A hint earned by a
+      // 1B model would be noise in a 32B model's prompt.
+      await seedTrips('other-model', 'SUSPICIOUS_TRUNCATION', 9);
+
+      const client = scriptedClient([json({ action: 'done', summary: 'Done.' })]);
+      await makeSession({ client, ledger }).run('Update the app');
+
+      assert.ok(!/must hold the entire file/.test(firstSystemPrompt(client)));
+    });
+
+    it('holds the preamble steady for every turn of one message', async () => {
+      // A session does not adapt to itself mid-run: hints are read once, before the
+      // first turn, so the prompt cannot shift underneath a task in progress.
+      await seedTrips('test-model', 'BINARY_NOT_ALLOWED', 3);
+
+      const client = scriptedClient([
+        json({ thought: 'look', action: 'list_files' }),
+        json({ thought: 'read', action: 'read_file', path: 'src/app.js' }),
+        json({ action: 'done', summary: 'Done.' }),
+      ]);
+      await makeSession({ client, ledger }).run('Have a look around');
+
+      const prompts = client.bodies.map((body) => body.messages[0].content);
+      assert.strictEqual(new Set(prompts).size, 1, 'the system prompt changed mid-session');
+      assert.match(prompts[0], /allow-listed programs/);
+    });
+
+    it('records nothing and hints nothing when adaptation is switched off', async () => {
+      await seedTrips('test-model', 'SUSPICIOUS_TRUNCATION', 5);
+      const before = (await ledger.read()).length;
+
+      const client = scriptedClient([json({ action: 'done', summary: 'Done.' })]);
+      await makeSession({ client, ledger, adaptation: { enabled: false } }).run('Update the app');
+      await ledger.flush();
+
+      assert.ok(!/must hold the entire file/.test(firstSystemPrompt(client)));
+      assert.strictEqual((await ledger.read()).length, before, 'off means nothing is written either');
+    });
+
+    it('runs normally with no ledger at all', async () => {
+      // No workspace means no ledger, and that is an ordinary state rather than a
+      // degraded one.
+      const client = scriptedClient([
+        json({ action: 'write_file', path: 'src/app.js', code: 'export function app() {\n  return 3;\n}\n' }),
+        json({ action: 'done', summary: 'Updated it.' }),
+      ]);
+      const result = await makeSession({ client, autoEdit: true }).run('Update the app');
+
+      assert.strictEqual(result.stopReason, 'done');
+      assert.match(fs.readFileSync(path.join(root, 'src', 'app.js'), 'utf8'), /return 3/);
+    });
+
+    it('starts the session even when the ledger cannot be read', async () => {
+      const broken = new OutcomeLedger(root);
+      broken.read = async () => {
+        throw new Error('EIO');
+      };
+
+      const client = scriptedClient([json({ action: 'done', summary: 'Done.' })]);
+      const result = await makeSession({ client, ledger: broken }).run('Update the app');
+
+      assert.strictEqual(result.stopReason, 'done');
     });
   });
 });

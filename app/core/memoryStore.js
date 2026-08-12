@@ -36,6 +36,9 @@ const fs = require('fs');
 const path = require('path');
 
 const logger = require('../utils/logger');
+// A session's identity is not owned by its memory file — see `nextSessionId`. The
+// transcript module keeps its own path shape rather than having it re-derived here.
+const { listSessionIds: listTranscriptSessions } = require('./transcriptStore');
 
 /** Beyond this, the file is treated as corrupt rather than read into a prompt. */
 const MAX_FILE_BYTES = 256 * 1024;
@@ -226,35 +229,13 @@ function supersededBy(entries, entry) {
 }
 
 /**
- * Discover the next free session number in a workspace.
- *
- * @param {string} workspaceRoot
- * @returns {number}
- */
-function nextSessionId(workspaceRoot) {
-  const dir = path.join(workspaceRoot, '.hirayacoder', 'memory');
-  let highest = 0;
-  try {
-    for (const name of fs.readdirSync(dir)) {
-      const match = /^session(\d+)\.txt$/.exec(name);
-      if (match) highest = Math.max(highest, Number(match[1]));
-    }
-  } catch (err) {
-    if (/** @type {NodeJS.ErrnoException} */ (err).code !== 'ENOENT') {
-      logger.warn(`Could not scan memory directory: ${/** @type {Error} */ (err).message}`);
-    }
-  }
-  return highest + 1;
-}
-
-/**
- * List sessions that already have memory on disk, so the chat tab can offer to
- * resume one instead of always starting fresh.
+ * Sessions that have left a memory file behind.
  *
  * @param {string} workspaceRoot
  * @returns {Array<{sessionId: number, entries: number, modifiedAt: Date}>}
+ * @private
  */
-function listSessions(workspaceRoot) {
+function listMemoryFiles(workspaceRoot) {
   const dir = path.join(workspaceRoot, '.hirayacoder', 'memory');
   /** @type {Array<{sessionId: number, entries: number, modifiedAt: Date}>} */
   const sessions = [];
@@ -272,7 +253,80 @@ function listSessions(workspaceRoot) {
       logger.warn(`Could not list memory sessions: ${/** @type {Error} */ (err).message}`);
     }
   }
-  return sessions.sort((a, b) => a.sessionId - b.sessionId);
+  return sessions;
+}
+
+/**
+ * Discover the next free session number in a workspace.
+ *
+ * ## Why this looks at more than memory files
+ *
+ * Both of this session registry's files are written *lazily*. A memory file appears
+ * only once something is worth remembering, and a transcript only once a message is
+ * sent — so a session can exist, be open in a tab, and have nothing on disk at all.
+ *
+ * Scanning memory alone therefore recycled numbers, and the symptom was reported from
+ * real use: sessions 1 and 2 had memory, "New session" handed out 3, and — because
+ * session 3 produced no *remembered note* — the next "New session" handed out 3 again,
+ * and again. It either revealed the tab already open on 3 (so the command appeared to
+ * do nothing) or opened a "new" session that loaded the previous conversation's
+ * transcript. Two different conversations then shared one memory file.
+ *
+ * A number is free only when nothing claims it — on disk, or in the caller's own
+ * process. `reserved` carries the second kind: a tab opened a moment ago and not yet
+ * typed into owns its number as firmly as one with a memory file, and without it
+ * clicking "New session" twice in a row handed out the same number twice.
+ *
+ * @param {string} workspaceRoot
+ * @param {{reserved?: number[]}} [opts] Session ids already spoken for in memory.
+ * @returns {number}
+ */
+function nextSessionId(workspaceRoot, opts = {}) {
+  let highest = 0;
+  for (const session of listMemoryFiles(workspaceRoot)) {
+    highest = Math.max(highest, session.sessionId);
+  }
+  for (const session of listTranscriptSessions(workspaceRoot)) {
+    highest = Math.max(highest, session.sessionId);
+  }
+  for (const id of opts.reserved || []) {
+    if (Number.isInteger(id)) highest = Math.max(highest, id);
+  }
+  return highest + 1;
+}
+
+/**
+ * List every session this workspace holds, so the chat tab can offer to resume one
+ * instead of always starting fresh.
+ *
+ * A session with a conversation but no notes yet is a real session and is listed:
+ * leaving it out is what let its number be handed out a second time, and it also hid a
+ * conversation the user could see in their own transcript.
+ *
+ * `entries` counts remembered notes, so it is legitimately 0 for a session that has
+ * been talked to but has produced nothing worth recalling.
+ *
+ * @param {string} workspaceRoot
+ * @returns {Array<{sessionId: number, entries: number, modifiedAt: Date}>}
+ */
+function listSessions(workspaceRoot) {
+  /** @type {Map<number, {sessionId: number, entries: number, modifiedAt: Date}>} */
+  const byId = new Map();
+
+  for (const session of listMemoryFiles(workspaceRoot)) byId.set(session.sessionId, session);
+
+  for (const { sessionId, modifiedAt } of listTranscriptSessions(workspaceRoot)) {
+    const existing = byId.get(sessionId);
+    if (!existing) {
+      byId.set(sessionId, { sessionId, entries: 0, modifiedAt });
+      continue;
+    }
+    // Either file being touched means the session was used, so the newer wins — a
+    // transcript is usually more recent than the notes distilled from it.
+    if (modifiedAt > existing.modifiedAt) existing.modifiedAt = modifiedAt;
+  }
+
+  return [...byId.values()].sort((a, b) => a.sessionId - b.sessionId);
 }
 
 class MemoryStore {

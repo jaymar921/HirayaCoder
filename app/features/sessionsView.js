@@ -69,7 +69,10 @@ class SessionItem extends vscode.TreeItem {
     super(`Session ${session.sessionId}`, vscode.TreeItemCollapsibleState.None);
 
     this.sessionId = session.sessionId;
-    this.description = `${session.entries} note${session.entries === 1 ? '' : 's'}`;
+    // A session with a conversation but nothing worth remembering yet is listed, so
+    // "0 notes" is a state this has to read well in.
+    this.description =
+      session.entries === 0 ? 'no notes yet' : `${session.entries} note${session.entries === 1 ? '' : 's'}`;
     this.tooltip = `Last updated ${session.modifiedAt.toLocaleString()}`;
     this.iconPath = new vscode.ThemeIcon('comment-discussion');
     this.contextValue = 'hirayacoder.session';

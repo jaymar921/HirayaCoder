@@ -142,11 +142,18 @@ Everything lives under `.hirayacoder/` in the workspace, and nothing leaves the 
 | Path | Contents |
 |---|---|
 | `.hirayacoder/memory/session<N>.txt` | Plain-text session memory, one file per chat tab |
+| `.hirayacoder/transcripts/session<N>.json` | The visible conversation, restored when a tab is reopened |
 | `.hirayacoder/audit.log` | Append-only JSONL: action, decision, mode, timestamp |
+| `.hirayacoder/outcomes.jsonl` | Append-only JSONL: model, tier, action, guard code, stop reason — counts only, no paths or content |
 | `.hirayacoder/context-files/` | Index of files attached with `+` |
 
 Both `.git` and `.hirayacoder` are write- and delete-protected, so the agent cannot
 rewrite its own audit log or memory.
+
+The first two files are written **lazily** — memory only once there is something worth
+remembering, a transcript only once a message is sent — so neither on its own says which
+sessions exist. `nextSessionId` consults both, plus the ids of tabs open in the window,
+because a session with nothing on disk yet still owns its number.
 
 ---
 

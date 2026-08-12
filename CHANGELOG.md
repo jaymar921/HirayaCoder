@@ -5,7 +5,114 @@ All notable changes to HirayaCoder are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] — 2026-08-12
+
+### Added — the extension now learns from what actually happened
+
+The first two slices of `doc/SELF-OPTIMIZATION.md`. HirayaCoder owns no weights — the
+model lives in Ollama's process, and there is no tensor, gradient, or training loop in
+this repository — so adaptation happens in context and configuration, or not at all.
+
+**An outcome ledger** at `.hirayacoder/outcomes.jsonl` (`core/outcomeLedger.js`). Every
+session already produced an honest, local, evidence-based record — guard refusals with
+error codes, stop reasons, whether the change set grew, whether the user declined — and
+nothing consumed any of it. Now one record lands per action and one per message: model,
+tier, thinking capacity, mode, action, guard code, stop reason, whether anything
+changed. Taken from what the tools and guards reported, never from the model's account
+of itself, for the reason `judgeItem` exists.
+
+The record shape is an allow-list of enum-shaped fields, so **no path, command, or file
+content can reach the file** even if a later caller passes one. The audit log already
+answers "what was touched"; this only has to answer "how often does this model trip this
+guard".
+
+**Earned corrective hints** (`agent/earnedHints.js`). The per-error hints in `reactLoop`
+were hardcoded, identical for every model, and purely reactive — the guard fires, the
+hint is shown, the next session starts over knowing nothing. Now, when one model trips
+the same guard three times in a workspace, the matching correction is promoted into that
+model's prompt preamble. A model that keeps dropping exports begins its next session
+already being told to keep them. The model does not learn; the extension learns what to
+tell it.
+
+**What this may not do, enforced in code rather than promised in a comment:**
+
+- Adaptation never weakens a guard, a permission prompt, or path confinement. It tunes
+  what a model is told. No permission decision takes any input from the ledger.
+- A repeatedly declined action can never earn a hint (`earnedHints.NEVER_EARNED`). A
+  system that can learn "the user approves every time, so stop asking" is a data-loss
+  incident with a progress bar.
+- The ledger contributes counts; every hint is a constant in the source, and
+  `promptRouter` re-checks each one against the catalogue before rendering it. A
+  corrupted or hand-edited ledger can change which hint appears, never what it says.
+- Hints are capped at three, most-tripped first — the preamble competes with the task
+  for a Tier B budget of ~1800 tokens.
+
+**Show Learned Adaptation** prints every model's record and the hints in force;
+**Reset Learned Adaptation** discards all of it. `hirayacoder.adaptation.enabled` turns
+recording and hinting off together, and `hirayacoder.adaptation.hintThreshold` moves the
+three.
+
+### Changed — one implementation of the append-only JSONL discipline
+
+`utils/jsonlLog.js` now holds the serialized appends, rotation, bounded fields, and
+tolerant reads that `security/auditLog.js` had, and the audit log extends it. The
+properties are load-bearing — a torn line breaks every later read — and having a second
+copy in the ledger was the way to get one of them subtly wrong. The audit log keeps its
+own redaction and deliberately has no `clear()`: a learned profile must be discardable,
+a record of what was done to the user's files is not the extension's to erase.
+
+### Fixed — "New session" kept handing out the same session number
+
+Reported from real use on 0.1.0: sessions 1 and 2 existed, **New session** opened
+session 3, and every **New session** after that gave session 3 again. With the tab still
+open the command appeared to do nothing at all; with it closed, the "new" session came
+up holding the previous conversation.
+
+Both of a session's files are written lazily — a memory file appears only once something
+is worth remembering, a transcript only once a message is sent — and the session
+registry looked at memory files alone. A session that had been talked to but had
+produced no *remembered note* left no trace it could see, so its number was free again.
+Two different conversations then shared one memory file and one transcript.
+
+A number is now free only when nothing claims it: no memory file, no transcript, and no
+open tab. The last one matters on its own — clicking **New session** twice before typing
+anything used to produce the same number twice, because nothing had reached disk yet.
+
+Sessions with a conversation but no notes yet are now listed in the picker and the
+activity bar, where they read as "no notes yet" rather than being invisible.
+
+### Fixed — a chat tab wrote its notes into another session's memory
+
+Every tab was given its own memory store to recall from and a *single, shared*
+translator to write through — and that translator was bound to whichever session the
+extension opened at activation. So a tab read its own memory file and stored its new
+notes in a different one. Open session 2 from the activity bar while activation had
+reserved session 4, and session 2's work was remembered into `session4.txt`: notes that
+session would never recall, mixed into the recall of one that never did the work.
+
+Translators are now built per session, over the same cached store the agent recalls
+from. `app.translator` and `refreshTranslator()` are gone; `app.translatorFor(sessionId)`
+replaces them and reads the selected model at the moment a turn starts, so there is no
+cached copy to leave pointing at the previous model.
+
+### Fixed — clearing a session's memory did not clear what an open tab held
+
+**Clear Session Memory** built a second `MemoryStore` (and a second `TranscriptStore`)
+onto the files of a session that might be open. The file was deleted while the tab's own
+store kept its entries in memory and wrote them back on its next message, un-forgetting
+what the user had just asked it to forget. Both now clear through the open tab's own
+stores when it is open.
+
+### Fixed — "Show Session Memory" and editor actions could target the wrong session
+
+**Show Session Memory** always opened the session activation happened to reserve, which
+is the right answer only for the first tab of a window. It now follows the tab the user
+last had focused. Likewise **Explain**/**Refactor**/**Fix**/**Document** sent their task
+to the first tab in the map rather than the visible one, so with several sessions open a
+refactor could land in a conversation the user was not watching; they now go to the tab
+last focused. An editor action that starts a session also registers it the same way the
+command does — the duplicated wiring it used had already drifted, and never refreshed the
+activity bar.
 
 ### Fixed — a Java project could be written but never compiled
 
