@@ -148,8 +148,25 @@ jobs:
           EOF
           fi
 
-          gh release create "${GITHUB_REF_NAME}" "$VSIX" \
-            --title "HirayaCoder ${GITHUB_REF_NAME}" \
-            --notes-file notes.md \
-            --generate-notes \
-            $FLAGS
+          # A release for this tag may already exist — someone drafted it by hand, or an
+          # earlier run of this job got part-way. `gh release create` fails outright in
+          # that case ("a release with the same tag name already exists"), which leaves
+          # the build with nowhere to go even though the artifact is fine.
+          #
+          # Attaching the file is the part that matters and is safe to repeat. The notes
+          # are deliberately left alone when the release already exists: whoever created
+          # it may have written them on purpose, and overwriting someone's release notes
+          # to insert a checksum is not a trade worth making. The checksum is printed
+          # here instead, so it is recoverable from the log.
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            echo "::notice::Release ${GITHUB_REF_NAME} already exists — attaching the .vsix to it."
+            gh release upload "${GITHUB_REF_NAME}" "$VSIX" --clobber
+            if [ -n "$FLAGS" ]; then gh release edit "${GITHUB_REF_NAME}" $FLAGS; fi
+            echo "::notice::Existing release notes were left unchanged. SHA-256 ${SHA256}"
+          else
+            gh release create "${GITHUB_REF_NAME}" "$VSIX" \
+              --title "HirayaCoder ${GITHUB_REF_NAME}" \
+              --notes-file notes.md \
+              --generate-notes \
+              $FLAGS
+          fi
