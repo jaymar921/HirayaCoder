@@ -133,6 +133,35 @@ The parts that decide what the agent is *allowed* to do.
 
 ---
 
+## Adaptation: the extension learns, the model doesn't
+
+HirayaCoder owns no weights — the model lives in Ollama's process — so it adapts in
+context rather than in parameters. Every session's outcomes are recorded to
+`.hirayacoder/outcomes.jsonl`: which model, which tier, which action, which guard
+refused it, how the session ended, whether anything actually changed. The signal is
+taken from what the guards reported, never from the model's account of itself.
+
+When one model trips the same guard three times in a workspace, the matching correction
+is promoted into that model's prompt preamble. A model that keeps dropping exports
+starts its next session already being told to keep them. The model does not learn; the
+extension learns what to tell it.
+
+Three properties hold it in place:
+
+- **It cannot touch safety.** Adaptation tunes what a model is told, never what it is
+  allowed to do. Permissions, path confinement, and the allow-list take no input from
+  the ledger, and a repeatedly declined action can never earn a hint — a system that can
+  learn "the user approves every time, so stop asking" is a data-loss incident with a
+  progress bar.
+- **It cannot write your project into a prompt.** The ledger stores counts and error
+  codes, never paths, commands, or file contents. Hints are constants in the source; the
+  ledger only selects among them.
+- **It is visible and disposable.** **Show Learned Adaptation** prints every model's
+  record and the hints currently in force; **Reset Learned Adaptation** discards all of
+  it. `hirayacoder.adaptation.enabled` turns off recording and hinting together.
+
+---
+
 ## Models
 
 **Select Model** lists what you have installed with a tier badge; **Refresh Installed
