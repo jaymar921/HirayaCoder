@@ -66,6 +66,32 @@ const PLACEHOLDER_COMMENT =
 const ONLY_LOGS = /^[\s{}]*(?:console\.log\([^)]*\);?|print\([^)]*\);?|pass|\.\.\.|)\s*$/;
 
 /**
+ * A promise, in a string the program prints, that the feature does not exist yet.
+ *
+ * The comment-based check above misses this entirely, and it is what a model actually
+ * produced when asked for a working TODO app — twice, in two languages, from the same
+ * conversation:
+ *
+ *     case 1 -> System.out.println("Add feature coming soon.");
+ *     case 2 -> System.out.println("Remove feature coming soon.");
+ *
+ * Both files compiled. Both ran. `TodoManager` was written correctly, with working
+ * add/remove/modify, and `TodoApp` never constructed one — so the menu drew, took input,
+ * and announced that the three features the prompt had asked for were not ready. The
+ * Python conversion reproduced it faithfully, because it was a faithful conversion.
+ *
+ * Nothing else in the system could see this. There is no comment to find, no function is
+ * empty, the change set grew, the compile succeeded, and every guard in `writeFile` is
+ * about a file being *damaged* rather than being hollow. The only tell is the program
+ * saying so out loud, which is why this matches the sentence rather than the structure.
+ *
+ * Deliberately not matching a bare "TODO" in a string: a todo *application* prints the
+ * word constantly, and that is the exact program this was found in.
+ */
+const PLACEHOLDER_LITERAL =
+  /["'`][^"'`\n]*\b(?:coming\s+soon|not\s+(?:yet\s+)?implemented|implement(?:ation)?\s+pending|to\s+be\s+implemented|feature\s+pending|placeholder)\b[^"'`\n]*["'`]/i;
+
+/**
  * Function bodies in the content that contain a deferral comment and no real work.
  *
  * Not a parser, and it does not need to be — it is looking for a specific, blatant
@@ -126,6 +152,31 @@ function placeholderBodies(content) {
 }
 
 /**
+ * Strings in the content that announce the feature is not built.
+ *
+ * File-level rather than body-scoped, unlike `placeholderBodies`, because that is where
+ * the failure lives: the Java version put these inside a `switch` inside a `main` full
+ * of real menu-drawing code, so nothing structural about the enclosing function looked
+ * wrong. What is wrong is that the program tells its user the feature is missing.
+ *
+ * @param {string} content
+ * @returns {string[]}
+ */
+function placeholderLiterals(content) {
+  const text = String(content || '');
+  /** @type {string[]} */
+  const found = [];
+
+  for (const line of text.split('\n')) {
+    const match = PLACEHOLDER_LITERAL.exec(line);
+    if (match) found.push(match[0].trim());
+    if (found.length >= 5) break;
+  }
+
+  return found;
+}
+
+/**
  * @typedef {object} CompletionContext
  * @property {string} task            What was asked, verbatim.
  * @property {boolean} changed        Did the change set grow during this run?
@@ -159,6 +210,19 @@ function objectTo(context) {
 
   for (const file of context.written || []) {
     if (typeof file.after !== 'string') continue;
+
+    const announced = placeholderLiterals(file.after);
+    if (announced.length > 0) {
+      return (
+        `You replied "done", but ${file.path} tells the user the feature is missing: ` +
+        `${announced.slice(0, 3).join(', ')}. ` +
+        'A program that prints "coming soon" instead of doing the thing has not done the thing. ' +
+        `Send write_file for ${file.path} again with those branches calling the real code — the ` +
+        'complete file, every line. If the logic lives in another class or module, construct it ' +
+        'and call it; writing it and never using it is the same as not writing it.'
+      );
+    }
+
     const placeholders = placeholderBodies(file.after);
     if (placeholders.length === 0) continue;
 
@@ -173,4 +237,10 @@ function objectTo(context) {
   return null;
 }
 
-module.exports = { objectTo, placeholderBodies, PLACEHOLDER_COMMENT };
+module.exports = {
+  objectTo,
+  placeholderBodies,
+  placeholderLiterals,
+  PLACEHOLDER_COMMENT,
+  PLACEHOLDER_LITERAL,
+};

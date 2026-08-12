@@ -550,7 +550,11 @@ async function run(options) {
   }
 
   logger.info(`ReAct session ended: ${stopReason} after ${steps.length} step(s).`);
-  return { steps, summary, stopReason };
+  // `doneChallenged` travels out because the challenge is only half the mechanism. The
+  // other half is telling the user when it went unanswered: a model that finishes,
+  // is told nothing changed, and finishes again has produced a report the user must
+  // not read as success.
+  return { steps, summary, stopReason, doneChallenged };
 }
 
 module.exports = {

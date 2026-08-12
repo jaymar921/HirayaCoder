@@ -282,7 +282,8 @@ async function run(options) {
   }
 
   logger.info(`Native tool session ended: ${stopReason} after ${steps.length} step(s).`);
-  return { steps, summary, stopReason };
+  // See the note in `reactLoop`: an unanswered challenge has to reach the user.
+  return { steps, summary, stopReason, doneChallenged };
 }
 
 module.exports = { run, callKey, looksLikeNarratedToolCall, REPEAT_LIMIT, NARRATED_CALL_LIMIT };

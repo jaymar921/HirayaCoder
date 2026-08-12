@@ -25,7 +25,7 @@ describe('intentRouter.classify', () => {
     });
 
     it('recognises pleasantries', () => {
-      for (const text of ['thanks', 'thank you', 'salamat', 'ok', 'cool', 'nice one', 'got it', 'bye']) {
+      for (const text of ['thanks', 'thank you', 'salamat po', 'thanks a lot', 'cool', 'nice one', 'bye']) {
         assert.strictEqual(intentOf(text), 'chat', `"${text}" was treated as work`);
       }
     });
@@ -90,10 +90,31 @@ describe('intentRouter.classify', () => {
       const long = 'ok so the next thing is that the priority field needs to persist between sessions somehow';
       assert.strictEqual(intentOf(long), 'task');
     });
+
+    it('does not read a pleasantry prefix as the whole message', () => {
+      // The regression, verbatim. `"okay proceed"` matched a pleasantry at the start and
+      // was under the old six-word cap, so it went to chat — where the model had no
+      // tools, replied with the complete HTML in a code fence, and wrote "Saved to
+      // todoapp.html." Nothing was saved, and the user asked three more times.
+      assert.strictEqual(intentOf('okay proceed'), 'task');
+      assert.strictEqual(intentOf('okay, proceed'), 'task');
+      assert.strictEqual(intentOf('thanks, now the other file'), 'task');
+      assert.strictEqual(intentOf('cool do the same for python'), 'task');
+    });
+
+    it('treats bare assent as work, never as small talk', () => {
+      // Every one of these routinely means "carry on with what I just asked for", and
+      // answering one conversationally drops the request. Routing them to the agent
+      // costs a loop — and since the conversation is in its context, the loop can see
+      // what it is being told to carry on with.
+      for (const text of ['ok', 'okay', 'sure', 'yes', 'yeah', 'alright', 'go ahead', 'proceed']) {
+        assert.strictEqual(intentOf(text), 'task', `"${text}" was treated as small talk`);
+      }
+    });
   });
 
   it('explains itself, for the log', () => {
-    assert.match(classify('hello').reason, /greeting/);
+    assert.match(classify('hello').reason, /pleasantries/);
     assert.match(classify('fix it').reason, /instruction/);
   });
 });

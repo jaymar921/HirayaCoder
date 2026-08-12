@@ -78,6 +78,62 @@ describe('completionCheck.objectTo', () => {
       assert.match(objection, /never written/);
     });
 
+    it('challenges a program that announces the feature is missing', () => {
+      // What the agent actually produced when asked for a working TODO app, twice, in
+      // two languages from one conversation. Both files compiled and ran. `TodoManager`
+      // was written correctly with real add/remove/modify, and `TodoApp` never
+      // constructed one — so the menu drew, took input, and said the features were not
+      // ready. No comment to find, no empty function, change set grew, compile clean:
+      // nothing else in the system could see it.
+      const java = `
+public class TodoApp {
+    public static void main(String[] args) {
+        switch (choice) {
+            case 1 -> System.out.println("Add feature coming soon.");
+            case 2 -> System.out.println("Remove feature coming soon.");
+            case 4 -> System.out.println("Goodbye!");
+        }
+    }
+}`;
+
+      const objection = objectTo({
+        task: 'create a java todo app that can add, remove and modify todos',
+        changed: true,
+        written: [{ path: 'src/main/java/TodoApp.java', after: java }],
+      });
+
+      assert.ok(objection, 'a menu of "coming soon" was accepted as a working app');
+      assert.match(objection, /coming soon/);
+      assert.match(objection, /writing it and never using it/);
+    });
+
+    it('says the same about the faithful Python translation of it', () => {
+      const python = `
+def main():
+    if choice == 1:
+        print("Add feature coming soon.")
+    elif choice == 2:
+        print("Remove feature coming soon.")`;
+
+      assert.ok(
+        objectTo({ task: 'convert the java todo app to python', changed: true, written: [{ path: 'TodoApp.py', after: python }] })
+      );
+    });
+
+    it('does not object to a todo app merely for saying "TODO"', () => {
+      // The program this was found in prints the word constantly. Matching a bare TODO
+      // in a string would object to every correct version of it.
+      const real = `
+print("=== Simple TODO App ===")
+print("1. Add TODO")
+manager.add(text)`;
+
+      assert.strictEqual(
+        objectTo({ task: 'create a todo app', changed: true, written: [{ path: 'TodoApp.py', after: real }] }),
+        null
+      );
+    });
+
     it('leaves real code alone, TODO comments and all', () => {
       // `// TODO` is an ordinary thing to leave in working code. A check that objected
       // to it would object to half the source files ever written.

@@ -251,6 +251,30 @@ describe('AgentSession', () => {
       assert.strictEqual(result.changeSet.isEmpty(), true);
     });
 
+    it('tells the user plainly when the challenge went unanswered', async () => {
+      // Accepting the second `done` is right; reporting it as an ordinary success is
+      // not. Observed on `ornith:9b`: asked four times to create todoapp.html, the
+      // entire summary the user got back was the word "Finished."
+      const client = scriptedClient([json({ action: 'done', summary: 'Finished.' })]);
+      const session = makeSession({ client, autoEdit: true });
+
+      const result = await session.run('create todoapp.html', { mode: 'agent' });
+
+      assert.match(result.summary, /Nothing in the project changed/i);
+      assert.match(result.summary, /not of what happened/i);
+    });
+
+    it('adds no such note to a session that actually did the work', async () => {
+      const client = scriptedClient([
+        json({ thought: 'write it', action: 'write_file', path: 'out.html', code: '<h1>Todo</h1>\n' }),
+        json({ action: 'done', summary: 'Created out.html.' }),
+      ]);
+
+      const result = await makeSession({ client, autoEdit: true }).run('create out.html', { mode: 'agent' });
+
+      assert.ok(!/Nothing in the project changed/i.test(result.summary));
+    });
+
     it('does not challenge a request that only asked to look at something', async () => {
       const client = scriptedClient([json({ action: 'done', summary: 'It exports one function.' })]);
       const session = makeSession({ client });

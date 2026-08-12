@@ -915,15 +915,20 @@ async function permissionsCommand(app) {
   const items = [
     {
       label: state.autoEdit ? '$(check) Auto Edit' : 'Auto Edit',
-      description: state.autoEdit ? 'currently on' : 'currently off — edits require approval',
-      detail: 'Applies proposed file writes and deletes without a confirmation click. Path guards still apply.',
+      description: state.autoEdit ? 'currently on' : 'currently off — every write asks first',
+      // Names the prompt it governs. The two toggles are independent and each covers
+      // exactly one kind of action, which was not obvious from the labels: a user who
+      // turned on Auto Approve Running Scripts reasonably expected the Create/Apply
+      // dialogs to stop, and they are the other toggle's.
+      detail:
+        'Covers file writes and deletes — the Create/Apply prompts. Does NOT cover terminal commands; those are Auto Approve Running Scripts, below. Path guards and folder-delete confirmations still apply.',
       action: 'toggleEdit',
     },
     {
       label: state.autoApproveScripts ? '$(check) Auto Approve Running Scripts' : 'Auto Approve Running Scripts',
-      description: state.autoApproveScripts ? 'currently on' : 'currently off — commands require approval',
+      description: state.autoApproveScripts ? 'currently on' : 'currently off — every command asks first',
       detail:
-        'Runs proposed commands without a click. Highest-risk setting. Commands that reach the network or publish code still always ask.',
+        'Covers terminal commands only — npm, javac, python. Does NOT cover file writes; those are Auto Edit, above. Highest-risk setting. Commands that reach the network or publish code still always ask.',
       action: 'toggleScripts',
     },
     {

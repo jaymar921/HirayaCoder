@@ -80,18 +80,56 @@ function requiresChange(text) {
 const NAMES_A_FILE = /(?:[\w-]+\.[a-z0-9]{1,6}\b|\b[\w-]+\/[\w./-]+)/i;
 
 /**
- * Openings that are social rather than instructional.
+ * Words that carry no request on their own — greetings, thanks, sign-offs, and the
+ * filler that travels with them.
  *
- * Tagalog is here because the user base for this extension is, and "kumusta" arriving as
- * a `read_file` loop is the same bug in a second language. The welcome screen already
- * greets in it.
+ * ## Why this is a vocabulary and not a prefix match
+ *
+ * The first version matched a pleasantry at the *start* of a message and capped the
+ * length at six words. `"okay proceed"` satisfied both, and the consequences were
+ * exactly what this module's own header warns about: routed to chat, the model had no
+ * tools, so it replied with the complete HTML file in a code fence and the sentence
+ * "Saved to `todoapp.html`." Nothing was saved. The user asked three more times.
+ *
+ * A social word at the front of a message says nothing about the rest of it. So the
+ * test is now that the *whole* message is social — every token has to be in here — and
+ * anything left over means there is a request attached.
+ *
+ * Tagalog is included because the user base for this extension is, and "salamat"
+ * arriving as a `read_file` loop is the same bug in a second language.
  */
-const GREETING =
-  /^\s*(?:hi|hey|hello|yo|sup|hiya|howdy|kumusta|kamusta|musta|good\s+(?:morning|afternoon|evening|day)|greetings)\b/i;
+const SOCIAL_WORDS = new Set([
+  // Greetings.
+  'hi', 'hey', 'hello', 'yo', 'sup', 'hiya', 'howdy', 'greetings',
+  'kumusta', 'kamusta', 'musta', 'good', 'morning', 'afternoon', 'evening', 'day',
+  // Tagalog pronouns and particles, which is what a greeting in it is mostly made of:
+  // "kamusta ka", "salamat na lang", "sige po". Safe to include even though some are
+  // common words, because a message only counts as social when *every* word is here.
+  'ka', 'kayo', 'na', 'lang', 'din', 'rin', 'sige', 'oo',
+  // Thanks and sign-offs.
+  'thanks', 'thank', 'ty', 'salamat', 'maraming', 'cheers', 'bye', 'goodbye',
+  'night', 'later', 'ingat',
+  // Acknowledgements that cannot mean "go ahead" — see the note below.
+  'cool', 'nice', 'great', 'awesome', 'perfect', 'excellent', 'understood', 'noted',
+  'lol', 'haha', 'nvm', 'nevermind',
+  // Filler that rides along: "thanks a lot", "no worries", "nice one", "see you".
+  'a', 'lot', 'so', 'much', 'very', 'the', 'for', 'that', 'it', 'one', 'you', 'u',
+  'no', 'worries', 'problem', 'never', 'mind', 'see', 'ya', 'there', 'man', 'dude',
+  'bro', 'sir', 'maam', "ma'am", 'po', 'help', 'got',
+]);
 
-/** Closings and acknowledgements. Nothing follows these that needs a tool. */
-const PLEASANTRY =
-  /^\s*(?:thanks|thank\s+you|salamat|ty|ok|okay|k|cool|nice|great|awesome|perfect|got\s+it|understood|sounds\s+good|no\s+worries|never\s?mind|nvm|bye|goodbye|see\s+you|good\s?night)\b/i;
+/**
+ * Assent words are deliberately **absent** from `SOCIAL_WORDS`.
+ *
+ * "ok", "okay", "sure", "yes", "yeah", "alright", "go ahead", "proceed" — every one of
+ * them routinely means *carry on with what I just asked for*, and treating one as small
+ * talk drops a request silently. Routing them to the agent instead costs a loop that
+ * reads a file, and since 0.4.0 the loop has the conversation in its context, so it can
+ * see what it is being told to carry on with.
+ *
+ * Documented as a constant so the omission reads as a decision rather than an oversight.
+ */
+const ASSENT_IS_NOT_SOCIAL = ['ok', 'okay', 'k', 'sure', 'yes', 'yeah', 'yep', 'alright', 'right', 'go', 'proceed'];
 
 /**
  * Questions about the assistant itself.
@@ -117,8 +155,23 @@ const ABOUT_THE_ASSISTANT =
 const ABOUT_THE_CONVERSATION =
   /\b(?:do|can|could)\s+you\s+(?:still\s+)?(?:remember|recall)\b|\b(?:our|the)\s+(?:first|previous|last|earlier)\s+(?:conversation|chat|session|message)\b|\bwhat\s+(?:did|have)\s+(?:i|we)\s+(?:say|ask|talk|discuss)/i;
 
-/** Beyond this many words, a message is doing more than being polite. */
-const MAX_PLEASANTRY_WORDS = 6;
+/**
+ * Is every word in this message a social one?
+ *
+ * @param {string} message
+ * @returns {boolean}
+ */
+function isPurelySocial(message) {
+  const words = message
+    .toLowerCase()
+    // Punctuation and emoji go, so "thanks!" and "hi 👋" read as their words alone.
+    .replace(/[^\p{L}\p{N}'\s]/gu, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (words.length === 0) return false;
+  return words.every((word) => SOCIAL_WORDS.has(word));
+}
 
 /**
  * @typedef {object} Intent
@@ -157,18 +210,11 @@ function classify(text) {
     return { intent: 'chat', reason: 'asks about the assistant' };
   }
 
-  const words = message.split(/\s+/).filter(Boolean).length;
-
-  if (GREETING.test(message)) {
-    return { intent: 'chat', reason: 'greeting' };
-  }
-
-  // Length matters for these and not for greetings: "hello" opening a paragraph of
-  // requirements is still a greeting followed by work, and the verb check above has
-  // already claimed that case. "ok" is only ever an acknowledgement when it is the
-  // whole message — "ok now the other file needs the same treatment" is not.
-  if (PLEASANTRY.test(message) && words <= MAX_PLEASANTRY_WORDS) {
-    return { intent: 'chat', reason: 'pleasantry' };
+  // The whole message, not its opening. A greeting in front of a sentence is a polite
+  // request, and the one thing this must never do is answer the greeting and drop the
+  // request.
+  if (isPurelySocial(message)) {
+    return { intent: 'chat', reason: 'nothing but pleasantries' };
   }
 
   return { intent: 'task', reason: 'no conversational signal' };
@@ -177,12 +223,12 @@ function classify(text) {
 module.exports = {
   classify,
   requiresChange,
+  isPurelySocial,
   WORK_VERB,
   MUTATING_VERB,
   NAMES_A_FILE,
-  GREETING,
-  PLEASANTRY,
+  SOCIAL_WORDS,
+  ASSENT_IS_NOT_SOCIAL,
   ABOUT_THE_ASSISTANT,
   ABOUT_THE_CONVERSATION,
-  MAX_PLEASANTRY_WORDS,
 };

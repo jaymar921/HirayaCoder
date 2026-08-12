@@ -221,7 +221,7 @@ function snapshotTodos(todos) {
  * model's own claim of completion — that is the failure the whole judgement exists to
  * avoid, so a run that changed nothing can never reach this state.
  *
- * @param {{stopReason: string, steps: AgentStep[], summary: string}} outcome
+ * @param {{stopReason: string, steps: AgentStep[], summary: string, doneChallenged?: boolean}} outcome
  * @param {ChangeSet} changeSet
  * @param {number | null} sizeBefore
  * @returns {{status: 'done' | 'done-with-warning' | 'failed', outcomeText: string}}
@@ -244,6 +244,16 @@ function judgeItem(outcome, changeSet, sizeBefore) {
     if (!changed && anyFailed) {
       return { status: 'failed', outcomeText: 'the model reported it finished, but its actions failed' };
     }
+
+    // Told outright that nothing had been written, and it closed the item anyway. That
+    // is a stronger statement than "no files changed", which reads as a legitimate
+    // check — this one is an item that asked for work and did not do it. Observed on
+    // `ornith:9b` against "Create todoapp.html …", reported as "done (no files
+    // changed)" while the user was asking a fourth time where the file was.
+    if (!changed && outcome.doneChallenged) {
+      return { status: 'failed', outcomeText: 'it asked for a file and none was written' };
+    }
+
     return { status: 'done', outcomeText: changed ? '' : 'no files changed' };
   }
   if (changed && anySucceeded && !anyFailed) {
@@ -279,6 +289,37 @@ function judgeItem(outcome, changeSet, sizeBefore) {
  * @param {AgentStep[]} steps
  * @returns {string}
  */
+/**
+ * State plainly that a session claiming to be finished produced nothing.
+ *
+ * `appendUnfinishedNote` below covers steps that *failed*, and this is the case it
+ * cannot see: a session where every step succeeded, nothing was written, and the model
+ * said it was done — twice, the second time after being told outright that nothing had
+ * changed. Observed on `ornith:9b`: asked four separate times to create `todoapp.html`,
+ * it read the two Python files, replied "Finished.", and the user got a one-word
+ * success report for a file that did not exist.
+ *
+ * The completion check gives the model a chance to fix that. This is what happens when
+ * it does not take it — and it is the more important half, because the model's second
+ * `done` is accepted and would otherwise be reported as an ordinary success.
+ *
+ * @param {string} summary
+ * @param {{doneChallenged?: boolean, stopReason: string}} outcome
+ * @param {ChangeSet} changeSet
+ * @returns {string}
+ */
+function appendUnverifiedNote(summary, outcome, changeSet) {
+  if (!outcome.doneChallenged || !changeSet.isEmpty()) return summary;
+
+  return (
+    `${summary}\n\n**Nothing in the project changed.** I said this was finished, was told ` +
+    'no file had been written, and said it was finished again — so treat the summary above ' +
+    'as a description of what was intended, not of what happened. Nothing was created, ' +
+    'edited, or deleted. Asking again with the exact file path usually works; a larger ' +
+    'model is the surer fix.'
+  );
+}
+
 function appendUnfinishedNote(summary, steps) {
   const failed = (steps || []).filter((step) => step.result && step.result.ok === false);
   if (failed.length === 0) return summary;
@@ -496,7 +537,11 @@ class AgentSession {
 
       /** @type {SessionResult} */
       const result = {
-        summary: appendUnfinishedNote(outcome.summary, outcome.steps),
+        summary: appendUnverifiedNote(
+          appendUnfinishedNote(outcome.summary, outcome.steps),
+          outcome,
+          changeSet
+        ),
         steps: outcome.steps,
         changeSet,
         stopReason: outcome.stopReason,

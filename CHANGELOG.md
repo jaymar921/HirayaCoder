@@ -14,6 +14,73 @@ of the individual fixes. Three of the four bugs below had been shipped and unnot
 since the features they belong to were written, and each of them silently degraded a
 whole feature rather than failing loudly.
 
+### Fixed — "okay proceed" was answered as small talk
+
+Caught on the first real test of the intent router, and it is the exact failure the
+module's own header warns about, committed anyway.
+
+The pleasantry rule matched a social word at the *start* of a message and capped the
+length at six words. `"okay proceed"` satisfied both. Routed to chat, the model had no
+tools — so it replied with the complete HTML file in a code fence and the sentence
+"Saved to `todoapp.html`." Nothing was saved. The user asked three more times, in
+plainer and plainer language, and the session ledger records the turn as
+`stopReason: "conversation", steps: 0`.
+
+A social word at the front of a message says nothing about the rest of it. The test is
+now that the **whole** message is social — every token has to be in a fixed vocabulary —
+so anything left over means there is a request attached.
+
+Assent words are deliberately excluded from that vocabulary and the omission is written
+down as a constant rather than left to inference. "ok", "okay", "sure", "yes",
+"alright", "go ahead", "proceed" all routinely mean *carry on with what I just asked
+for*. Treating one as small talk drops a request; sending it to the agent costs a loop
+that reads a file — and since the conversation is now in the prompt, that loop can see
+what it is being told to carry on with.
+
+### Fixed — an unanswered completion challenge was reported as success
+
+The check added earlier in 0.4.0 fired correctly and then nothing came of it. Asked four
+separate times to create `todoapp.html`, `ornith:9b` read the two Python files, was told
+no file had been written, said it was finished anyway — and the entire summary the user
+received was the word **"Finished."**
+
+Accepting the second `done` is right; a model that cannot produce the work will not be
+argued into it. Reporting it as an ordinary success is not. The summary now states
+plainly that nothing was created, edited, or deleted, and that the text above it
+describes an intention rather than an outcome. Inside a TODO list the item drops from
+"done (no files changed)" to failed, since an item that asked for a file and produced
+none did not happen.
+
+### Fixed — a program that prints "coming soon" counts as unfinished
+
+The completion check looked for deferral *comments*. What the agent actually wrote, when
+asked for a working TODO app, was this:
+
+    case 1 -> System.out.println("Add feature coming soon.");
+    case 2 -> System.out.println("Remove feature coming soon.");
+
+`TodoManager.java` was written correctly — real `add`, `remove`, `modify` over an
+`ArrayList`. `TodoApp.java` never constructed one. The menu drew, took input, and
+announced that the three features the prompt had asked for were not ready. Both files
+compiled; the Python conversion reproduced the same shape faithfully, because it was a
+faithful conversion.
+
+Nothing in the system could see it. No comment to find, no empty function body, the
+change set grew, the compile succeeded, and every guard in `writeFile` is about a file
+being *damaged* rather than hollow. The only tell is the program saying so out loud, so
+that is what is matched — at file level, since the Java version buried these inside a
+`switch` inside a `main` full of real code.
+
+A bare `TODO` in a string is deliberately **not** a match. The program this was found in
+is a todo application; it prints the word constantly.
+
+### Changed — the permissions menu says which prompts each toggle covers
+
+Auto Approve Running Scripts was switched on and the Create/Apply dialogs kept
+appearing, which read as the toggle not working. It was working — file writes are Auto
+Edit's, and the two are independent. Each entry now names the prompts it governs and
+says explicitly which ones it does not.
+
 ### Added — the agent answers when it is being talked to
 
 Agent mode constrains Tier B decoding to `outputParser.actionSchema`, a grammar whose
