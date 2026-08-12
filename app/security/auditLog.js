@@ -100,7 +100,19 @@ class AuditLog {
       decision: String(entry.decision || 'unknown'),
     };
 
-    if (entry.path) safe.path = this._bound(entry.path);
+    // An empty relative path is the *workspace root*, not a missing value — it is what
+    // `list_files` and `search_workspace` resolve to when they operate on the whole
+    // project. A plain truthiness test dropped the key entirely, so those actions were
+    // recorded as `read_file` with no target at all: from a real session, ten of
+    // fourteen entries could not say what had been read.
+    //
+    // An audit log exists to answer "what was touched". A record that omits the target
+    // is worse than a noisy one, because it reads as complete.
+    if (typeof entry.path === 'string') {
+      safe.path = entry.path === '' ? '.' : this._bound(entry.path);
+    } else if (entry.path) {
+      safe.path = this._bound(String(entry.path));
+    }
     // Commands and free-text reasons are the fields most likely to carry a token.
     if (entry.command) safe.command = this._bound(redact(entry.command));
     if (entry.reason) safe.reason = this._bound(redact(entry.reason));
