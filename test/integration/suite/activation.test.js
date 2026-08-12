@@ -19,6 +19,8 @@ const COMMANDS = [
   'hirayacoder.showLogs',
   'hirayacoder.permissions',
   'hirayacoder.showAuditLog',
+  'hirayacoder.showAdaptation',
+  'hirayacoder.resetAdaptation',
   'hirayacoder.showMemory',
   'hirayacoder.clearMemory',
   'hirayacoder.attachContextFile',
