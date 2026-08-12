@@ -1,0 +1,68 @@
+name: Verify
+
+# The full check, on all three platforms. Called by `ci.yml` on every push and by
+# `release.yml` before it packages anything, so a release can never be built from code
+# that has not passed on the platform it will be installed on.
+#
+# It lives in its own file because duplicating the matrix is how the two copies drift,
+# and this matrix is the project's only evidence about macOS and Linux — the
+# maintainer's machines are Windows.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Every platform reports, rather than the first failure hiding the others.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # The extension declares `node >= 18`; 20 is the LTS closest to what VS Code
+          # 1.85+ ships in its extension host.
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm run test:unit
+
+      # A real VS Code is ~330 MB. Cached per OS, keyed on the manifest so a version
+      # bump re-downloads rather than silently testing against a stale editor.
+      - name: Cache the VS Code download
+        uses: actions/cache@v4
+        with:
+          path: .vscode-test
+          key: vscode-test-${{ runner.os }}-${{ hashFiles('package.json') }}
+          restore-keys: vscode-test-${{ runner.os }}-
+
+      # Linux runners have no display and the integration suite launches a real editor.
+      # macOS and Windows runners already have a session.
+      - name: Integration tests (Linux, headless)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npm run test:integration
+
+      - name: Integration tests
+        if: runner.os != 'Linux'
+        run: npm run test:integration
+
+      # The shipped tree has no production dependencies, so this stays at zero. Dev-only
+      # advisories are reviewed in security/sast-report-*.md and must not block a
+      # release, which is why this is scoped rather than a bare `npm audit`.
+      - name: Production dependency audit
+        run: npm run audit:security
