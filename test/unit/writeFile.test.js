@@ -86,6 +86,185 @@ describe('writeFile guards', () => {
 
     const read = () => fs.readFileSync(path.join(root, 'src', 'greet.js'), 'utf8');
 
+    it('refuses a rewrite that drops the module exports', async () => {
+      // llama3.2:1b, verbatim, on the single-file benchmark task. Correct-looking
+      // logic, 67 bytes against 80 — too large a ratio for the shrink guard, brackets
+      // balanced, nothing commented out — and every caller breaks.
+      const before = read();
+      const result = await writeFile(
+        { path: 'src/greet.js', code: "function greet(name) { return name === '' ? 'Hello there' : name; }\n" },
+        context
+      );
+
+      assert.strictEqual(result.ok, false);
+      assert.strictEqual(result.error, 'EXPORTS_REMOVED');
+      assert.strictEqual(read(), before, 'the file was modified despite the refusal');
+    });
+
+    it('refuses a silent CommonJS to ESM conversion', async () => {
+      // stable-code:latest, twice in one sweep. It still exports something, so a
+      // check for "does it export anything" would wave it through — and `require()`
+      // breaks just as completely.
+      const result = await writeFile(
+        {
+          path: 'src/greet.js',
+          code:
+            'function greet(name) {\n' +
+            "  if (name === '') {\n" +
+            '    return "Hello there";\n' +
+            '  }\n' +
+            '  return `Hello ${name}`;\n' +
+            '}\n\n' +
+            'export default greet;\n',
+        },
+        context
+      );
+
+      assert.strictEqual(result.ok, false);
+      assert.strictEqual(result.error, 'EXPORTS_REMOVED');
+      assert.match(result.observation, /module\.exports/);
+    });
+
+    it('allows an edit that keeps the exports', async () => {
+      const result = await writeFile(
+        {
+          path: 'src/greet.js',
+          code:
+            'function greet(name) {\n' +
+            '  if (!name) {\n' +
+            '    return "Hello there";\n' +
+            '  }\n' +
+            '  return "Hello " + name;\n' +
+            '}\n\n' +
+            'module.exports = { greet };\n',
+        },
+        context
+      );
+
+      assert.strictEqual(result.ok, true);
+      assert.match(read(), /Hello there/);
+      assert.match(read(), /module\.exports/);
+    });
+
+    it('allows adding an export to a module that already had one', async () => {
+      const result = await writeFile(
+        {
+          path: 'src/greet.js',
+          code:
+            'function greet(name) {\n  return "Hello " + name;\n}\n\n' +
+            'function farewell(name) {\n  return "Bye " + name;\n}\n\n' +
+            'module.exports = { greet, farewell };\n',
+        },
+        context
+      );
+      assert.strictEqual(result.ok, true);
+    });
+
+    it('does not apply the export rule to a file that never exported anything', async () => {
+      fs.writeFileSync(path.join(root, 'src', 'script.js'), 'console.log("one");\nconsole.log("two");\n');
+      const result = await writeFile(
+        { path: 'src/script.js', code: 'console.log("one");\nconsole.log("changed");\n' },
+        context
+      );
+      assert.strictEqual(result.ok, true);
+    });
+
+    it('refuses an export that points at a symbol the file no longer defines', async () => {
+      // qwen3.5:2b, verbatim, asked only to handle an empty name: it renamed the
+      // function and left the export list alone. The file parses, it still has
+      // module.exports — and `require('./greet').greet` is undefined.
+      const before = read();
+      const result = await writeFile(
+        {
+          path: 'src/greet.js',
+          code:
+            'const greeting = (name) => {\n' +
+            '  if (!name) {\n' +
+            "    return 'Hello there';\n" +
+            '  }\n' +
+            "  return 'Hello ' + name;\n" +
+            '};\n\n' +
+            'module.exports = { greet };\n',
+        },
+        context
+      );
+
+      assert.strictEqual(result.ok, false);
+      assert.strictEqual(result.error, 'EXPORT_NOT_DEFINED');
+      assert.match(result.observation, /"greet"/);
+      assert.strictEqual(read(), before);
+    });
+
+    it('allows a rename that updates the export list to match', async () => {
+      const result = await writeFile(
+        {
+          path: 'src/greet.js',
+          code:
+            'function greeting(name) {\n' +
+            '  if (!name) {\n' +
+            '    return "Hello there";\n' +
+            '  }\n' +
+            '  return "Hello " + name;\n' +
+            '}\n\n' +
+            'module.exports = { greeting };\n',
+        },
+        context
+      );
+      assert.strictEqual(result.ok, true);
+    });
+
+    it('does not object to an export whose value is named elsewhere', async () => {
+      const result = await writeFile(
+        {
+          path: 'src/greet.js',
+          code:
+            'function greetImpl(name) {\n  return name ? "Hello " + name : "Hello there";\n}\n\n' +
+            'module.exports = { greet: greetImpl };\n',
+        },
+        context
+      );
+      assert.strictEqual(result.ok, true);
+    });
+
+    it('refuses a rewrite that deletes the implementation but keeps the exports', async () => {
+      // llama3.2:1b, verbatim, after two worse attempts had already been refused. The
+      // export style survives, the entry is not a shorthand name, 30 against 80 bytes
+      // clears the shrink ratio, the brackets balance, nothing is commented out —
+      // every other guard in the file passes it.
+      const before = read();
+      const result = await writeFile(
+        { path: 'src/greet.js', code: "module.exports = { name: '' };\n" },
+        context
+      );
+
+      assert.strictEqual(result.ok, false);
+      assert.strictEqual(result.error, 'IMPLEMENTATION_REMOVED');
+      assert.strictEqual(read(), before);
+    });
+
+    it('leaves a data-only module editable', async () => {
+      // It had no definitions to lose, so the rule must not apply to it.
+      fs.writeFileSync(path.join(root, 'src', 'config.js'), "module.exports = { port: 3000 };\n");
+      const result = await writeFile(
+        { path: 'src/config.js', code: "module.exports = { port: 8080, host: 'localhost' };\n" },
+        context
+      );
+      assert.strictEqual(result.ok, true);
+    });
+
+    it('allows an arrow-function rewrite, which is still an implementation', async () => {
+      const result = await writeFile(
+        {
+          path: 'src/greet.js',
+          code:
+            'const greet = (name) => (!name ? "Hello there" : "Hello " + name);\n\n' +
+            'module.exports = { greet };\n',
+        },
+        context
+      );
+      assert.strictEqual(result.ok, true);
+    });
+
     it('refuses a file whose every line has been commented out', async () => {
       // Live failure on `qwen3.5:0.8b`, asked to add a guard clause: it returned the
       // whole module with `// ` in front of each line. The file GREW, so the
