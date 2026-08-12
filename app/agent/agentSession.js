@@ -149,6 +149,37 @@ const MIN_STEPS_PER_TODO_ITEM = 3;
  */
 const MAX_TODO_ITEMS_WITH_FULL_BUDGET = 4;
 
+/** Openers that begin a request for information rather than for work. */
+const QUESTION_OPENERS =
+  /^\s*(?:how|what|what's|whats|why|when|where|which|who|is|are|was|were|do|does|did|can|could|should|would|will|explain|describe|tell\s+me|show\s+me)\b/i;
+
+/**
+ * Does this read as a question rather than an instruction?
+ *
+ * Deliberately shallow. It only has to be right often enough to keep questions out of
+ * the TODO path, and being wrong in either direction is cheap: a missed question runs
+ * as a plan, and a misread instruction runs as a single pass — which is what every
+ * model did before the TODO path existed.
+ *
+ * An imperative anywhere in the text wins, so "how do I add a dark mode toggle — please
+ * implement it" is treated as work. The question mark is not sufficient on its own for
+ * the same reason: "can you add a test?" is a request, not an enquiry.
+ *
+ * @param {string} task
+ * @returns {boolean}
+ */
+function looksLikeAQuestion(task) {
+  const text = String(task || '').trim();
+  if (!text) return false;
+
+  // Any instruction to change something makes this work, whatever it opens with.
+  if (/\b(?:add|create|write|implement|update|edit|change|fix|refactor|delete|remove|rename|move|install|generate|build|make)\b/i.test(text)) {
+    return false;
+  }
+
+  return QUESTION_OPENERS.test(text) || text.endsWith('?');
+}
+
 /**
  * The checklist as the UI should draw it right now.
  *
@@ -424,6 +455,21 @@ class AgentSession {
    * @private
    */
   async _runWithTodos(task, activeRoute, changeSet, options, emit) {
+    // A question is not a work plan. Asked "how to run it" about a file it had just
+    // written, `ornith:9b` produced "Read myjava.java to understand its contents and
+    // dependencies" and "Determine how to compile and run myjava.java" — two loops, two
+    // reads, no change to anything, and the actual answer buried under a completion
+    // report for items the user never asked for.
+    //
+    // Skipping the split costs a misread request one single-pass run, which is exactly
+    // what every model did before this path existed and is entirely capable of
+    // answering. Splitting a question costs an extra inference and produces a worse
+    // answer. The asymmetry decides it.
+    if (looksLikeAQuestion(task)) {
+      logger.debug('Request reads as a question; answering it directly rather than planning items.');
+      return null;
+    }
+
     const planContext = await this._buildContext(task, activeRoute, options.editor);
     const items = await plannerAgent.planTodos({
       client: this.client,
@@ -497,6 +543,24 @@ class AgentSession {
       const context = await this._buildContext(itemTask, itemRoute, options.editor);
 
       const before = changeSet.size();
+
+      // Each item runs a fresh loop, and a loop numbers its steps from its own
+      // `steps.length + 1` — so item 2's first action announces itself as step 1 again.
+      // The trace then shows two rows both labelled "1", above a header reading
+      // "Steps (1)", because the view tracks the highest number it has seen. Observed
+      // on `ornith:9b` answering a two-item request.
+      //
+      // The loops are right to number from their own steps: they cannot know they are
+      // one item of several. Only this driver knows, so it is the one that offsets.
+      const stepOffset = allSteps.length;
+      const emitForItem = (event) => {
+        if ((event.type === 'action' || event.type === 'observation') && typeof event.step === 'number') {
+          emit({ ...event, step: stepOffset + event.step });
+          return;
+        }
+        emit(event);
+      };
+
       const outcome = await loop.run({
         client: this.client,
         model: this.model,
@@ -504,7 +568,7 @@ class AgentSession {
         task: itemTask,
         context,
         execute: (action) => this._execute(action, itemRoute, changeSet),
-        onEvent: emit,
+        onEvent: emitForItem,
         signal: this._controller.signal,
         // Only the first item sees the image. By item two the work is grounded in
         // files that have been read, and re-uploading the picture each time would
