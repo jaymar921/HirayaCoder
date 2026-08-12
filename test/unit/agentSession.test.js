@@ -512,6 +512,52 @@ describe('TODO-driven sessions', () => {
     assert.deepStrictEqual(todoEvent.items, ['Update src/a.js', 'Update src/b.js']);
   });
 
+  it('reports progress as it goes, not only at the end', async () => {
+    const client = scriptedClient([
+      '1. Update src/a.js\n2. Update src/b.js',
+      json({ action: 'write_file', path: 'src/a.js', code: 'export const a = 2;\n' }),
+      json({ action: 'done', summary: 'a.js updated' }),
+      json({ action: 'write_file', path: 'src/b.js', code: 'export const b = 2;\n' }),
+      json({ action: 'done', summary: 'b.js updated' }),
+    ]);
+
+    const events = [];
+    await todoSession(client).run('Update a and also update b', {
+      mode: 'agent',
+      onEvent: (e) => events.push(e),
+    });
+
+    const statuses = events
+      .filter((e) => e.type === 'todo-item' || e.type === 'todo-item-done')
+      .map((e) => e.items.map((item) => item.status).join(','));
+
+    // The point is the middle of the run: item 1 finished while item 2 was still to
+    // come. A UI that only sees the final state cannot show that.
+    assert.deepStrictEqual(statuses, [
+      'active,pending',
+      'done,active',
+      'done,active',
+      'done,done',
+    ]);
+  });
+
+  it('snapshots the checklist so a later item cannot alter an earlier event', async () => {
+    const client = scriptedClient([
+      '1. Update src/a.js\n2. Update src/b.js',
+      json({ action: 'done', summary: 'nothing to do' }),
+      json({ action: 'done', summary: 'nothing to do' }),
+    ]);
+
+    const events = [];
+    await todoSession(client).run('Update a and also update b', {
+      mode: 'agent',
+      onEvent: (e) => events.push(e),
+    });
+
+    const first = events.find((e) => e.type === 'todo-item-done');
+    assert.strictEqual(first.items[1].status, 'active', 'the first event was mutated by later progress');
+  });
+
   it('shows the model only the item it is working on', async () => {
     const client = scriptedClient([
       '1. Update src/a.js\n2. Update src/b.js',
@@ -525,6 +571,79 @@ describe('TODO-driven sessions', () => {
     const firstItemPrompt = client.prompts[1];
     assert.match(firstItemPrompt, /do only item 1/);
     assert.ok(!/do only item 2/.test(firstItemPrompt));
+  });
+
+  it('records an item whose work landed but never closed as done, with a caveat', async () => {
+    const client = scriptedClient([
+      '1. Update src/a.js\n2. Update src/b.js',
+      // Item 1 writes correctly, then re-reads "to verify" until the repeat guard
+      // stops it — reproduced on qwen3.5:2b in three consecutive runs.
+      json({ action: 'write_file', path: 'src/a.js', code: 'export const a = 2;\n' }),
+      json({ action: 'read_file', path: 'src/a.js' }),
+      json({ action: 'read_file', path: 'src/a.js' }),
+      json({ action: 'read_file', path: 'src/a.js' }),
+      json({ action: 'read_file', path: 'src/a.js' }),
+      // Item 2 is ordinary.
+      json({ action: 'write_file', path: 'src/b.js', code: 'export const b = 2;\n' }),
+      json({ action: 'done', summary: 'b.js updated' }),
+    ]);
+
+    const result = await todoSession(client).run('Update a and also update b', { mode: 'agent' });
+
+    assert.strictEqual(result.todos[0].status, 'done-with-warning');
+    assert.match(result.todos[0].outcome, /never closed the item off/);
+    // The edit really did land — that is what separates this from a failure.
+    assert.match(fs.readFileSync(path.join(todoRoot, 'src', 'a.js'), 'utf8'), /a = 2/);
+    assert.match(result.summary, /2 of 2 item\(s\) completed/);
+    assert.match(result.summary, /1 of those changed files without the model confirming/);
+  });
+
+  it('does not take the model\'s word for an item whose actions all failed', async () => {
+    // Observed on gemma4:e2b: the user declined the delete, the file stayed, and the
+    // model closed the item with `done`. The checklist read "Delete the obsolete file
+    // — done" for a file that is still on disk.
+    const client = scriptedClient([
+      '1. Update src/a.js\n2. Delete src/gone.js',
+      json({ action: 'write_file', path: 'src/a.js', code: 'export const a = 2;\n' }),
+      json({ action: 'done', summary: 'a.js updated' }),
+      json({ action: 'delete_file', path: 'src/nonexistent.js' }),
+      json({ action: 'done', summary: 'deleted it' }),
+    ]);
+
+    const result = await todoSession(client).run('Update a and delete the old file', { mode: 'agent' });
+
+    assert.strictEqual(result.todos[0].status, 'done');
+    assert.strictEqual(result.todos[1].status, 'failed');
+    assert.match(result.todos[1].outcome, /reported it finished, but its actions failed/);
+  });
+
+  it('still calls a check-only item done when nothing failed', async () => {
+    const client = scriptedClient([
+      '1. Update src/a.js\n2. Report what src/b.js exports',
+      json({ action: 'write_file', path: 'src/a.js', code: 'export const a = 2;\n' }),
+      json({ action: 'done', summary: 'a.js updated' }),
+      json({ action: 'read_file', path: 'src/b.js' }),
+      json({ action: 'done', summary: 'b.js exports b' }),
+    ]);
+
+    const result = await todoSession(client).run('Update a and tell me what b exports', { mode: 'agent' });
+
+    assert.strictEqual(result.todos[1].status, 'done');
+    assert.strictEqual(result.todos[1].outcome, 'no files changed');
+  });
+
+  it('does not soften an item that changed nothing into a caveated success', async () => {
+    const client = scriptedClient([
+      '1. Update src/a.js\n2. Update src/b.js',
+      json({ action: 'read_file', path: 'src/a.js' }),
+      json({ action: 'read_file', path: 'src/a.js' }),
+      json({ action: 'read_file', path: 'src/a.js' }),
+      json({ action: 'read_file', path: 'src/a.js' }),
+      json({ action: 'done', summary: 'nothing to do' }),
+    ]);
+
+    const result = await todoSession(client).run('Update a and also update b', { mode: 'agent' });
+    assert.strictEqual(result.todos[0].status, 'failed');
   });
 
   it('carries on to the next item after one fails', async () => {
