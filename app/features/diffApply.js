@@ -144,23 +144,24 @@ async function showDiff(change) {
  */
 async function confirmChange(change) {
   const isNew = change.before === null;
-  const detail = change.summary ? ` (${change.summary})` : '';
 
   const REVIEW = 'Review diff';
   const APPLY = isNew ? 'Create' : 'Apply';
-  const REJECT = 'Reject';
 
-  // Loops so "Review diff" can be chosen without it counting as an answer — the
-  // user opens the diff, reads it, and is asked again.
+  // Modal for the same reason every other gated action is: an approval that scrolls
+  // past in a toast is not an approval. The modal's own Cancel is the refusal, so no
+  // explicit Reject button is offered — two ways to say no in one dialog reads as a
+  // trick question.
   for (;;) {
-    const choice = await vscode.window.showInformationMessage(
-      `HirayaCoder wants to ${isNew ? 'create' : 'change'} ${change.path}${detail}`,
-      { modal: false },
+    const choice = await vscode.window.showWarningMessage(
+      `HirayaCoder wants to ${isNew ? 'create' : 'change'} ${change.path}`,
+      { modal: true, detail: change.summary || '' },
       REVIEW,
-      APPLY,
-      REJECT
+      APPLY
     );
 
+    // Reviewing is not an answer: the dialog has to close for the diff to be
+    // readable, so it reopens once the user has seen it.
     if (choice === REVIEW) {
       await showDiff(change);
       continue;
