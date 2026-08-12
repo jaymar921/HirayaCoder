@@ -449,6 +449,7 @@ class ChatTab {
       // Shared across tabs, like the ledger: a missing toolchain is a fact about the
       // machine, not about this conversation.
       facts: this.app.facts,
+      history: this.app.fileHistory,
       // This tab's own translator. A shared one wrote every tab's notes into whichever
       // session the extension happened to open at activation.
       translator: this.app.translatorFor(this.sessionId),

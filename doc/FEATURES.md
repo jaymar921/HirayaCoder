@@ -110,6 +110,23 @@ models are GPU-resident this is worth re-trying.
   just a distilled note about what was done. It outranks session memory when the budget
   cannot fit both, since the notes are a compression of the same material. This is what
   makes "do it the way we discussed" and "the file I mentioned earlier" work at all.
+- **What it changed, and what it changed it from.** Every write is recorded to
+  `.hirayacoder/history.jsonl` as a bounded diff — **Show File History** renders them
+  newest-first as a diff document. A `ChangeSet` used to hold both versions of a file
+  for exactly as long as the turn lasted, so "what did it do to this file two turns ago"
+  had no answer anywhere.
+
+  Diffs rather than snapshots, deliberately: storing both versions of every file would
+  duplicate the workspace on each write, and in a git repo it would duplicate git. A
+  large rewrite is recorded as a truncated diff and is not reversible from this file —
+  git is the tool for that, and this is for seeing what happened without leaving the
+  editor.
+
+  The agent gets the short version — paths and line counts, not the diffs — under the
+  heading *"files you have already changed in this session — do not redo this work"*.
+  That is the half that fixes behaviour rather than reporting on it: a model asked to
+  modify a file it edited three turns ago has no idea it did so, and re-does or undoes
+  its own work. Observed exactly that way, more than once.
 - **Facts about the workspace** persist across *every* session in it, not just the one
   that learned them: a toolchain that is missing, a decision you made, what the project
   is meant to produce. They are typed and labelled in the prompt, and ordered so your

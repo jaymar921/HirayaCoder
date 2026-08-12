@@ -368,6 +368,12 @@ class AgentSession {
      * @type {import('../core/factStore').FactStore | null}
      */
     this.facts = options.facts || null;
+    /**
+     * What was changed, and what it was changed from.
+     *
+     * @type {import('../core/fileHistory').FileHistory | null}
+     */
+    this.history = options.history || null;
     this.translator = options.translator || null;
     this.contextFiles = options.contextFiles || null;
     this.thinkingCapacity = options.thinkingCapacity || 'medium';
@@ -936,6 +942,16 @@ class AgentSession {
    * @private
    */
   async _recordSession(result) {
+    // Written from the change set, which holds the state from *before the turn began*
+    // even for a file edited three times — so the recorded diff is the net effect the
+    // user was shown, not the agent's intermediate drafts.
+    if (this.history && !result.changeSet.isEmpty()) {
+      await this.history.recordAll(result.changeSet.list(), {
+        sessionId: this.sessionId,
+        model: this.model,
+      });
+    }
+
     const ms = this._startedAt ? Date.now() - this._startedAt : undefined;
     const modelMs =
       typeof this._modelMsAtStart === 'number' ? this._modelMsSoFar() - this._modelMsAtStart : undefined;
@@ -1001,6 +1017,21 @@ class AgentSession {
         if (known) blocks.push(known);
       } catch (err) {
         logger.warn(`Could not read established facts: ${/** @type {Error} */ (err).message}`);
+      }
+    }
+
+    // What this session has already changed. Distinct from the notes below, which say
+    // a file was touched, and from the facts above, which say what is true of the
+    // project: this says "you did that, it is done". Observed without it, more than
+    // once — a model that had correctly wired two classes together rewrote the file
+    // later without the wiring, because nothing in its context said the wiring was its
+    // own work from four turns ago.
+    if (this.history) {
+      try {
+        const changed = await this.history.renderForPrompt(this.sessionId);
+        if (changed) blocks.push(changed);
+      } catch (err) {
+        logger.warn(`Could not read what this session has changed: ${/** @type {Error} */ (err).message}`);
       }
     }
 

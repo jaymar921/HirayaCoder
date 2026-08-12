@@ -102,6 +102,45 @@ describe('intentRouter.classify', () => {
       assert.strictEqual(intentOf('cool do the same for python'), 'task');
     });
 
+    it('answers "how are you" instead of reading the project', () => {
+      // Sent to the agent, which read two source files and reported on them. The user's
+      // next message was "why are you reading the files, i just asked how are you".
+      for (const text of ['how are you', "how's it going", 'what\'s up', 'kumusta ka']) {
+        assert.strictEqual(intentOf(text), 'chat', `"${text}" was treated as work`);
+      }
+    });
+
+    it('answers a greeting that has a name on it', () => {
+      // "gemma4" is in no vocabulary and never could be — it is whatever the user has
+      // installed. The model replied by asking for "the full task description".
+      assert.strictEqual(intentOf('hello gemma4'), 'chat');
+      assert.strictEqual(intentOf('hi claude'), 'chat');
+    });
+
+    it('answers a question about where the work has got to', () => {
+      // These contain a word from WORK_VERB — "verify" — and used to be claimed by it,
+      // so the agent re-read the same file until the repeat guard stopped it. Twice:
+      // the user rephrased, and the rephrasing contained "created".
+      for (const text of [
+        'can you verify our conversation, where are we currently right now?',
+        'what is the state',
+        'where did we leave off',
+        'can you give me a recap',
+        'on this session, what is my initial conversation',
+      ]) {
+        assert.strictEqual(intentOf(text), 'chat', `"${text}" was treated as work`);
+      }
+    });
+
+    it('takes assent plus a pleasantry as an acknowledgement', () => {
+      // The first fix over-corrected: excluding assent words outright made any message
+      // containing one a task, so "okay thank you" ran a four-item TODO list that
+      // re-analysed five files, and "it's okay" spent its budget on refused commands.
+      for (const text of ['okay thank you', 'okay, thank you again', "it's okay", 'ok cool thanks']) {
+        assert.strictEqual(intentOf(text), 'chat', `"${text}" was treated as work`);
+      }
+    });
+
     it('treats bare assent as work, never as small talk', () => {
       // Every one of these routinely means "carry on with what I just asked for", and
       // answering one conversationally drops the request. Routing them to the agent
@@ -115,6 +154,7 @@ describe('intentRouter.classify', () => {
 
   it('explains itself, for the log', () => {
     assert.match(classify('hello').reason, /pleasantries/);
-    assert.match(classify('fix it').reason, /instruction/);
+    assert.match(classify('fix it').reason, /asks for a change/);
+    assert.match(classify('read src/app.js').reason, /instruction|file/);
   });
 });

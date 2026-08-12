@@ -116,20 +116,43 @@ const SOCIAL_WORDS = new Set([
   'a', 'lot', 'so', 'much', 'very', 'the', 'for', 'that', 'it', 'one', 'you', 'u',
   'no', 'worries', 'problem', 'never', 'mind', 'see', 'ya', 'there', 'man', 'dude',
   'bro', 'sir', 'maam', "ma'am", 'po', 'help', 'got',
+  // "it's okay", "that's fine" — the subject of an acknowledgement.
+  'its', "it's", 'thats', "that's", 'is', 'was', 'fine', 'all',
+  // "thanks again", "thank you too".
+  'again', 'too', 'as', 'well',
 ]);
 
 /**
- * Assent words are deliberately **absent** from `SOCIAL_WORDS`.
+ * Words that mean "carry on" as easily as they mean "understood".
  *
- * "ok", "okay", "sure", "yes", "yeah", "alright", "go ahead", "proceed" — every one of
- * them routinely means *carry on with what I just asked for*, and treating one as small
- * talk drops a request silently. Routing them to the agent instead costs a loop that
- * reads a file, and since 0.4.0 the loop has the conversation in its context, so it can
- * see what it is being told to carry on with.
+ * These are **neutral**, which is a third category and not an oversight. Held apart
+ * from `SOCIAL_WORDS` because a message made only of them is a go-ahead — "okay
+ * proceed", "sure", "alright" — and answering that conversationally drops a request.
+ * Held out of the task path too, because a message made of these *plus* real
+ * pleasantries is unambiguously an acknowledgement: "okay thank you", "it's okay",
+ * "k thanks".
  *
- * Documented as a constant so the omission reads as a decision rather than an oversight.
+ * The first version simply excluded them, which made any message containing one a task.
+ * That was over-corrected, and the cost showed up immediately in testing: "okay thank
+ * you" ran a four-item TODO list that re-analysed five files, and "it's okay" spent its
+ * budget on refused `which java` calls. The rule is now that assent alone decides
+ * nothing — a social word has to be present for the message to count as small talk.
  */
-const ASSENT_IS_NOT_SOCIAL = ['ok', 'okay', 'k', 'sure', 'yes', 'yeah', 'yep', 'alright', 'right', 'go', 'proceed'];
+const ASSENT_WORDS = new Set([
+  'ok', 'okay', 'okey', 'k', 'kk', 'sure', 'yes', 'yeah', 'yep', 'yup',
+  'alright', 'right', 'go', 'ahead', 'proceed', 'continue', 'sige',
+]);
+
+/**
+ * Asking after the assistant itself rather than the project.
+ *
+ * "how are you" has no file in it, no verb this module recognises, and no social word
+ * — so every earlier rule let it through to the agent, which read two source files and
+ * reported on them. The user's next message was "why are you reading the files, i just
+ * asked how are you".
+ */
+const PERSONAL_STATE =
+  /\bhow\s+are\s+you\b|\bhow'?s\s+it\s+going\b|\bwhat'?s\s+up\b|\bhow\s+do\s+you\s+do\b|\bhow\s+have\s+you\s+been\b|\bkumusta\s+ka\b/i;
 
 /**
  * Questions about the assistant itself.
@@ -153,7 +176,23 @@ const ABOUT_THE_ASSISTANT =
  * workspace is how the agent spent that turn.
  */
 const ABOUT_THE_CONVERSATION =
-  /\b(?:do|can|could)\s+you\s+(?:still\s+)?(?:remember|recall)\b|\b(?:our|the)\s+(?:first|previous|last|earlier)\s+(?:conversation|chat|session|message)\b|\bwhat\s+(?:did|have)\s+(?:i|we)\s+(?:say|ask|talk|discuss)/i;
+  /\b(?:do|can|could)\s+you\s+(?:still\s+)?(?:remember|recall)\b|\b(?:our|the|my|this)\s+(?:first|initial|previous|last|earlier|whole|entire)?\s*(?:conversation|chat|session)\b|\bwhat\s+(?:did|have)\s+(?:i|we)\s+(?:say|ask|talk|discuss|do)/i;
+
+/**
+ * Asking where the work has got to, rather than asking for more of it.
+ *
+ * A distinct category from the two above and the one that cost the most in testing.
+ * "can you verify our conversation, where are we currently right now?" contains
+ * `verify`, so the work-verb rule claimed it and the agent re-read the same file until
+ * the repeat guard stopped it — twice in a row, because the user rephrased and the
+ * rephrasing contained `created`.
+ *
+ * These are answerable entirely from the conversation and the session notes, both of
+ * which are already in the prompt. Reading a file to answer "where are we" is how the
+ * agent loses the thread it is being asked about.
+ */
+const ABOUT_THE_PROGRESS =
+  /\bwhere\s+are\s+we\b|\bwhat(?:'s| is)?\s+the\s+(?:state|status|progress)\b|\bwhat\s+have\s+we\s+(?:done|got|finished)\b|\bcatch\s+me\s+up\b|\brecap\b|\bwhere\s+did\s+we\s+(?:leave|stop|get)\b/i;
 
 /**
  * Is every word in this message a social one?
@@ -170,7 +209,38 @@ function isPurelySocial(message) {
     .filter(Boolean);
 
   if (words.length === 0) return false;
-  return words.every((word) => SOCIAL_WORDS.has(word));
+  // Every word has to be social or neutral, and at least one has to be genuinely
+  // social. "okay thank you" qualifies; "okay proceed" does not.
+  if (!words.every((word) => SOCIAL_WORDS.has(word) || ASSENT_WORDS.has(word))) return false;
+  return words.some((word) => SOCIAL_WORDS.has(word));
+}
+
+/** Words a greeting may be followed by without becoming a request. */
+const GREETING_TAIL_WORDS = 3;
+
+/**
+ * A greeting with a name on it.
+ *
+ * "hello gemma4" went to the agent because `gemma4` is in no vocabulary and never
+ * could be — it is whatever the user has installed. The model then asked for "the full
+ * task description" for a message that was hello.
+ *
+ * Bounded hard at three words, and only when a greeting opens the message, so "hi the
+ * delete button is broken" is untouched. A greeting followed by an actual instruction
+ * has already been claimed by the work-verb rule long before this runs.
+ *
+ * @param {string} message
+ * @returns {boolean}
+ */
+function isGreetingWithName(message) {
+  const words = message
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}'\s:.-]/gu, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (words.length === 0 || words.length > GREETING_TAIL_WORDS) return false;
+  return SOCIAL_WORDS.has(words[0]);
 }
 
 /**
@@ -190,9 +260,31 @@ function classify(text) {
 
   if (message.length === 0) return { intent: 'task', reason: 'empty message' };
 
-  // An instruction anywhere wins, before anything else is considered. "hi, can you add
-  // a test" is a task, and treating it as a greeting would drop the request on the
-  // floor — the one outcome this module must never produce.
+  // A request to change something wins outright, before anything else is considered.
+  // "hi, can you add a test" is a task, and treating it as a greeting would drop the
+  // request on the floor — the one outcome this module must never produce.
+  if (MUTATING_VERB.test(message)) {
+    return { intent: 'task', reason: 'asks for a change' };
+  }
+
+  // Checked ahead of the broader work-verb rule, and only now that a mutating request
+  // has been ruled out. These three are about the assistant and the conversation, and
+  // they routinely contain a word from `WORK_VERB` while asking for no work at all:
+  // "can you *verify* our conversation, where are we currently right now?" spent its
+  // whole budget re-reading one file because `verify` claimed it first.
+  if (ABOUT_THE_PROGRESS.test(message)) {
+    return { intent: 'chat', reason: 'asks where the work has got to' };
+  }
+
+  if (ABOUT_THE_CONVERSATION.test(message)) {
+    return { intent: 'chat', reason: 'asks about the conversation' };
+  }
+
+  if (ABOUT_THE_ASSISTANT.test(message) || PERSONAL_STATE.test(message)) {
+    return { intent: 'chat', reason: 'asks about the assistant' };
+  }
+
+  // Reading, explaining, searching: no change, but real work that needs the tools.
   if (WORK_VERB.test(message)) {
     return { intent: 'task', reason: 'contains an instruction' };
   }
@@ -202,19 +294,15 @@ function classify(text) {
     return { intent: 'task', reason: 'names a file or path' };
   }
 
-  if (ABOUT_THE_CONVERSATION.test(message)) {
-    return { intent: 'chat', reason: 'asks about the conversation' };
-  }
-
-  if (ABOUT_THE_ASSISTANT.test(message)) {
-    return { intent: 'chat', reason: 'asks about the assistant' };
-  }
-
   // The whole message, not its opening. A greeting in front of a sentence is a polite
   // request, and the one thing this must never do is answer the greeting and drop the
   // request.
   if (isPurelySocial(message)) {
     return { intent: 'chat', reason: 'nothing but pleasantries' };
+  }
+
+  if (isGreetingWithName(message)) {
+    return { intent: 'chat', reason: 'a greeting with a name on it' };
   }
 
   return { intent: 'task', reason: 'no conversational signal' };
@@ -224,11 +312,14 @@ module.exports = {
   classify,
   requiresChange,
   isPurelySocial,
+  isGreetingWithName,
   WORK_VERB,
   MUTATING_VERB,
   NAMES_A_FILE,
   SOCIAL_WORDS,
-  ASSENT_IS_NOT_SOCIAL,
+  ASSENT_WORDS,
   ABOUT_THE_ASSISTANT,
   ABOUT_THE_CONVERSATION,
+  ABOUT_THE_PROGRESS,
+  PERSONAL_STATE,
 };

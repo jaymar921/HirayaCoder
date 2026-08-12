@@ -29,6 +29,7 @@ const { DEFAULT_ALLOWED_BINARIES } = require('./security/scriptRunner');
 const { MemoryStore, nextSessionId, listSessions } = require('./core/memoryStore');
 const { OutcomeLedger } = require('./core/outcomeLedger');
 const { FactStore } = require('./core/factStore');
+const { FileHistory } = require('./core/fileHistory');
 const earnedHints = require('./agent/earnedHints');
 const { ContextFilesManager } = require('./core/contextFilesManager');
 const { ContextTranslator } = require('./core/contextTranslator');
@@ -165,6 +166,8 @@ class HirayaCoder {
     this.ledger = null;
     /** @type {FactStore | null} */
     this.facts = null;
+    /** @type {FileHistory | null} */
+    this.fileHistory = null;
 
     this.buildClient();
     this.buildSecurityLayer();
@@ -188,6 +191,10 @@ class HirayaCoder {
     // per session it would be rediscovered from scratch in every new tab, which is
     // exactly what the evaluation sessions did, twice, at the cost of a whole run each.
     this.facts = root ? new FactStore(root) : null;
+    // Workspace scope again, and for a third reason: "what did it change" is a question
+    // about the project, and a user asking it a week later will not remember which chat
+    // tab did the work.
+    this.fileHistory = root ? new FileHistory(root) : null;
   }
 
   /** The workspace folder, or null when none is open. */
@@ -661,6 +668,8 @@ function activate(context) {
 
     vscode.commands.registerCommand('hirayacoder.showAuditLog', () => showAuditLogCommand(app)),
 
+    vscode.commands.registerCommand('hirayacoder.showFileHistory', () => showFileHistoryCommand(app)),
+
     vscode.commands.registerCommand('hirayacoder.showAdaptation', () => showAdaptationCommand(app)),
 
     vscode.commands.registerCommand('hirayacoder.resetAdaptation', () => resetAdaptationCommand(app)),
@@ -1060,6 +1069,51 @@ async function showAuditLogCommand(app) {
 }
 
 /**
+ * Show what the agent has changed, and what each change looked like.
+ *
+ * Rendered as a diff document rather than a list of paths, because the question this
+ * answers is "what did it do to my file", and a path alone answers "which file" and
+ * stops there. Newest first: the thing you want is almost always the last thing that
+ * happened.
+ *
+ * @param {HirayaCoder} app
+ */
+async function showFileHistoryCommand(app) {
+  if (!app.fileHistory) {
+    vscode.window.showWarningMessage('HirayaCoder: no workspace folder is open, so nothing has been recorded.');
+    return;
+  }
+
+  await app.fileHistory.flush();
+  const entries = await app.fileHistory.recent({ limit: 100 });
+  if (entries.length === 0) {
+    vscode.window.showInformationMessage('HirayaCoder: the agent has not changed any files in this workspace yet.');
+    return;
+  }
+
+  const blocks = entries.map((entry) => {
+    const what =
+      entry.kind === 'delete'
+        ? `deleted (${entry.removed} lines)`
+        : entry.kind === 'create'
+          ? `created (${entry.added} lines)`
+          : `edited (+${entry.added} / -${entry.removed})`;
+
+    const header = `${entry.ts}  session ${entry.sessionId || '?'}  ${entry.model || ''}\n${entry.path} — ${what}`;
+    return entry.diff ? `${header}\n${entry.diff}` : header;
+  });
+
+  const document = await vscode.workspace.openTextDocument({
+    content:
+      `HirayaCoder file history — ${entries.length} most recent change(s), newest first\n` +
+      'Diffs are trimmed to the changed region and capped. Use git for a full history.\n\n' +
+      `${blocks.join('\n\n' + '-'.repeat(70) + '\n\n')}\n`,
+    language: 'diff',
+  });
+  await vscode.window.showTextDocument(document, { preview: true });
+}
+
+/**
  * Show what the extension has learned about each model in this workspace.
  *
  * The design rule this command exists to satisfy: profiles are advisory, visible, and
@@ -1220,6 +1274,16 @@ async function clearMemoryCommand(app) {
   // retract one, because a fact that has become false ("there is no JDK here", after
   // they install one) is worse than no fact: it persists and it is stated to every
   // future turn as settled.
+  const changedFiles = app.fileHistory ? (await app.fileHistory.recent({ limit: 500 })).length : 0;
+  if (changedFiles > 0) {
+    items.push({
+      label: 'The record of what files were changed',
+      description: `${changedFiles} change(s)`,
+      detail: 'Diffs of every write the agent made in this workspace. Clearing this does not undo anything.',
+      sessionId: -2,
+    });
+  }
+
   const knownFacts = app.facts ? (await app.facts.load()).length : 0;
   if (knownFacts > 0) {
     items.push({
@@ -1238,21 +1302,36 @@ async function clearMemoryCommand(app) {
 
   const confirm = 'Clear it';
   const clearingFacts = picked.sessionId === -1;
-  const choice = await vscode.window.showWarningMessage(
-    clearingFacts ? 'Clear what this workspace has learned?' : `Clear the memory for session ${picked.sessionId}?`,
-    {
-      modal: true,
-      detail: clearingFacts
-        ? 'The agent will re-discover things like a missing toolchain the slow way, one failed command at a time.'
-        : 'The agent will no longer recall anything from earlier in that session.',
-    },
-    confirm
-  );
+  const clearingHistory = picked.sessionId === -2;
+
+  /** @type {[string, string]} */
+  const [title, detail] = clearingFacts
+    ? [
+        'Clear what this workspace has learned?',
+        'The agent will re-discover things like a missing toolchain the slow way, one failed command at a time.',
+      ]
+    : clearingHistory
+      ? [
+          'Clear the record of what files were changed?',
+          'Your files are not touched — only the log of what changed and when. The agent will stop being able to tell you what it did earlier.',
+        ]
+      : [
+          `Clear the memory for session ${picked.sessionId}?`,
+          'The agent will no longer recall anything from earlier in that session.',
+        ];
+
+  const choice = await vscode.window.showWarningMessage(title, { modal: true, detail }, confirm);
   if (choice !== confirm) return;
 
   if (clearingFacts) {
     await app.facts.clear();
     vscode.window.showInformationMessage('HirayaCoder: cleared what this workspace had learned.');
+    return;
+  }
+
+  if (clearingHistory) {
+    await app.fileHistory.clear();
+    vscode.window.showInformationMessage('HirayaCoder: cleared the record of file changes.');
     return;
   }
 

@@ -87,9 +87,15 @@ const ONLY_LOGS = /^[\s{}]*(?:console\.log\([^)]*\);?|print\([^)]*\);?|pass|\.\.
  *
  * Deliberately not matching a bare "TODO" in a string: a todo *application* prints the
  * word constantly, and that is the exact program this was found in.
+ *
+ * "placeholder" was in this list for one commit and is gone for the same reason. It is
+ * a standard HTML attribute — `<input placeholder="Enter a task...">` — so the pattern
+ * fired on the attribute name and reported a perfectly ordinary form field as an
+ * unbuilt feature. Every entry here has to be a phrase whose *only* use is announcing
+ * that something is missing, and a word that appears in the HTML spec is not one.
  */
 const PLACEHOLDER_LITERAL =
-  /["'`][^"'`\n]*\b(?:coming\s+soon|not\s+(?:yet\s+)?implemented|implement(?:ation)?\s+pending|to\s+be\s+implemented|feature\s+pending|placeholder)\b[^"'`\n]*["'`]/i;
+  /["'`][^"'`\n]*\b(?:coming\s+soon|not\s+(?:yet\s+)?implemented|implement(?:ation)?\s+pending|to\s+be\s+implemented|feature\s+pending)\b[^"'`\n]*["'`]/i;
 
 /**
  * Function bodies in the content that contain a deferral comment and no real work.
@@ -176,6 +182,65 @@ function placeholderLiterals(content) {
   return found;
 }
 
+/** Interactive elements that only do something if script is wired to them. */
+const INTERACTIVE_ELEMENT = /<(?:button|input|select|textarea|form)\b/gi;
+
+/** Enough interactive markup that the page is clearly meant to do something. */
+const MIN_CONTROLS_FOR_INERT_CHECK = 2;
+
+/**
+ * Is this an HTML page whose controls are wired to nothing?
+ *
+ * The third shape of hollow output, and the one both checks above miss. Produced when
+ * asked to convert a working Python TODO app to a web page with "a cool UI":
+ *
+ *     <button id="addTodoBtn" class="action-button">1. Add TODO</button>
+ *     …
+ *     <script>
+ *         // JavaScript functionality will go here later to implement the full application logic.
+ *     </script>
+ *
+ * Four buttons, styled, laid out, captioned with the menu options from the Python app —
+ * and a script block containing one comment. No string says "coming soon", no function
+ * body is a placeholder because there are no functions, and the file is 52 lines of
+ * real markup. Every existing signal reads it as finished work.
+ *
+ * The test is structural and narrow: a page with controls and no executable script is
+ * a mockup. Pages with no controls are untouched — a static page is a legitimate thing
+ * to write — and a single stray `<button>` is not enough, since a "back" link on a
+ * content page is not an application.
+ *
+ * External scripts count as wiring. A page that loads `app.js` has its behaviour
+ * somewhere this function cannot see, and guessing would fail exactly the projects that
+ * are organised properly.
+ *
+ * @param {string} content
+ * @returns {number} How many unwired controls, or 0 when the page is fine.
+ */
+function inertControls(content) {
+  const text = String(content || '');
+  if (!/<html\b|<!doctype\s+html/i.test(text) && !/<body\b/i.test(text)) return 0;
+
+  const controls = (text.match(INTERACTIVE_ELEMENT) || []).length;
+  if (controls < MIN_CONTROLS_FOR_INERT_CHECK) return 0;
+
+  // Behaviour delegated to a file this function cannot read: assume it is there.
+  if (/<script[^>]*\bsrc\s*=/i.test(text)) return 0;
+
+  // An inline handler is wiring, even if it is unfashionable.
+  if (/\bon(?:click|change|submit|input|keyup|keydown)\s*=/i.test(text)) return 0;
+
+  for (const block of text.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)) {
+    const body = block[1]
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^\s*\/\/[^\n]*$/gm, '')
+      .trim();
+    if (body.length > 0) return 0;
+  }
+
+  return controls;
+}
+
 /**
  * @typedef {object} CompletionContext
  * @property {string} task            What was asked, verbatim.
@@ -223,6 +288,17 @@ function objectTo(context) {
       );
     }
 
+    const inert = inertControls(file.after);
+    if (inert > 0) {
+      return (
+        `You replied "done", but ${file.path} has ${inert} button(s) or input(s) and no JavaScript ` +
+        'behind them — the script block is empty or contains only comments. Nothing on that page does ' +
+        `anything when clicked. Send write_file for ${file.path} again with the real logic in the ` +
+        '<script> block: the handlers, the array the items live in, and the function that redraws the ' +
+        'list. The complete file, every line.'
+      );
+    }
+
     const placeholders = placeholderBodies(file.after);
     if (placeholders.length === 0) continue;
 
@@ -241,6 +317,8 @@ module.exports = {
   objectTo,
   placeholderBodies,
   placeholderLiterals,
+  inertControls,
   PLACEHOLDER_COMMENT,
   PLACEHOLDER_LITERAL,
+  MIN_CONTROLS_FOR_INERT_CHECK,
 };

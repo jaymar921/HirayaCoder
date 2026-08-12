@@ -23,8 +23,27 @@
  */
 
 const logger = require('../utils/logger');
-const { parseToolCalls } = require('../core/outputParser');
+const { parseToolCalls, REQUIRED_FIELDS } = require('../core/outputParser');
 const { truncateToTokens } = require('../utils/tokenBudget');
+
+/**
+ * Required arguments a native tool call arrived without.
+ *
+ * The same `REQUIRED_FIELDS` table Tier B validates against, so the two tiers cannot
+ * disagree about what a tool needs. An empty string counts as missing for the same
+ * reason it does in `parseAction`: `"code": ""` is a write with no content, and letting
+ * it through produces a confusing truncation refusal instead of a plain answer.
+ *
+ * @param {string} name
+ * @param {Record<string, unknown>} args
+ * @returns {string[]}
+ */
+function missingRequired(name, args) {
+  return (REQUIRED_FIELDS.get(name) || []).filter((field) => {
+    const value = args ? args[String(field)] : undefined;
+    return typeof value !== 'string' || value.trim().length === 0;
+  });
+}
 
 /** Guards against a model that calls the same tool with the same arguments forever. */
 const REPEAT_LIMIT = 3;
@@ -236,6 +255,35 @@ async function run(options) {
         break;
       }
 
+      // Tier B validates required fields in `parseAction` and refuses a call without
+      // them, with a correction naming what was missing. Tier A had no equivalent —
+      // Ollama's tool-call format is trusted as structured, so an argument object
+      // missing `path` went straight through to `write_file`, which asked the gate to
+      // resolve `undefined` and came back with "The write to undefined was not applied:
+      // A file path is required."
+      //
+      // Observed on `gemma4:e4b`: five identical writes with no path, each answered by
+      // that sentence, after which the model told the user "the persistent failure
+      // suggests a technical issue with the tool execution environment itself" and
+      // reported the file as written. It was right that something was broken and wrong
+      // about what, because nothing had ever told it which field was missing.
+      const missing = missingRequired(call.name, call.args);
+      if (missing.length > 0) {
+        logger.warn(`Native tool call ${call.name} arrived without ${missing.join(', ')}.`);
+        messages.push({
+          role: 'tool',
+          ...(call.id ? { tool_call_id: call.id } : {}),
+          name: call.name,
+          content:
+            `${call.name} was not run: the call had no ${missing.map((f) => `"${f}"`).join(' and no ')}. ` +
+            `Nothing happened. Call ${call.name} again with ${missing.length === 1 ? 'that field' : 'those fields'} set — ` +
+            `${missing.includes('path') ? '"path" is the workspace-relative file path, like "src/app.js"' : ''}` +
+            `${missing.includes('path') && missing.includes('code') ? ', and ' : ''}` +
+            `${missing.includes('code') ? '"code" is the COMPLETE new contents of the file' : ''}.`,
+        });
+        continue;
+      }
+
       /** @type {import('../core/outputParser').ParsedAction} */
       const action = {
         action: call.name,
@@ -286,4 +334,4 @@ async function run(options) {
   return { steps, summary, stopReason, doneChallenged };
 }
 
-module.exports = { run, callKey, looksLikeNarratedToolCall, REPEAT_LIMIT, NARRATED_CALL_LIMIT };
+module.exports = { run, callKey, looksLikeNarratedToolCall, missingRequired, REPEAT_LIMIT, NARRATED_CALL_LIMIT };

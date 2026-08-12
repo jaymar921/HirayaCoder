@@ -147,6 +147,7 @@ Everything lives under `.hirayacoder/` in the workspace, and nothing leaves the 
 | `.hirayacoder/memory/session<N>.txt` | Plain-text session memory, one file per chat tab |
 | `.hirayacoder/transcripts/session<N>.json` | The conversation, restored when a tab is reopened **and** fed to the model as context |
 | `.hirayacoder/facts.jsonl` | Typed facts about this workspace and machine, shared by every session |
+| `.hirayacoder/history.jsonl` | What the agent changed and what it changed it from — a bounded diff per write |
 | `.hirayacoder/audit.log` | Append-only JSONL: action, decision, mode, timestamp |
 | `.hirayacoder/outcomes.jsonl` | Append-only JSONL: model, tier, action, guard code, stop reason, durations, Ollama up/down transitions — counts only, no paths or content |
 | `.hirayacoder/context-files/` | Index of files attached with `+` |
@@ -158,6 +159,10 @@ one file:
 - **The transcript** is what was *said*, per conversation. Until 0.4.0 it was display
   state only — written, restored into the panel, and never shown to the model, which is
   why the agent could not answer a question about its own conversation.
+- **History** is what was *changed*, per workspace: a bounded diff per write, so both
+  the user and the agent can see what a file looked like before. It is the only file
+  under `.hirayacoder/` that holds workspace content by design, which is why it is
+  redacted and capped and the others do not have to be.
 - **Facts** are what is *true* of the project and the machine, per **workspace**. Typed
   (`environment`, `decision`, `artifact`, `preference`) and shared across every session,
   so a second conversation starts knowing that there is no JDK behind `javac` rather

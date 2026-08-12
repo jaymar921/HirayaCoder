@@ -86,6 +86,11 @@
         "category": "HirayaCoder"
       },
       {
+        "command": "hirayacoder.showFileHistory",
+        "title": "Show File History",
+        "category": "HirayaCoder"
+      },
+      {
         "command": "hirayacoder.showAdaptation",
         "title": "Show Learned Adaptation",
         "category": "HirayaCoder"

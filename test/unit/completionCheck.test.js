@@ -11,7 +11,7 @@
 
 const assert = require('assert');
 
-const { objectTo, placeholderBodies } = require('../../app/agent/completionCheck');
+const { objectTo, placeholderBodies, inertControls } = require('../../app/agent/completionCheck');
 
 describe('completionCheck.objectTo', () => {
   describe('a session that changed nothing', () => {
@@ -223,5 +223,69 @@ function b() {
     placeholderBodies(pathological);
 
     assert.ok(Date.now() - started < 200, 'the placeholder scan backtracked');
+  });
+});
+
+describe('completionCheck.inertControls', () => {
+  const page = (body) => `<!doctype html><html><body>${body}</body></html>`;
+
+  it('catches a UI wired to an empty script block', () => {
+    // The third shape of hollow output. Four styled buttons captioned with the menu
+    // options from the Python app it was converting, and a script block holding one
+    // comment: "JavaScript functionality will go here later". No string says "coming
+    // soon", there are no function bodies to be placeholders, and it is 52 lines of
+    // real markup — every other signal reads it as finished.
+    const html = page(`
+      <button id="addTodoBtn">Add TODO</button>
+      <button id="removeTodoBtn">Remove TODO</button>
+      <input id="newTodoInput">
+      <script>
+        // JavaScript functionality will go here later to implement the full application logic.
+      </script>`);
+
+    assert.strictEqual(inertControls(html), 3);
+  });
+
+  it('accepts a page whose script actually does something', () => {
+    const html = page(`
+      <button id="a">Add</button><input id="i">
+      <script>document.getElementById('a').onclick = () => { todos.push(i.value); render(); };</script>`);
+
+    assert.strictEqual(inertControls(html), 0);
+  });
+
+  it('accepts behaviour delegated to an external file', () => {
+    // Guessing here would fail exactly the projects that are organised properly.
+    const html = page('<button>Add</button><input><script src="app.js"></script>');
+    assert.strictEqual(inertControls(html), 0);
+  });
+
+  it('accepts inline handlers, unfashionable as they are', () => {
+    const html = page('<button onclick="addTodo()">Add</button><input id="i">');
+    assert.strictEqual(inertControls(html), 0);
+  });
+
+  it('leaves a static page alone', () => {
+    // A page with no controls is a legitimate thing to write.
+    assert.strictEqual(inertControls(page('<h1>Docs</h1><p>Read this.</p>')), 0);
+  });
+
+  it('does not fire on a single stray control', () => {
+    // A "back" link on a content page is not an application.
+    assert.strictEqual(inertControls(page('<button>Back</button><script></script>')), 0);
+  });
+
+  it('ignores files that are not HTML', () => {
+    assert.strictEqual(inertControls('function f() { return "<button>"; }'), 0);
+  });
+
+  it('does not read a placeholder attribute as an unbuilt feature', () => {
+    // `placeholder` was in the literal word list for one commit. It is a standard HTML
+    // attribute, so the pattern fired on ordinary form markup.
+    const html = page('<input placeholder="Enter a task..."><button onclick="add()">Add</button>');
+    assert.strictEqual(
+      objectTo({ task: 'build the page', changed: true, written: [{ path: 'index.html', after: html }] }),
+      null
+    );
   });
 });

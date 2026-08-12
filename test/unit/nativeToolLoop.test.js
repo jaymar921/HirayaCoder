@@ -8,7 +8,7 @@
 const assert = require('assert');
 
 const nativeToolLoop = require('../../app/agent/nativeToolLoop');
-const { looksLikeNarratedToolCall, NARRATED_CALL_LIMIT } = nativeToolLoop;
+const { looksLikeNarratedToolCall, missingRequired, NARRATED_CALL_LIMIT } = nativeToolLoop;
 
 const ROUTE = {
   systemPrompt: 'You are a coding agent.',
@@ -125,5 +125,91 @@ describe('nativeToolLoop run', () => {
 
     assert.strictEqual(result.stopReason, 'done');
     assert.strictEqual(client.calls, 1);
+  });
+});
+
+describe('nativeToolLoop required arguments', () => {
+  const toolCall = (name, args) => ({
+    role: 'assistant',
+    content: '',
+    tool_calls: [{ function: { name, arguments: args } }],
+  });
+
+  it('names the fields a call arrived without', () => {
+    assert.deepStrictEqual(missingRequired('write_file', { code: 'x' }), ['path']);
+    assert.deepStrictEqual(missingRequired('write_file', { path: 'a.js' }), ['code']);
+    assert.deepStrictEqual(missingRequired('write_file', {}), ['path', 'code']);
+    assert.deepStrictEqual(missingRequired('write_file', { path: 'a.js', code: 'x' }), []);
+  });
+
+  it('treats an empty string as missing', () => {
+    // `"code": ""` is a write with no content. Letting it through produces a confusing
+    // truncation refusal instead of a plain answer about the missing field.
+    assert.deepStrictEqual(missingRequired('write_file', { path: 'a.js', code: '   ' }), ['code']);
+  });
+
+  it('asks nothing of a tool that requires nothing', () => {
+    assert.deepStrictEqual(missingRequired('list_files', {}), []);
+  });
+
+  it('refuses the call and says which field was missing, without running the tool', async () => {
+    // Observed on `gemma4:e4b`: five identical write_file calls with no path, each
+    // answered only with "The write to undefined was not applied: A file path is
+    // required." The model concluded there was "a technical issue with the tool
+    // execution environment" and reported the file as written. Nothing had ever told it
+    // which field it had left out.
+    const client = scriptedClient([
+      toolCall('write_file', { code: '<html></html>' }),
+      { role: 'assistant', content: 'I see — I left the path out.' },
+    ]);
+
+    /** @type {string[]} */
+    const executed = [];
+    const outcome = await nativeToolLoop.run({
+      client,
+      model: 'gemma4:e4b',
+      route: ROUTE,
+      task: 'write the page',
+      context: 'Task: write the page',
+      execute: async (action) => {
+        executed.push(action.action);
+        return { ok: true, observation: 'wrote it' };
+      },
+    });
+
+    assert.deepStrictEqual(executed, [], 'a call with no path reached the tool');
+    assert.strictEqual(outcome.steps.length, 0);
+
+    // Read off the message itself rather than a JSON dump of the conversation, where
+    // the quotes around the field name come back escaped and never match.
+    const correction = client.bodies[1].messages.find((m) => m.role === 'tool');
+    assert.ok(correction, 'the model was told nothing about the failed call');
+    assert.match(correction.content, /had no "path"/);
+    assert.match(correction.content, /workspace-relative file path/);
+  });
+
+  it('lets a corrected call through on the next turn', async () => {
+    const client = scriptedClient([
+      toolCall('write_file', { code: 'x' }),
+      toolCall('write_file', { path: 'index.html', code: '<html></html>' }),
+      { role: 'assistant', content: 'Created index.html.' },
+    ]);
+
+    /** @type {string[]} */
+    const written = [];
+    const outcome = await nativeToolLoop.run({
+      client,
+      model: 'm',
+      route: ROUTE,
+      task: 'write the page',
+      context: 'Task: write the page',
+      execute: async (action) => {
+        written.push(action.path);
+        return { ok: true, observation: 'wrote it' };
+      },
+    });
+
+    assert.deepStrictEqual(written, ['index.html']);
+    assert.strictEqual(outcome.stopReason, 'done');
   });
 });

@@ -14,6 +14,33 @@ of the individual fixes. Three of the four bugs below had been shipped and unnot
 since the features they belong to were written, and each of them silently degraded a
 whole feature rather than failing loudly.
 
+### Added — a record of what was changed, and what it was changed from
+
+A `ChangeSet` holds the before and after of every write for exactly as long as the turn
+lasts. The review UI draws a diff from it and then it is gone. Session memory keeps a
+sentence — "Edited src/todo_manager.py: added priority handling" — which says a file was
+touched and nothing about what happened to it. So "what did it do to this file two turns
+ago" had no answer anywhere.
+
+`core/fileHistory` writes a bounded diff per write to `.hirayacoder/history.jsonl`, and
+**Show File History** renders them newest-first as a diff document. Diffs and not
+snapshots: storing both versions of every file would duplicate the workspace on each
+write, and inside a git repository it would duplicate git. The trade is worth stating
+plainly — a large rewrite is recorded as a truncated diff and cannot be reversed from
+this file. Git is the tool for that; this one is for seeing what happened without
+leaving the editor.
+
+The agent gets the short version, paths and line counts only, under the heading *"files
+you have already changed in this session — do not redo this work"*. That is the half
+that changes behaviour rather than reporting on it. A model asked to modify a file it
+edited three turns ago has no idea it did so, and re-does or undoes its own work —
+observed exactly that way more than once, most memorably a model that had correctly
+wired two classes together and then rewrote the file without the wiring.
+
+This is the one file under `.hirayacoder/` that holds workspace content by design, which
+is why every diff goes through the secrets scanner on the way in and the file is capped.
+`outcomes.jsonl` needs neither, because it holds nothing but counts and enums.
+
 ### Added — how long it took, and whether Ollama is still there
 
 Both recorded locally, in the file that already exists for exactly this kind of thing.
@@ -58,6 +85,77 @@ nothing and a flapping one is legible as a few flips with timestamps. Notificati
 only on entering a state the user can act on, and recovery is a quiet status-bar line
 shown only to someone who saw the failure. **Show Status** carries the glance version:
 last, average, and slowest call, plus any current failure streak.
+
+### Fixed — Tier A ran a tool call that had no path
+
+Tier B validates required fields in `parseAction` and refuses a call without them, with
+a correction naming what was missing. Tier A had no equivalent: Ollama's tool-call format
+arrives structured, so it was trusted, and an argument object missing `path` went
+straight through to `write_file` — which asked the gate to resolve `undefined` and came
+back with "The write to undefined was not applied: A file path is required."
+
+Observed on `gemma4:e4b`: five identical writes with no path, each answered by that same
+sentence. The model then told the user "the persistent failure to write content to
+`index.html` suggests a technical issue with the tool execution environment itself" and
+reported the file as written. It was right that something was broken and wrong about
+what, because nothing had ever told it which field it had left out.
+
+Both tiers now validate against the same `REQUIRED_FIELDS` table, so they cannot
+disagree about what a tool needs, and the correction names the field.
+
+### Fixed — the assent-word exclusion was over-corrected
+
+The previous fix excluded "ok", "sure", "proceed" from the social vocabulary so that
+`"okay proceed"` could not read as small talk. That was right, and it was implemented as
+*any message containing one is work*, which was not. The cost showed up on the next
+test: `"okay thank you"` ran a four-item TODO list that re-analysed five files, and
+`"it's okay"` spent its budget on refused `which java` calls.
+
+Assent is now a third category rather than a disqualifier. A message made only of assent
+is a go-ahead and goes to the agent; assent *plus* a real pleasantry is an
+acknowledgement and does not.
+
+Three more misses from the same session, all of them messages that named no file and
+asked for no work:
+
+- **"how are you"** went to the agent, which read two source files and reported on them.
+  The user's next message was "why are you reading the files, i just asked how are you".
+- **"hello gemma4"** went to the agent because `gemma4` is in no vocabulary and never
+  could be — it is whatever the user has installed. The model replied by asking for "the
+  full task description". A greeting of three words or fewer is now a greeting.
+- **"can you verify our conversation, where are we currently right now?"** was claimed by
+  `verify` in the work-verb list, and the agent re-read one file until the repeat guard
+  stopped it. Twice — the user rephrased, and the rephrasing contained `created`.
+  Questions about the assistant, the conversation, and where the work has got to are now
+  checked *before* the general work-verb rule and after the mutating-verb rule, so
+  "verify the conversation" is conversation and "fix the parser" is still work.
+
+### Fixed — a UI wired to an empty script counted as finished
+
+The third shape of hollow output, and one both existing checks missed. Asked to convert
+a working Python TODO app to a web page with "a cool UI", the agent produced 52 lines of
+real markup — four styled buttons captioned with the menu options from the Python app, a
+text input, a list container — and this:
+
+    <script>
+        // JavaScript functionality will go here later to implement the full application logic.
+    </script>
+
+No string says "coming soon". There are no function bodies to be placeholders, because
+there are no functions. The change set grew. Every signal read it as finished work.
+
+The test is structural and narrow: an HTML page with two or more controls and no
+executable script is a mockup. A page with no controls is untouched, since a static page
+is a legitimate thing to write; a single stray `<button>` is not enough, since a "back"
+link on a content page is not an application; and a page that loads an external script
+or uses inline handlers is assumed wired, because guessing otherwise would fail exactly
+the projects that are organised properly.
+
+Also removed `placeholder` from the placeholder-literal word list, where it had been for
+one commit. It is a standard HTML attribute, so the pattern fired on
+`<input placeholder="Enter a task...">` and reported an ordinary form field as an unbuilt
+feature. Every entry in that list has to be a phrase whose only use is announcing that
+something is missing, and a word from the HTML spec is not one.
 
 ### Fixed — "okay proceed" was answered as small talk
 
