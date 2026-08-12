@@ -117,6 +117,108 @@ describe('AgentSession', () => {
     });
   });
 
+  describe('conversation in Agent mode', () => {
+    it('answers a greeting instead of running the agent at it', async () => {
+      // Reproduced from the evaluation session: in Agent mode every message went into
+      // the loop, whose grammar has no branch for an answer, so "what model are you"
+      // came back as "I stopped because I kept repeating the same step (read_file)".
+      const client = scriptedClient(['Hey! What are we working on?']);
+      const session = makeSession({ client });
+
+      const result = await session.run('hi', { mode: 'agent' });
+
+      assert.strictEqual(result.stopReason, 'conversation');
+      assert.strictEqual(result.steps.length, 0);
+      assert.strictEqual(client.calls, 1, 'exactly one call, no loop');
+      assert.strictEqual(result.summary, 'Hey! What are we working on?');
+      assert.strictEqual(client.bodies[0].tools, undefined, 'a tool schema was offered for a greeting');
+      assert.strictEqual(client.bodies[0].format, undefined, 'the action grammar was still applied');
+    });
+
+    it('runs the agent when the greeting has work attached', async () => {
+      const client = scriptedClient([
+        json({ thought: 'write it', action: 'write_file', path: 'src/new.js', code: 'export const a = 1;\n' }),
+        json({ action: 'done', summary: 'Added src/new.js.' }),
+      ]);
+      const session = makeSession({ client, autoEdit: true });
+
+      const result = await session.run('hi! please create src/new.js', { mode: 'agent' });
+
+      assert.notStrictEqual(result.stopReason, 'conversation');
+      assert.ok(fs.existsSync(path.join(root, 'src', 'new.js')), 'the request was dropped as small talk');
+    });
+
+    it('shows the model what was said earlier', async () => {
+      const client = scriptedClient(['You asked me to build a Java todo app.']);
+      const session = makeSession({ client });
+
+      await session.run('can you remember our first conversation?', {
+        mode: 'agent',
+        conversation: [
+          { role: 'user', text: 'create a java todo app' },
+          { role: 'assistant', text: 'Created TodoApp.java.' },
+        ],
+      });
+
+      const prompt = JSON.stringify(client.bodies[0].messages);
+      assert.match(prompt, /create a java todo app/);
+    });
+
+    it('carries the conversation into a working turn too', async () => {
+      // "do it the way we discussed" is an ordinary thing to say mid-task.
+      const client = scriptedClient([json({ action: 'done', summary: 'Done.' })]);
+      const session = makeSession({ client });
+
+      await session.run('do the same for the other file', {
+        mode: 'agent',
+        conversation: [{ role: 'user', text: 'use tabs, not spaces' }],
+      });
+
+      assert.match(JSON.stringify(client.bodies[0].messages), /use tabs, not spaces/);
+    });
+  });
+
+  describe('what the workspace has learned', () => {
+    it('records a missing toolchain and offers it to the next session', async () => {
+      // The evaluation cost this twice: session 1 spent its whole budget finding out
+      // `javac` could not run, and session 2 — same workspace, an hour later — spent
+      // its budget finding out again, then proposed apt-get on macOS.
+      const { FactStore } = require('../../app/core/factStore');
+
+      const first = makeSession({ client: scriptedClient(['ok']) });
+      first.facts = new FactStore(root);
+      await first._remember([
+        {
+          action: { action: 'run_script', command: 'javac -d build src/main/java/App.java' },
+          result: { ok: false, observation: 'Unable to locate a Java Runtime.' },
+        },
+      ]);
+      await first.facts.flush();
+
+      // A second session, with its own store over the same workspace.
+      const next = makeSession({ client: scriptedClient(['ok']) });
+      next.facts = new FactStore(root);
+
+      assert.match(await next._renderMemory(), /Java runtime/i);
+    });
+
+    it('puts what is known into the system prompt of the next turn', async () => {
+      const { FactStore } = require('../../app/core/factStore');
+      const facts = new FactStore(root);
+      await facts.record({ kind: 'environment', text: 'A Java runtime (JDK) is not available on this machine.' });
+      await facts.flush();
+
+      const client = scriptedClient([json({ action: 'done', summary: 'Understood.' })]);
+      const session = makeSession({ client });
+      session.facts = facts;
+
+      await session.run('compile the project', { mode: 'agent' });
+
+      const systemPrompt = client.bodies[0].messages[0].content;
+      assert.match(systemPrompt, /Java runtime/i, 'the session re-learned what it already knew');
+    });
+  });
+
   describe('Plan mode', () => {
     it('explores read-only and produces a checklist without touching disk', async () => {
       const client = scriptedClient([

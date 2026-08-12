@@ -212,9 +212,16 @@ module.exports = async function runScript(args, context) {
   try {
     result = await context.gate.runScript({ ...request, signal: context.signal }, decision);
   } catch (err) {
+    // The code travels with the result. `BINARY_NOT_FOUND` is raised here rather than
+    // at validation — the allow-list vets the name, and only `scriptRunner.run` looks
+    // for the program on PATH — so without this it was the one refusal reason that
+    // reached the loop as prose and nothing else. `factStore` reads it to record that
+    // the toolchain is absent, which is the fact worth keeping from a failed run.
+    const code = /** @type {Error & {code?: string}} */ (err).code;
     return {
       ok: false,
-      observation: `\`${command}\` could not be started: ${/** @type {Error} */ (err).message}`,
+      observation: `\`${command}\` could not be started: ${/** @type {Error} */ (err).message}${nextStepAfterRefusal(code, command)}`,
+      error: code,
     };
   }
 

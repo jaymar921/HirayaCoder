@@ -25,6 +25,7 @@
 
 const logger = require('../utils/logger');
 const promptRouter = require('../core/promptRouter');
+const intentRouter = require('../core/intentRouter');
 const toolRegistry = require('./toolRegistry');
 const contextBuilder = require('../core/contextBuilder');
 const reactLoop = require('./reactLoop');
@@ -316,6 +317,15 @@ class AgentSession {
     this.gate = options.gate;
     this.workspaceRoot = options.workspaceRoot;
     this.memory = options.memory || null;
+    /**
+     * What is true of this workspace and machine, across every session.
+     *
+     * Separate from `memory` on purpose: that is a per-session log of what happened,
+     * this is what was established. Null when there is no workspace to keep it in.
+     *
+     * @type {import('../core/factStore').FactStore | null}
+     */
+    this.facts = options.facts || null;
     this.translator = options.translator || null;
     this.contextFiles = options.contextFiles || null;
     this.thinkingCapacity = options.thinkingCapacity || 'medium';
@@ -340,6 +350,17 @@ class AgentSession {
     this.ledger = options.ledger || null;
     this.adaptation = options.adaptation || {};
 
+    /**
+     * Earlier turns of this chat, set per `run` call.
+     *
+     * Held on the session rather than threaded through every private method: the
+     * context is rebuilt once per TODO item and once per loop turn, and each of those
+     * call sites would otherwise have to remember to pass it on.
+     *
+     * @type {Array<{role: string, text: string}>}
+     */
+    this.conversation = [];
+
     /** @type {AbortController | null} */
     this._controller = null;
     this.running = false;
@@ -357,33 +378,59 @@ class AgentSession {
    * @param {object} [options]
    * @param {'agent' | 'plan' | 'ask'} [options.mode]
    * @param {{path?: string, content?: string, selection?: string, language?: string}} [options.editor]
+   * @param {Array<{role: string, text: string}>} [options.conversation]
+   *   Earlier turns, oldest first, not including this one.
    * @param {(event: object) => void} [options.onEvent]
    * @returns {Promise<SessionResult>}
    */
   async run(task, options = {}) {
     const mode = options.mode || 'agent';
     const emit = options.onEvent || (() => {});
+    this.conversation = Array.isArray(options.conversation) ? options.conversation : [];
     this._controller = new AbortController();
     this.running = true;
 
     try {
+      // Only Agent mode is routed by intent — Plan and Ask are the user saying what they
+      // want, and second-guessing an explicit choice is not this classifier's job.
+      const intent = mode === 'agent' ? intentRouter.classify(task) : { intent: 'task', reason: 'mode was chosen' };
+      if (intent.intent === 'chat') {
+        logger.info(`Answering conversationally rather than running the agent (${intent.reason}).`);
+      }
+
       const activeRoute = promptRouter.route({
         mode,
         capability: this.capability,
         thinkingCapacity: this.thinkingCapacity,
-        memory: this.memory ? await this.memory.renderForPrompt(this._recallDepth()) : '',
+        memory: await this._renderMemory(),
         earnedHints: await this._earnedHints(mode),
+        intent: intent.intent,
       });
 
-      emit({ type: 'start', mode, strategy: activeRoute.strategy, maxSteps: activeRoute.budgets.maxSteps });
+      emit({
+        type: 'start',
+        mode,
+        strategy: activeRoute.strategy,
+        maxSteps: activeRoute.budgets.maxSteps,
+        // The UI needs to know a turn will not be doing any work, so it can stop
+        // promising a step counter it is never going to fill in.
+        conversational: activeRoute.strategy === 'chat',
+      });
 
-      // Ask mode: one response, no loop, no tools in existence.
-      if (activeRoute.strategy === 'none') {
+      // Ask mode, and Agent mode answering conversation: one response, no loop, no
+      // tools in existence.
+      if (activeRoute.strategy === 'none' || activeRoute.strategy === 'chat') {
         const askContext = await this._buildContext(task, activeRoute, options.editor);
         const summary = await this._answerDirectly(task, activeRoute, askContext);
         emit({ type: 'done', summary });
         /** @type {SessionResult} */
-        const answered = { summary, steps: [], changeSet: new ChangeSet(), stopReason: 'answered', mode };
+        const answered = {
+          summary,
+          steps: [],
+          changeSet: new ChangeSet(),
+          stopReason: activeRoute.strategy === 'chat' ? 'conversation' : 'answered',
+          mode,
+        };
         await this._recordSession(answered);
         return answered;
       }
@@ -811,6 +858,38 @@ class AgentSession {
   }
 
   /**
+   * The memory block for the system prompt: established facts, then session notes.
+   *
+   * Facts come first and are never trimmed for notes, because they are the statements a
+   * turn most needs and the ones least likely to be re-derivable. "Java is not available
+   * on this machine" changes what the whole session should attempt; "Edited
+   * src/todo_manager.py" is recoverable by reading the file.
+   *
+   * Both go under the one heading the prompt templates carry. Facts are self-labelling
+   * — `[This machine]`, `[Decided]` — so the distinction survives without a second
+   * placeholder in every template.
+   *
+   * @returns {Promise<string>}
+   * @private
+   */
+  async _renderMemory() {
+    const blocks = [];
+
+    if (this.facts) {
+      try {
+        const known = await this.facts.renderForPrompt();
+        if (known) blocks.push(known);
+      } catch (err) {
+        logger.warn(`Could not read established facts: ${/** @type {Error} */ (err).message}`);
+      }
+    }
+
+    if (this.memory) blocks.push(await this.memory.renderForPrompt(this._recallDepth()));
+
+    return blocks.filter(Boolean).join('\n');
+  }
+
+  /**
    * How many memory entries to recall, per thinking capacity.
    *
    * @returns {number}
@@ -834,18 +913,29 @@ class AgentSession {
   async _buildContext(task, activeRoute, editor) {
     if (this.contextFiles) await this.contextFiles.refresh();
 
+    // Both of the loopless strategies put memory in the user turn rather than the
+    // system prompt, and neither wants a file listing it has no way to act on.
+    const loopless = activeRoute.strategy === 'none' || activeRoute.strategy === 'chat';
+
     const built = contextBuilder.build({
       task,
       budget: activeRoute.budgets.promptTokenTarget,
       editor: editor || {},
       // Memory is already in the system prompt for the loop tiers; including it
-      // twice would waste a scarce budget on a duplicate.
-      memory: activeRoute.strategy === 'none' && this.memory ? await this.memory.readRecent(this._recallDepth()) : [],
+      // twice would waste a scarce budget on a duplicate. The loopless strategies have
+      // no system-prompt memory block, so it arrives here instead — facts included,
+      // since "Java is not installed here" is exactly the kind of thing a user asks
+      // about conversationally.
+      memory: loopless ? (await this._renderMemory()).split('\n').filter(Boolean) : [],
+      // Carried on every strategy, not only the conversational one. "Do it the way we
+      // discussed" and "the file I mentioned earlier" are ordinary things to say to an
+      // agent mid-task, and until 0.4.0 nothing in the prompt could answer either.
+      conversation: this.conversation,
       contextFiles: this.contextFiles ? this.contextFiles.renderForPrompt() : '',
       // A model that has to discover the file tree spends steps on it and, worse,
       // invents paths when it guesses. Seeding the listing costs a fraction of the
       // budget and removes the most common failure on Tier B outright.
-      workspaceFiles: activeRoute.strategy === 'none' ? [] : await this._workspaceFiles(activeRoute),
+      workspaceFiles: loopless ? [] : await this._workspaceFiles(activeRoute),
     });
 
     return built.text;
@@ -980,7 +1070,32 @@ class AgentSession {
    * @private
    */
   async _remember(steps) {
-    if (!this.translator || steps.length === 0) return;
+    if (steps.length === 0) return;
+
+    // Facts first, and independently of the translator: this is pattern-matching over
+    // what a program printed, so it costs no inference and must not be skipped just
+    // because note-writing is unavailable. It is also the half that outlives the
+    // session, which makes it the half worth being careful about losing.
+    if (this.facts) {
+      try {
+        // Deliberately not `_toStepSummary`, which is shaped for the translator and
+        // drops the error code. What a fact is derived from is the raw evidence: the
+        // action, the command, whether it failed, and what it printed.
+        await this.facts.learnFrom(
+          steps.map((step) => ({
+            action: step.action.action,
+            command: step.action.command,
+            ok: step.result.ok,
+            error: step.result.error,
+            observation: step.result.observation,
+          }))
+        );
+      } catch (err) {
+        logger.warn(`Could not record what this session established: ${/** @type {Error} */ (err).message}`);
+      }
+    }
+
+    if (!this.translator) return;
 
     const budgets = require('../core/modelCapability').budgetsFor(
       this.capability ? this.capability.tier : 'B',

@@ -428,6 +428,10 @@ class ChatTab {
       return;
     }
 
+    // Snapshotted before the new message joins it: what goes to the model is the
+    // conversation *up to* this turn, and the turn itself arrives as the task.
+    const conversation = this.history.slice();
+
     this.history.push({ role: 'user', text });
     if (this.transcript) this.transcript.append('user', text);
     this._post({ type: 'start' });
@@ -442,6 +446,9 @@ class ChatTab {
       gate: this.app.gate,
       workspaceRoot: this.app.workspaceRoot,
       memory: this.app.memoryFor(this.sessionId),
+      // Shared across tabs, like the ledger: a missing toolchain is a fact about the
+      // machine, not about this conversation.
+      facts: this.app.facts,
       // This tab's own translator. A shared one wrote every tab's notes into whichever
       // session the extension happened to open at activation.
       translator: this.app.translatorFor(this.sessionId),
@@ -460,6 +467,11 @@ class ChatTab {
       const result = await this.session.run(text, {
         mode: this.mode,
         editor: this._editorContext(),
+        // `history` was display state only until 0.4.0 — written to disk, restored into
+        // the panel on reopen, and never shown to the model. That is why the agent could
+        // not answer "can you remember our first conversation?" except by searching the
+        // workspace: the conversation was the one thing it had no access to.
+        conversation,
         onEvent: (event) => this._onAgentEvent(event),
       });
 

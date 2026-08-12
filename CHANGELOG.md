@@ -14,8 +14,100 @@ of the individual fixes. Three of the four bugs below had been shipped and unnot
 since the features they belong to were written, and each of them silently degraded a
 whole feature rather than failing loudly.
 
-This is the first half of 0.4.0 — the defects. The conversational routing and the
-structured memory the same session argued for are the second half.
+### Added — the agent answers when it is being talked to
+
+Agent mode constrains Tier B decoding to `outputParser.actionSchema`, a grammar whose
+every branch is a tool call. A greeting cannot produce a greeting, because a greeting is
+not in the language the model is permitted to speak. So "hi", "what model are you", and
+"can you remember our first conversation?" each had exactly one way out: pick a tool.
+The model picked `read_file`, the loop handed back a file, it picked another, and the
+repeat guard ended the turn. An entire evaluation session — nine messages, none of them
+requests for work — came back as nine variations of "I stopped because I kept repeating
+the same step".
+
+The model was never the problem. A 1B model says hello perfectly well. It was not
+allowed to.
+
+`core/intentRouter` now classifies each message before routing, and a conversational one
+is answered directly: one call, no loop, no tools in existence — the same mechanism Ask
+mode uses, chosen by what was typed rather than by a button. The mode selector does not
+move, and the next message is routed on its own merits.
+
+The classifier is patterns, not a model call. It runs before every turn on hardware
+where an inference is seconds, and a round-trip to establish that "hi" is not a refactor
+is a bad trade — and another chance for a small model to be wrong about something the
+caller can simply read. `task` is the default and `chat` requires positive evidence,
+because being wrong toward `task` costs one loop that reads a file and answers, which is
+what every message got before this, while being wrong toward `chat` silently drops a
+request. An imperative anywhere in the message overrides everything: "hey, can you fix
+the bug in app.js" is work with a greeting attached.
+
+Only Agent mode consults it. Plan and Ask are the user saying what they want, and
+second-guessing an explicit choice is not a classifier's job.
+
+### Added — the conversation reaches the model
+
+`chatTab.history` was display state. Its own comment said so: "the model is given memory
+and a freshly built context, never this." The transcript on disk was written and never
+read back. So the agent had no access to anything said before the current message, and
+answered "can you remember our first conversation?" by searching the workspace — the only
+place it had ever been allowed to look.
+
+Session memory was meant to cover this and structurally cannot. It records what the agent
+*did*: "Ran `javac …` (failed)", "Edited src/todo_manager.py". Almost nothing worth
+remembering is an action. Across six evaluation sessions the decision to abandon Java for
+Python, the fact that the deliverable was `todoapp.html`, and every requirement the user
+restated were all absent from it, because none of them are things the agent did.
+
+Earlier turns are now assembled into the prompt as their own budgeted section, on every
+strategy rather than only the conversational one — "do it the way we discussed" and "the
+file I mentioned earlier" are ordinary things to say to an agent mid-task. It outranks
+session memory under budget pressure: the notes are a compression of the same material,
+so when only one survives it should be the primary source.
+
+### Added — `core/factStore`, the half of memory that is not a diary
+
+Session 1 spent its entire step budget discovering that `javac` could not run on the test
+machine. Session 2, same workspace an hour later, spent its budget discovering it again —
+and then proposed `sudo apt-get install default-jdk` on macOS. Nothing carried, because
+the only thing being carried was a list of actions, and "this command failed" is not the
+same statement as "this toolchain is absent".
+
+Facts are typed (`environment`, `decision`, `artifact`, `preference`), stored per
+*workspace* rather than per session, and rendered into the system prompt above the
+session notes — grouped, labelled, and ordered so a user's decision outranks anything
+observed. They survive across sessions and across chat tabs, which is the entire point.
+
+Nothing here involves a model call. A fact is detected by matching what a program
+printed, or it is not recorded, for the same reason the outcome ledger only counts
+evidence: a wrong fact is worse than no fact, because it persists and is stated to every
+future turn as settled. The detector is correspondingly quiet — a compile error teaches
+it nothing, since that is about the code and will be fixed in the next step.
+
+What it does recognise is a missing toolchain, in all three of the ways one announces
+itself, because a detector written from a single macOS transcript would have been
+silently useless on the platforms this also ships to:
+
+    macOS    The operation couldn't be completed. Unable to locate a Java Runtime.
+    Linux    javac: command not found
+    Windows  'javac' is not recognized as an internal or external command
+
+The macOS case is the one no PATH check could ever have caught: Apple ships a `javac`
+stub, so the program really is on PATH and really does exit non-zero. `BINARY_NOT_FOUND`
+now travels with the tool result as an error code too — it is raised inside
+`scriptRunner.run` rather than at validation, so until now it was the one refusal reason
+that reached the loop as prose and nothing else.
+
+"Clear session memory" gains an entry for the workspace's facts, kept separate from the
+per-session ones because they have a different scope. A fact that has become false — "no
+JDK here", after the user installs one — is the case that most needs a way out.
+
+### Still to come in 0.4.0
+
+Verification of `done` against the change set, so "2 of 2 item(s) completed" cannot be
+reported for a run that wrote nothing; and stub detection in `write_file`, for the
+generated `todoapp.html` whose handlers were `console.log` under
+`// Implement the delete functionality here`.
 
 ### Fixed — the permissions button in the chat tab never worked, at all
 

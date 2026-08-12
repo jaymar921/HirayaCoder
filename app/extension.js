@@ -24,6 +24,7 @@ const { AuditLog } = require('./security/auditLog');
 const { DEFAULT_ALLOWED_BINARIES } = require('./security/scriptRunner');
 const { MemoryStore, nextSessionId, listSessions } = require('./core/memoryStore');
 const { OutcomeLedger } = require('./core/outcomeLedger');
+const { FactStore } = require('./core/factStore');
 const earnedHints = require('./agent/earnedHints');
 const { ContextFilesManager } = require('./core/contextFilesManager');
 const { ContextTranslator } = require('./core/contextTranslator');
@@ -158,6 +159,8 @@ class HirayaCoder {
 
     /** @type {OutcomeLedger | null} */
     this.ledger = null;
+    /** @type {FactStore | null} */
+    this.facts = null;
 
     this.buildClient();
     this.buildSecurityLayer();
@@ -175,6 +178,12 @@ class HirayaCoder {
   buildLedger() {
     const root = workspaceRoot();
     this.ledger = root ? new OutcomeLedger(root) : null;
+    // Workspace scope, like the ledger and for the same reason: what a session finds
+    // out about this machine — that there is no JDK behind `javac`, say — is a fact
+    // about the project, not about the conversation that happened to discover it. Held
+    // per session it would be rediscovered from scratch in every new tab, which is
+    // exactly what the evaluation sessions did, twice, at the cost of a whole run each.
+    this.facts = root ? new FactStore(root) : null;
   }
 
   /** The workspace folder, or null when none is open. */
@@ -1146,19 +1155,46 @@ async function clearMemoryCommand(app) {
     sessionId: session.sessionId,
   }));
 
+  // Facts are workspace-scoped, so they are not cleared by clearing any one session —
+  // that is the whole point of keeping them separately. The user still needs a way to
+  // retract one, because a fact that has become false ("there is no JDK here", after
+  // they install one) is worse than no fact: it persists and it is stated to every
+  // future turn as settled.
+  const knownFacts = app.facts ? (await app.facts.load()).length : 0;
+  if (knownFacts > 0) {
+    items.push({
+      label: 'Everything this workspace has learned',
+      description: `${knownFacts} fact${knownFacts === 1 ? '' : 's'}`,
+      detail: 'Facts about this machine and project, shared by every session. Clear this after installing something the agent recorded as missing.',
+      sessionId: -1,
+    });
+  }
+
   const picked = await vscode.window.showQuickPick(items, {
     title: 'Clear session memory',
-    placeHolder: 'This permanently deletes what the agent remembers for that session.',
+    placeHolder: 'This permanently deletes what the agent remembers.',
   });
   if (!picked) return;
 
   const confirm = 'Clear it';
+  const clearingFacts = picked.sessionId === -1;
   const choice = await vscode.window.showWarningMessage(
-    `Clear the memory for session ${picked.sessionId}?`,
-    { modal: true, detail: 'The agent will no longer recall anything from earlier in that session.' },
+    clearingFacts ? 'Clear what this workspace has learned?' : `Clear the memory for session ${picked.sessionId}?`,
+    {
+      modal: true,
+      detail: clearingFacts
+        ? 'The agent will re-discover things like a missing toolchain the slow way, one failed command at a time.'
+        : 'The agent will no longer recall anything from earlier in that session.',
+    },
     confirm
   );
   if (choice !== confirm) return;
+
+  if (clearingFacts) {
+    await app.facts.clear();
+    vscode.window.showInformationMessage('HirayaCoder: cleared what this workspace had learned.');
+    return;
+  }
 
   // The cached store for that session, not a second one onto the same file. A fresh
   // instance clears the file while the one a running tab holds keeps its own entries
