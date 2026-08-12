@@ -591,6 +591,21 @@ The client read its deadline with `opts.timeoutMs || this.timeoutMs`, so an expl
 zero was falsy and fell back to the 5-minute default. Model pulls legitimately run for
 an hour; the download would have been aborted partway and started over.
 
+### Fixed — the release job failed when the release already existed
+
+`gh release create` refuses a tag that already has a release, so drafting one by hand —
+or re-running the job after a partial failure — left a verified build with nowhere to
+go. Every platform check had passed; only the publish step failed.
+
+Attaching the `.vsix` is the part that matters and is safe to repeat, so the job now
+uploads to an existing release instead of giving up. Existing notes are deliberately
+left alone: whoever created the release may have written them on purpose, and
+overwriting someone's notes to insert a checksum is not a good trade. The checksum is
+written to the workflow log instead.
+
+Nothing was ever at risk — the artifact is uploaded before this step and unconditionally,
+so a failed publish still leaves the built `.vsix` downloadable from the run.
+
 ### Added — a session's conversation survives closing its tab
 
 Reported from real use: close a chat tab, reopen the same session, and the panel comes
