@@ -23,6 +23,7 @@ const vscode = require('vscode');
 
 const logger = require('../utils/logger');
 const { budgetsFor } = require('../core/modelCapability');
+const { TranscriptStore } = require('../core/transcriptStore');
 const { AgentSession, ChangeSet } = require('../agent/agentSession');
 const { readImage, modelSupportsImages } = require('./imageContext');
 
@@ -60,8 +61,22 @@ class ChatTab {
     this.panel = null;
     /** @type {AgentSession | null} */
     this.session = null;
-    /** @type {Array<{role: string, text: string}>} */
+    /**
+     * The visible conversation. Display state only — the model is given `memory` and a
+     * freshly built context, never this. That is what makes it safe to persist
+     * verbatim, and why restoring it changes what a reopened tab looks like rather
+     * than how the agent behaves.
+     *
+     * @type {Array<{role: string, text: string}>}
+     */
     this.history = [];
+
+    // A session outlives the tab it was opened from: its memory file stays on disk and
+    // the activity bar lists it. Before this, resuming one produced an empty panel —
+    // the notes were still there, but everything the user had actually read was gone.
+    this.transcript = this.app.workspaceRoot
+      ? new TranscriptStore(this.app.workspaceRoot, this.sessionId)
+      : null;
     /** @type {Array<import('./imageContext').AttachedImage>} */
     this.pendingImages = [];
     this.mode = this.app.settings.mode || 'agent';
@@ -88,6 +103,12 @@ class ChatTab {
         localResourceRoots: [mediaRoot],
       }
     );
+
+    // The editor tab otherwise shows VS Code's generic webview glyph, which makes a
+    // HirayaCoder tab indistinguishable from any other panel at a glance. The
+    // full-colour tile is used rather than the activity bar's monochrome glyph: tab
+    // icons are not recoloured by the theme, so the flat one would read as a smudge.
+    this.panel.iconPath = vscode.Uri.joinPath(this.context.extensionUri, 'docs', 'assets', 'icon-128.png');
 
     this.panel.webview.html = this._html(this.panel.webview, mediaRoot);
     this.panel.onDidDispose(() => this._dispose(), null, this.context.subscriptions);
@@ -169,6 +190,12 @@ class ChatTab {
 
   /** @private */
   async _sendInit() {
+    // Restored before the first paint, so a resumed session shows its conversation
+    // rather than the welcome screen.
+    if (this.transcript && this.history.length === 0) {
+      this.history = (await this.transcript.load()).slice();
+    }
+
     const models = await this.app.listModels();
     this._post({
       type: 'init',
@@ -405,6 +432,7 @@ class ChatTab {
     }
 
     this.history.push({ role: 'user', text });
+    if (this.transcript) this.transcript.append('user', text);
     this._post({ type: 'start' });
 
     const images = this.pendingImages.slice();
@@ -433,6 +461,7 @@ class ChatTab {
       });
 
       this.history.push({ role: 'assistant', text: result.summary });
+      if (this.transcript) this.transcript.append('assistant', result.summary);
       this._post({
         type: 'done',
         summary: result.summary,
