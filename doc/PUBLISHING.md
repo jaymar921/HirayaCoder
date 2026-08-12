@@ -11,9 +11,13 @@ Follow these steps **in order**. Steps 1–3 are one-time setup you only do once
 Don't proceed to packaging until every box here is checked — publishing a broken or incomplete listing is much more annoying to fix than to prevent.
 
 - [ ] All features in `/setup/PROMPT.md` that are in scope for this version are implemented and working.
-- [ ] `npm test` passes (unit + integration).
-- [ ] SAST suite has been run and `/security/sast-report-template.md` is filled out with no unresolved Critical/High findings.
-- [ ] Smoke-tested manually on Windows, macOS, and Linux (or at minimum on the OS you're on plus one other, if you can borrow a machine/VM).
+- [ ] `npm run test:all` passes locally (lint + unit + integration), and **CI is green on
+      all three platforms** — the Actions run for the commit you are about to tag.
+- [ ] SAST suite has been run and a filled-out report exists in `/security/` (see
+      `sast-report-2026-08-12.md`) with no unresolved Critical/High findings.
+- [ ] Smoke-tested manually on Windows, macOS, and Linux. CI covers the automated suites
+      on all three; this box is about a human using the packaged `.vsix` — see Step 7b
+      for the short list of things that actually differ per platform.
 - [ ] Smoke-tested with `llama3.2:1b` end to end: open chat, attach a context file, run an Agent-mode task that edits a file, and confirm the diff/approval flow works.
 - [ ] `README.md` is accurate and has the icon, feature list, and correct `License` section.
 - [ ] `CHANGELOG.md` has an entry for this version.
@@ -146,6 +150,44 @@ code --install-extension builds/v1.0.1/hirayacoder-1.0.1.vsix
 
 Open a fresh workspace, run `HirayaCoder: Open Chat`, and walk through: welcome screen renders correctly → model dropdown lists your Ollama models → send a simple Ask-mode question → run a small Agent-mode task → confirm the diff/approval flow works. Then uninstall it before publishing (`code --uninstall-extension jaymar921.hirayacoder`) so you're not confusingly running a stale local build afterward.
 
+### Step 7b — The cross-platform pass (`PROMPT.md` §11)
+
+The packaged payload is pure JavaScript and assets — no `.node`, `.exe`, `.dll`,
+`.dylib`, or `.so` — so there is nothing architecture-specific to rebuild. What differs
+per platform is *behaviour*, in a small number of known places, and those are what this
+pass is for.
+
+**What is already verified by the automated suites, on any platform they run on:**
+
+| Requirement | Evidence |
+|---|---|
+| Paths via `path.join`/`resolve`/`sep`, never `/`-concatenation | No manual concatenation anywhere in `app/`; verified by inspection |
+| Per-platform shell resolution, argument-array based | `utils/platform.resolveShell` is unit-tested for `win32`, `darwin`, and `linux` |
+| Case-sensitivity | `pathGuard` case-folds on `win32` and `darwin` only, not `linux`; unit-tested per platform |
+| Line endings | `detectEol`/`applyEol`/`toLf` unit-tested; a CRLF file stays CRLF after an edit |
+| Ollama access identical everywhere | One HTTP API; no CLI assumptions beyond the binary being on `PATH` |
+
+The platform-dependent modules all take an injectable `platform` argument, so all three
+branches are exercised from one machine. That is not the same as running there.
+
+**What genuinely needs each machine.** Install the `.vsix` and confirm:
+
+1. **The extension activates** and the status bar shows a connection.
+2. **`npm test` through the agent works** — this is the one that has actually broken.
+   On Windows, `npm`/`npx`/`yarn` are `.cmd` shims routed through `cmd.exe`, and a bad
+   flag there once broke every command when Node was installed under a path containing a
+   space. macOS and Linux take the `/bin/sh -c` path instead, which is separate code.
+3. **A file with CRLF endings survives an edit** without turning into a whole-file diff.
+4. **A path with a space in it works** — `~/My Projects/thing`. Cheap to test, and the
+   failure mode above was exactly this.
+5. **The webview renders** with the host theme, and **Review diff** opens the editor's
+   diff viewer.
+6. **`npm run test:integration` passes**, if the machine has a checkout. It launches a
+   real VS Code and covers activation, the webview protocol, and a full turn to disk.
+
+Record the result for each OS in the release notes for the tag. An untested platform is
+better stated than assumed.
+
 ---
 
 ## Step 8 — Publish to the Marketplace
@@ -178,18 +220,37 @@ Publishing typically shows up on the Marketplace within a few minutes.
 
 ## Step 10 — Tag the Release in Git & Publish on GitHub
 
-`npm version` in Step 5 already created a local git tag. Push it, and attach the `.vsix` as a release asset:
+**This is automated.** `.github/workflows/release.yml` runs on any `v*.*.*` tag:
 
 ```bash
 git push origin main --tags
 ```
 
-Then on GitHub:
-1. Go to your repo → **Releases** → **Draft a new release**.
-2. Choose the tag you just pushed (e.g. `v1.0.1`).
-3. Title it (e.g. `HirayaCoder v1.0.1`), paste the relevant `CHANGELOG.md` entry as the description.
-4. Attach `builds/v1.0.1/hirayacoder-1.0.1.vsix` as a binary asset (drag and drop it into the release).
-5. Publish the release.
+That one push triggers, in order:
+
+1. **Verify** — lint, 573 unit tests, and the 12 integration tests against a real VS
+   Code, on **Ubuntu, macOS, and Windows** in parallel, plus a production dependency
+   audit. Packaging does not start unless all three platforms pass.
+2. **Guard** — the tag is compared against `package.json`. A `v0.2.0` tag on a manifest
+   still saying `0.1.0` fails here, rather than producing a `.vsix` whose filename
+   disagrees with the release it hangs from.
+3. **Package** — `npm run package`, into `builds/v<version>/`.
+4. **Publish** — a GitHub Release for the tag, with the `.vsix` attached, its SHA-256
+   recorded, install instructions, and auto-generated commit notes.
+
+It uses the runner's built-in `GITHUB_TOKEN`. **No Personal Access Token is stored in
+this repository**, and the workflow is read-only except for the single job that creates
+the release. Marketplace publishing (Step 8) stays deliberately manual — pushing a tag
+should not be able to ship to every user.
+
+To rehearse without publishing, run the workflow manually from the **Actions** tab with
+`dry_run` left checked: it builds and verifies, uploads the `.vsix` as a build artifact
+you can download and install, and creates no release.
+
+If you ever need the manual path — the workflow is unavailable, or you are publishing
+from a fork — it is: **Releases → Draft a new release**, choose the tag, title it
+`HirayaCoder v<version>`, paste the `CHANGELOG.md` entry, and drag in
+`builds/v<version>/hirayacoder-<version>.vsix`.
 
 This gives users (and you) a durable, versioned home for every `.vsix` you've ever shipped, without bloating the git history — exactly why `/builds/` is `.gitignore`d but its contents live on as release assets instead.
 
