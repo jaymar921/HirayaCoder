@@ -248,7 +248,13 @@ function definesName(text, name) {
   const body = stripLiterals(text)
     .replace(/\bmodule\s*\.\s*exports\s*=\s*\{[^}]*\}/g, '')
     .replace(/\bexport\s*\{[^}]*\}/g, '');
-  return new RegExp(`\\b${name}\\b`).test(body);
+
+  // Tokenised rather than `new RegExp(`\\b${name}\\b`)`. The name reaches here from a
+  // file the model wrote, and building a pattern out of model output is a habit worth
+  // not having even when — as here — `exportedNames` has already restricted it to an
+  // identifier. Scanning identifiers is also exactly the comparison intended, with no
+  // word-boundary subtleties to get wrong.
+  return (body.match(/[A-Za-z_$][\w$]*/g) || []).includes(name);
 }
 
 /**
