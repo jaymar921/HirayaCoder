@@ -139,7 +139,16 @@ export class TraceView {
   }
 }
 
-const TODO_MARKS = { done: '✔', failed: '✕', active: '▸', pending: '○', skipped: '–' };
+// `done-with-warning` reads as done, because it is — the files changed. The caveat
+// lives in the mark and in the hover text, not in a different word for "finished".
+const TODO_MARKS = {
+  done: '✔',
+  'done-with-warning': '✔',
+  failed: '✕',
+  active: '▸',
+  pending: '○',
+  skipped: '–',
+};
 
 /**
  * Render the TODO list and its progress.
