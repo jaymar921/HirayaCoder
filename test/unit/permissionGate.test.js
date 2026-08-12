@@ -84,6 +84,29 @@ describe('PermissionGate', () => {
       assert.strictEqual(decision.code, 'USER_DENIED');
     });
 
+    it('hands the confirmation both versions of the file, so it can show a diff', async () => {
+      const { gate, prompts } = makeGate(root);
+      await gate.requestWrite({
+        path: 'src/app.js',
+        preview: '+1 / -1 lines.',
+        before: 'console.log(1);',
+        after: 'console.log(2);',
+      });
+
+      assert.strictEqual(prompts[0].before, 'console.log(1);');
+      assert.strictEqual(prompts[0].after, 'console.log(2);');
+      // The resolved path, not the caller's string — a UI that opens this must not
+      // be handed something that skipped the guard.
+      assert.strictEqual(prompts[0].absolute, path.join(root, 'src', 'app.js'));
+    });
+
+    it('reports a new file as having no previous version', async () => {
+      const { gate, prompts } = makeGate(root);
+      await gate.requestWrite({ path: 'src/new.js', isNew: true, after: 'export const a = 1;\n', before: null });
+      assert.strictEqual(prompts[0].before, null);
+      assert.strictEqual(prompts[0].after, 'export const a = 1;\n');
+    });
+
     it('prompts before a delete', async () => {
       const { gate, prompts } = makeGate(root);
       const decision = await gate.requestDelete({ path: 'src/app.js' });
