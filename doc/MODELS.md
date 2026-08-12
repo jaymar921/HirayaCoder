@@ -6,7 +6,7 @@ project were found by running a real model, not by testing against a mock.
 
 ## The test machines
 
-A timing means nothing without the machine that produced it. There are two, and both
+A timing means nothing without the machine that produced it. There are three, and all
 are kept: the laptop is the low-spec target the whole design is shaped around, and
 losing its numbers would lose the ability to tell whether a change helped the machine
 that needed it.
@@ -32,7 +32,7 @@ that needed it.
 | OS | Windows 11 |
 | Ollama | 0.32.9, partial GPU offload |
 
-**Machine C — MacBook Pro (measurement in progress)**
+**Machine C — MacBook Pro**
 
 | | |
 |---|---|
@@ -41,15 +41,17 @@ that needed it.
 | GPU | 20-core, hardware-accelerated ray tracing |
 | Memory | **24 GB unified** |
 | OS | macOS |
+| Ollama | 0.32.9, Metal, 100% GPU on every model in the matrix |
 
 Unified memory is why this machine is worth measuring separately. A and B both have a
 hard split — A runs everything on the CPU, B splits each model between a 4 GB card and
 system RAM. Here the GPU addresses the same 24 GB as the CPU, and Metal is typically
 allowed about 75% of it, which exceeds what any model in this matrix needs. The
-prediction to test is that **every model is at or near 100% GPU**, including
-`gemma4:e4b` at 9.6 GB, which Machine A could not load at all.
+prediction to test was that **every model is at or near 100% GPU**, including
+`gemma4:e4b` at 9.6 GB, which Machine A could not load at all. **That prediction held
+exactly** — all nineteen runs reported `100% GPU`, and no model split.
 
-The handoff instructions are in `setup/FOLLOWUP-PROMPT-MACOS.md`. Results go in their
+The handoff instructions are in `setup/FOLLOWUP-PROMPT-MACOS.md`. Results are in their
 own section below, alongside A and B rather than over them.
 
 Two consequences shape every laptop result below.
@@ -243,25 +245,75 @@ timings. Every one of the 17 runs left the workspace either correct or untouched
 
 ### Machine C — MacBook Pro (M4 Pro, 24 GB unified)
 
-**Not yet measured.** Nine models × two tasks, plus `gemma4:e2b` forced to Tier B, are
-queued on that machine. The table below is the shape to fill; leave it empty rather than
-estimating, and do not adjust A or B to match.
+One sweep, one code state, 19 runs, nothing else running, each model unloaded with
+`ollama stop` before the next so no run inherits the previous one's residency. Ollama
+0.32.9, Metal backend. Each cell is judged by reading the file the model produced, not
+by whether the session reported success.
 
 | Model | Tier | Simple | Full | Resident | CPU/GPU | Verdict |
 |---|---|---|---|---|---|---|
-| | | | | | | |
+| `qwen3.5:0.8b` | B react | 6.1s | 2.8s | 1.1 GB | 100% GPU | **fails.** The simple run wrote `if (!name \|\| !Array.isArray(name))`, which returns `"Hello there"` for *every* string name — the empty case passes and greeting by name is destroyed. The full run's write was refused for commenting out the working code. Still below the floor |
+| `llama3.2:1b` | B react | 23.8s | 8.5s | 1.5 GB | 100% GPU | **fails.** Every write refused — first as a 1-character truncation, then for dropping `module.exports`. Both runs ended unparseable, the full one emitting a `path` field that degenerated into a repeating chain of filenames. Workspace left exactly as it started |
+| `qwen3.5:2b` | B react | 8.4s | 25.5s | 2.4 GB | 100% GPU | **passes both.** Simple wrote a correct ternary; full wrote a correct guard clause, noted the README, and reported the declined delete honestly. See the correctness note below — this is the row that disagrees with Machine B |
+| `qwen3.5:4b` | A native | 12.6s | 19.9s | 3.1 GB | 100% GPU | **passes both.** Correct guard clause, README noted, declined delete reported as not completed. Clean `done` on the simple run |
+| `stable-code:latest` | B react | 7.9s | 5.9s | 2.9 GB | 100% GPU | **passes with a caveat.** Correct behaviour and exports intact in both runs, but the full run never touched the README, and a later simple-run write was refused for rewriting the export style. Exercises the Tier B fallback as intended |
+| `llama3.2:latest` | A native | 14.3s | 7.0s | 2.5 GB | 100% GPU | **fails.** Same failure as Machine B: the full run reports `done` having never edited `greet.js`, editing only the README. It also tried `rm obsolete.js` to route around the declined delete, which the allow-list blocked |
+| `gemma4:e2b` | A native | 14.3s | 12.4s | 7.0 GB | 100% GPU | **passes both.** The best time-to-correctness on this machine, as on Machine B |
+| `gemma4:e2b` forced Tier B | B react | — | 22.2s | 7.0 GB | 100% GPU | **passes.** Same correct result on the ReAct loop, ~1.8× the Tier A time. After the delete was declined it edited `src/obsolete.js` instead — the "looks for another way to do it" behaviour, caught and recorded as a failed item |
+| `ornith:9b` | A native | 17.8s | 29.0s | 5.9 GB | 100% GPU | **passes both.** The tightest diff in the sweep — a single added line — with the README noted and the declined delete reported honestly |
+| `gemma4:e4b` | A native | 16.9s | 23.6s | 9.5 GB | 100% GPU | **passes both.** The model Machine A could not load at all, here fully GPU-resident |
 
-Four questions the numbers should answer explicitly, in prose underneath:
+Comparing the three machines on the rows all of them measured:
 
-1. **Is every model 100% GPU?** If any splits, at what size — that is the number a
-   reader with a 16 GB or 8 GB Mac actually needs.
-2. **How much faster than Machine B?** Its best correct result was `gemma4:e2b` at 25.5s
-   on the full task.
-3. **Does correctness change?** It should not; same weights, same prompts. If
-   `qwen3.5:2b` passes here after failing twice on B, that is variance — say so, rather
-   than implying the hardware made the model smarter.
-4. **Which constraint binds?** A says fit-and-latency, so a 2B model wins. B says
-   correctness, so the largest that runs wins. Say which applies here and why.
+| Model | Task | Laptop (A) | Desktop (B) | Mac (C) | C vs B |
+|---|---|---|---|---|---|
+| `qwen3.5:2b` | simple | ~125s (2.1 min) | 54.9s (0.9 min) | 8.4s (0.1 min) | **6.5×** |
+| `qwen3.5:4b` | full | 299s (5.0 min) | 68.3s (1.1 min) | 19.9s (0.3 min) | **3.4×** |
+| `gemma4:e2b` | full | 180–200s (3.0–3.3 min) | 25.5s (0.4 min) | 12.4s (0.2 min) | **2.1×** |
+| `gemma4:e2b` forced B | full | ~183s (3.1 min) | 71.9s (1.2 min) | 22.2s (0.4 min) | **3.2×** |
+| `gemma4:e4b` | full | could not run | 63.0s (1.1 min) | 23.6s (0.4 min) | **2.7×** |
+
+**The four questions, answered.**
+
+1. **Is every model 100% GPU? Yes — all nineteen runs, without exception.** Including
+   `gemma4:e4b`, which is 9.6 GB on disk and **9.5 GB resident**, and still reports
+   `100% GPU`. No model in the matrix split, so this sweep never found the boundary and
+   cannot tell you where it is. What it does establish is the shape of the problem: the
+   largest resident figure here is 9.5 GB against a Metal budget of roughly 18 GB on a
+   24 GB machine, so the binding number for a reader is **resident size versus ~75% of
+   unified memory**, not model size on disk. On a 16 GB Mac that budget is ~12 GB and
+   every model here still fits; on an 8 GB Mac it is ~6 GB, which `gemma4:e2b` (7.0 GB)
+   and `gemma4:e4b` (9.5 GB) both exceed, and those are the two that would split.
+   Untested predictions, flagged as such.
+2. **How much faster than Machine B?** Between 2.1× and 6.5× on the shared rows. The
+   headline comparison the handoff asked for: Machine B's best correct result was
+   `gemma4:e2b` at 25.5s on the full task; here the same model on the same task is
+   **12.4s, a 2.1× improvement**, and it remains the fastest correct result. The largest
+   gain is on the small Tier B models, which were already fully GPU-resident on B — so
+   the speedup there is the M4 Pro's memory bandwidth and cores, not the offload share.
+3. **Does correctness change? No — and the one row that looks like it did is variance.**
+   `qwen3.5:2b` passes both tasks here after producing plausible-but-wrong logic in both
+   runs on Machine B. **The Mac did not make the model smarter.** Same weights, same
+   prompts, same tier; a 2B model sits near the edge of being able to do this task at
+   all, and lands on either side of it run to run — Machine A also saw it pass the
+   simple task. Every other verdict matches Machine B exactly, including both failures
+   (`llama3.2:1b`, `llama3.2:latest`) and the `stable-code` caveat. Tier assignment was
+   identical on all ten rows.
+4. **Which constraint binds? Neither — and that is the finding.** On A the binding
+   constraint is fit-and-latency, so a 2B model wins; on B it is correctness, so the
+   largest model that runs wins. Here **every model fits and every model is fast**, so
+   the choice collapses to correctness alone, with latency no longer trading against it.
+   `gemma4:e2b` is both the fastest correct result (12.4s) and correct on both tasks, so
+   it wins without a trade-off — the same recommendation as Machine B, but for a
+   different reason. `gemma4:e4b` is the correctness ceiling at roughly 2× the time and
+   is comfortably usable, which on this machine makes it a reasonable default for harder
+   work rather than a stretch.
+
+**Every one of the 19 runs left the workspace either correct or untouched.** No guard
+was bypassed. Three distinct guards fired on real model output during the sweep — the
+comment-out refusal, the truncation refusal, and the `module.exports` refusal — plus the
+script allow-list blocking `rm`, and the completion judge catching two models that
+claimed a declined delete had succeeded.
 
 ### Open: the laptop's TODO-path numbers
 
@@ -555,9 +607,38 @@ Machine B has since tested half of that claim. A **4 GB** card did change the ra
 but mostly by removing the waiting, and mostly through cores and memory bandwidth rather
 than the GPU itself. The models that gained most were the ones that offloaded *least*.
 
+Machine C has now tested the other half. **18 GB of usable unified memory removed model
+size as a constraint entirely** — every model in the matrix runs fully on the GPU, so
+nothing is ranked by fit any more.
+
 ---
 
-## Across both machines
+## Recommendation for the Mac (Machine C)
+
+**Use `gemma4:e2b`.** It is correct on both tasks and the fastest correct result on the
+machine (12.4s on the full task), so unlike on A and B there is no trade-off to make —
+it is simultaneously the best and the quickest.
+
+**Use `gemma4:e4b` when the task is harder.** It is correct on both tasks at roughly 2×
+the time (23.6s full), fully GPU-resident at 9.5 GB, and comfortable to run. On Machine
+A this model could not be loaded at all; here it is a reasonable everyday default rather
+than a stretch, and it is the correctness ceiling of this matrix.
+
+**`qwen3.5:4b` and `ornith:9b` are both solid alternates** — correct on both tasks, 20s
+and 29s on the full task respectively. `ornith:9b` produced the tightest diff in the
+sweep.
+
+**Avoid `llama3.2:latest`.** It fails the same way it fails on Machine B — reporting
+`done` having never edited the target file — and hardware does not fix that.
+
+What makes this machine different is that **the recommendation is no longer a
+compromise**. On A you accept a small model because a large one will not fit in a usable
+time; on B you accept waiting because correctness matters more. Here you accept nothing:
+pick on correctness alone and the latency follows.
+
+---
+
+## Across all three machines
 
 `llama3.2:1b` remains the project's low-spec target and the design constraint that
 shapes everything — but it suits **focused single-file work**. Anything below it, such
@@ -573,5 +654,14 @@ and they earn their keep on both machines equally.
 
 The one thing hardware genuinely decides is **which constraint you are optimising
 against**. On 16 GB with no dGPU it is fit-and-latency, and a 2B model wins. With 32 GB
-and any dedicated GPU it is correctness, and the largest model that runs wins. Both
-tables above are true; they are answering different questions.
+and any dedicated GPU it is correctness, and the largest model that runs wins. On 24 GB
+of unified memory no constraint binds at all — everything fits, everything is fast, and
+you pick on correctness alone. All three tables above are true; they are answering
+different questions.
+
+**Correctness tracked the model, not the machine.** Across A, B and C, nine of the ten
+rows reached the same verdict on the same weights, and tier assignment was identical on
+every row of B and C. The one row that moved — `qwen3.5:2b`, which fails on B and passes
+on both A and C — moved because a 2B model sits on the edge of this task, not because
+any machine made it smarter. Hardware buys time, never judgement, which is the whole
+reason the guards are the load-bearing part of this project.
