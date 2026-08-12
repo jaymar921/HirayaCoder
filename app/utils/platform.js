@@ -56,7 +56,25 @@ function resolveShell(platform = os.platform(), env = process.env) {
   if (platformName(platform) === 'win32') {
     // ComSpec is the documented way to find cmd.exe; fall back to the bare name so
     // PATH resolution still works on unusual images.
-    return { command: env.ComSpec || 'cmd.exe', args: ['/d', '/s', '/c'], windows: true };
+    //
+    // `/d` skips AutoRun, so a registry key cannot inject a command into a run the
+    // user approved. That one is load-bearing and stays.
+    //
+    // `/s` used to be here and had to go. It changes how cmd treats quotes in the
+    // rest of the line, and it defeated Node's own argument escaping: with npm
+    // installed at `C:\Program Files\nodejs\npm.cmd`, `npm test` reached cmd as an
+    // unquoted path and died with
+    //
+    //     'C:\Program' is not recognized as an internal or external command
+    //
+    // — on the default install location of the extension's primary platform. Found by
+    // a live benchmark run, never by the unit suite, which only ever spawns `node`
+    // directly and so never exercises a `.cmd` shim at all.
+    //
+    // Dropping it costs nothing on the injection side: arguments are still passed as
+    // an array for Node to escape, and `scriptRunner` screens every one of them for
+    // the characters cmd re-interprets before this shell is ever reached.
+    return { command: env.ComSpec || 'cmd.exe', args: ['/d', '/c'], windows: true };
   }
   // `sh` is guaranteed present on macOS and Linux; bash is not (Alpine, minimal images).
   return { command: env.SHELL && env.SHELL.endsWith('bash') ? env.SHELL : '/bin/sh', args: ['-c'], windows: false };
