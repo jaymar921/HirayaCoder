@@ -588,6 +588,57 @@ The client read its deadline with `opts.timeoutMs || this.timeoutMs`, so an expl
 zero was falsy and fell back to the 5-minute default. Model pulls legitimately run for
 an hour; the download would have been aborted partway and started over.
 
+### Added — Phase 6: harden & ship
+
+- **Integration tests** (`npm run test:integration`) — 12 tests inside a real VS Code
+  extension host: activation, all 16 commands registered, the gate bound to the open
+  workspace, both auto-modes off by default, loopback enforcement, chat panel creation,
+  the webview `ready` protocol, an unknown webview message being dropped, a **full agent
+  turn that writes to disk** against a stub Ollama on loopback, and the audit record for
+  it. The stub is a real HTTP server rather than a fake client object, so the client's
+  own loopback rule is satisfied by the address rather than by an exception.
+- **`npm run package`** — builds into `builds/v<version>/` from the manifest version and
+  refuses to overwrite an existing version folder, because a released `.vsix` and its
+  git tag have to keep meaning the same bytes. `--force` overrides deliberately.
+- **`doc/ARCHITECTURE.md`** and **`doc/FEATURES.md`**.
+- **`security/sast-report-2026-08-12.md`** — every tool in `PROMPT.md` §16 run: ESLint
+  (0 errors), `npm audit` both modes (**0 production vulnerabilities**), Semgrep 1.172.0
+  (91 rules, 50 targets), and retire.js (clean). The manual checklist is filled in with
+  evidence rather than assertions.
+- **Cross-platform pass** documented as `PUBLISHING.md` Step 7b, separating what the
+  automated suites already prove on any machine from what genuinely needs a second OS.
+
+Two findings changed code. `writeFile.definesName` built a `RegExp` from an identifier
+taken out of model-written content; it now tokenises instead — the input was already
+constrained to an identifier, so this was defence in depth, but building patterns out of
+model output is a habit worth not having. The remaining flagged patterns were reviewed
+individually and are linear: each is anchored, and every optional group begins with a
+literal or a disjoint character class, so whitespace cannot be distributed ambiguously.
+
+Semgrep's two findings are the same `detect-child-process` rule at the same line — the
+single `spawn` in `scriptRunner.js`, at the rule's own LOW confidence, because it cannot
+see the allow-list, the metacharacter screen, the argument array, or the permission gate
+in front of it. Accepted, documented.
+
+### Fixed — the integration harness could not run from a path with a space
+
+Two separate causes, both worth naming because they are ordinary situations rather than
+exotic ones.
+
+`@vscode/test-electron`'s `runTests()` spawns VS Code with `shell: true` and quotes only
+the executable, leaving arguments concatenated rather than escaped. This repository sits
+at `F:\important stuff\…`, so `--extensionDevelopmentPath=…` split in half and VS Code
+tried to run the workspace folder as its entry point. `C:\Users\First Last\…` hits it
+too. The download and path resolution are still `test-electron`'s job; only the spawn is
+ours, with an argument array and `shell: false` — the same rule `scriptRunner.js`
+follows.
+
+Then, run from VS Code's own integrated terminal, the child inherits
+`ELECTRON_RUN_AS_NODE=1` and a dozen `VSCODE_*` variables describing the *parent* editor.
+The first makes the downloaded `Code.exe` start as a plain Node process, which again
+tries to `require()` the workspace folder. They are stripped from the child environment
+so the suite behaves identically from an integrated terminal, an external shell, and CI.
+
 ### Fixed — four more ways a write could ruin a file, found by one benchmark sweep
 
 A full sweep of eight models on a second machine produced a damaged file in **six of
