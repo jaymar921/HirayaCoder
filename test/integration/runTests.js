@@ -42,6 +42,73 @@ const path = require('path');
 
 const { downloadAndUnzipVSCode } = require('@vscode/test-electron');
 
+/**
+ * Turn the downloader's *predicted* executable path into one that exists.
+ *
+ * `downloadAndUnzipVSCode()` returns a path it composes from the platform, not one it
+ * checks. On Windows and Linux the binary has a flat, stable name (`Code.exe`, `code`)
+ * and the prediction holds. On macOS it points inside the application bundle —
+ * `Visual Studio Code.app/Contents/MacOS/Electron` — and the name of that binary has
+ * not been stable across VS Code versions. When it is wrong, `spawn` fails with a bare
+ *
+ *     Error: spawn …/Contents/MacOS/Electron ENOENT
+ *
+ * which says nothing about what is actually there. Observed on `macos-latest`
+ * (darwin-arm64) while Ubuntu and Windows passed on the same commit.
+ *
+ * So: trust the path if it exists, otherwise look in the directory it named and take
+ * the real binary. If that fails too, say what was found — a diagnosis beats a retry.
+ *
+ * @param {string} predicted
+ * @returns {string}
+ */
+function resolveExecutable(predicted) {
+  if (fs.existsSync(predicted)) return predicted;
+
+  const dir = path.dirname(predicted);
+  if (!fs.existsSync(dir)) {
+    throw new Error(
+      `VS Code was downloaded but ${predicted} does not exist, and neither does its ` +
+        `directory ${dir}. The download or extraction did not complete.`
+    );
+  }
+
+  const entries = fs.readdirSync(dir);
+
+  // Prefer something that looks like the main binary over a helper.
+  const preferred = ['Electron', 'Code', 'Code - OSS', 'Visual Studio Code'];
+  const found =
+    preferred.find((name) => entries.includes(name)) ||
+    entries.find((name) => !/helper/i.test(name) && isExecutableFile(path.join(dir, name)));
+
+  if (!found) {
+    throw new Error(
+      `Could not find the VS Code binary. ${predicted} does not exist and ${dir} ` +
+        `contains: ${entries.join(', ') || '(nothing)'}`
+    );
+  }
+
+  const resolved = path.join(dir, found);
+  console.log(`Note: ${path.basename(predicted)} was not present; using ${found} instead.`);
+  return resolved;
+}
+
+/**
+ * @param {string} candidate
+ * @returns {boolean}
+ */
+function isExecutableFile(candidate) {
+  try {
+    const stat = fs.statSync(candidate);
+    if (!stat.isFile()) return false;
+    // The owner-execute bit. On Windows this is meaningless, but this path is only
+    // reached on macOS, where the prediction is the one that goes wrong.
+    return (stat.mode & 0o100) !== 0;
+  } catch {
+    return false;
+  }
+}
+
 /** A small project for the agent to act on. Mirrors `tools/bench-agent.js`. */
 function makeWorkspace() {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'hiraya-int-')));
@@ -89,7 +156,7 @@ async function main() {
   const extensionTestsPath = path.resolve(__dirname, 'suite', 'index.js');
   const workspace = makeWorkspace();
 
-  const executable = await downloadAndUnzipVSCode();
+  const executable = resolveExecutable(await downloadAndUnzipVSCode());
 
   // A dedicated profile directory keeps the run away from the developer's own VS Code
   // settings and extensions, and keeps successive runs reproducible.
