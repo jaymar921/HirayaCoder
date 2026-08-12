@@ -131,7 +131,10 @@ const TOOLS = [
   {
     name: 'run_script',
     description:
-      'Run a single shell command such as `npm install` or `npm run build`. One command only — no chaining with && or |.',
+      'Run a single build or tooling command such as `npm install`, `npm run build`, or `javac -d build Foo.java`. ' +
+      'One command only — no chaining with && or |, no redirects. NOT for files or folders: write_file creates any ' +
+      'missing folders by itself, so never run mkdir; use list_files instead of ls, read_file instead of cat, ' +
+      'delete_file instead of rm.',
     mutating: true,
     parameters: {
       type: 'object',

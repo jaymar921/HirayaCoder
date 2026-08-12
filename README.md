@@ -120,6 +120,14 @@ assignment is identical on all ten. Machine A, for comparison, on the rows it me
 what each model broke and how, is in
 [MODELS.md](https://github.com/jaymar921/HirayaCoder/blob/main/doc/MODELS.md).
 
+### Building from scratch, not just editing
+
+A second benchmark starts from an **empty folder** and asks the model to build a TODO app
+in Java, JavaScript, and Python — grading *add*, *read*, *run*, and *modify* separately,
+and checking the result by compiling and running the program rather than by believing the
+model's summary. It runs on all three machines and the results are collected in
+[benchmarks/](https://github.com/jaymar921/HirayaCoder/blob/main/benchmarks/README.md).
+
 ---
 
 ## Recommendation
@@ -146,6 +154,56 @@ alone and the latency follows.
 
 **Avoid below ~1B.** `qwen3.5:0.8b` stays inside the guards and still cannot finish a
 single-file edit.
+
+---
+
+## Requirements
+
+**Required — nothing works without these:**
+
+| | Version | Why |
+|---|---|---|
+| [**Ollama**](https://ollama.com) | any current release, running on `127.0.0.1:11434` | The model. HirayaCoder never calls a cloud API, so with no Ollama there is no assistant at all. |
+| **A pulled model** | ≥ 1B parameters | `ollama pull gemma4:e2b`, or `llama3.2:1b` on a low-spec machine. See [Recommendation](#recommendation). |
+| **VS Code** | 1.85.0 or newer | Set by `engines.vscode`; older builds refuse to install the extension. |
+| **A trusted workspace folder** | — | Every tool is confined to the workspace root. With no folder open there is nothing to confine to, so all of them refuse. |
+
+Ollama must be reachable on **loopback**. A non-loopback endpoint is rejected in code
+before any socket opens, so a remote or LAN Ollama will not work — that is deliberate,
+not a gap.
+
+**Optional — only if you want the agent to run your project's tooling.**
+
+`run_script` can execute a command, and the program it names has to already be installed;
+HirayaCoder never installs anything. Nothing here is needed to read, write, or edit files
+— only to build, test, or run what the agent wrote:
+
+| Toolchain | Programs the agent may call |
+|---|---|
+| Node.js | `node`, `npm`, `npx`, `yarn`, `pnpm` |
+| Python | `python`, `python3`, `pip`, `pip3`, `pytest` |
+| Java | `java`, `javac`, `mvn`, `gradle` |
+| Go / Rust / .NET | `go`, `cargo`, `dotnet` |
+| JS test & build | `jest`, `mocha`, `vitest`, `ava`, `tsc`, `eslint`, `prettier` |
+| Other | `git`, `make`, `ollama` |
+
+So if you ask for a Python script and want it *run*, Python has to be on your `PATH`; if
+you ask for a Java project and want it *compiled*, you need a JDK. Without them the agent
+still writes the code — it just reports that it could not run it.
+
+Two things about that list are worth knowing before they surprise you:
+
+- **It is an allow-list, and it is the whole list.** Anything not on it is refused,
+  including `mkdir`, `ls`, `rm`, and `curl`. You can extend it in HirayaCoder settings;
+  the model cannot. File and folder work goes through the tools instead, which is why
+  `mkdir` is not missed: writing a file creates the folders above it.
+- **No shell is involved, ever.** Commands are spawned directly, so `&&`, `|`, `>`, and
+  `$(…)` are refused rather than interpreted. One command at a time.
+
+Full detail: [SECURITY.md](https://github.com/jaymar921/HirayaCoder/blob/main/doc/SECURITY.md).
+
+**Building from source** additionally needs **Node.js ≥ 18** — see
+[below](#building-from-source). Using the packaged `.vsix` does not.
 
 ---
 

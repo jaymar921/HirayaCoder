@@ -23,6 +23,75 @@ const { redact } = require('../../security/secretsScanner');
 const OUTPUT_TOKENS = 400;
 
 /**
+ * Shell commands that have a HirayaCoder tool doing the same job.
+ *
+ * The allow-list will never contain these — `rm`, `mkdir`, and friends are precisely
+ * the programs it exists to keep out, since a tool that can move or destroy files
+ * without going through the permission gate makes the gate decorative. But "not in the
+ * allowed program list" is only true, not useful: the model wanted a directory, and the
+ * answer is that it already has one way to get it.
+ *
+ * Observed on `ornith:9b`, asked to build a Java project in `src/main/java`: it opened
+ * with `mkdir -p src/main/java build`, was refused, and sent the identical line twice
+ * more until the repeat guard ended the item — which the user then saw as a failed step
+ * in a task that had otherwise succeeded. It never needed the directory at all.
+ * `write_file` creates parent directories on the way to the file (`writeFile.js`,
+ * `fs.mkdir` with `recursive: true`), so the very next step would have made
+ * `src/main/java` by itself. Later in the same run it reached for `ls build/` to check
+ * the compile output, where `list_files` was sitting unused.
+ *
+ * Each entry names the tool instead of the prohibition. Keyed on the bare binary name,
+ * which is what the model typed; the arguments are irrelevant to the redirect.
+ *
+ * @type {Map<string, string>}
+ */
+const TOOL_INSTEAD_OF = new Map([
+  // Not "use another tool" but "you do not need this step" — the distinction matters,
+  // because a model told to find another way to make a directory will find one.
+  ['mkdir', 'You do not need to create directories at all: write_file creates any missing folders on the way to the file. Skip this step and write the file you wanted to put there.'],
+  ['md', 'You do not need to create directories at all: write_file creates any missing folders on the way to the file. Skip this step and write the file you wanted to put there.'],
+  ['ls', 'Use the list_files tool to see what is in a folder.'],
+  ['dir', 'Use the list_files tool to see what is in a folder.'],
+  ['tree', 'Use the list_files tool to see what is in a folder.'],
+  ['cat', 'Use the read_file tool to read a file.'],
+  ['head', 'Use the read_file tool to read a file.'],
+  ['tail', 'Use the read_file tool to read a file.'],
+  ['more', 'Use the read_file tool to read a file.'],
+  ['type', 'Use the read_file tool to read a file.'],
+  ['grep', 'Use the search_workspace tool to find text in the project.'],
+  ['findstr', 'Use the search_workspace tool to find text in the project.'],
+  ['rg', 'Use the search_workspace tool to find text in the project.'],
+  ['ag', 'Use the search_workspace tool to find text in the project.'],
+  ['find', 'Use the search_workspace tool to find text, or list_files to see what exists.'],
+  ['rm', 'Use the delete_file tool to remove a file.'],
+  ['del', 'Use the delete_file tool to remove a file.'],
+  ['rmdir', 'Use the delete_file tool to remove a file.'],
+  ['unlink', 'Use the delete_file tool to remove a file.'],
+  ['touch', 'Use write_file to create the file, with its full contents.'],
+  ['echo', 'Use write_file to put content in a file. There is nothing to print to.'],
+  ['cp', 'Use read_file to get the contents, then write_file to save them at the new path.'],
+  ['copy', 'Use read_file to get the contents, then write_file to save them at the new path.'],
+  ['mv', 'Use read_file, then write_file at the new path, then delete_file on the old one.'],
+  ['move', 'Use read_file, then write_file at the new path, then delete_file on the old one.'],
+  ['sed', 'Use read_file to get the file, then write_file with the complete corrected contents.'],
+  ['awk', 'Use read_file to get the file, then write_file with the complete corrected contents.'],
+  ['pwd', 'Commands already run at the workspace root, so there is nothing to check.'],
+  ['cd', 'Commands already run at the workspace root, and it cannot be changed. Use workspace-relative paths in the command itself.'],
+]);
+
+/**
+ * The tool that does what a refused command was reaching for, if there is one.
+ *
+ * @param {string} command
+ * @returns {string} The redirect, or '' when nothing here covers it.
+ */
+function toolForRefusedCommand(command) {
+  const first = String(command || '').trim().split(/\s+/)[0] || '';
+  const binary = first.split(/[/\\]/).pop().replace(/\.(exe|cmd|bat)$/i, '').toLowerCase();
+  return TOOL_INSTEAD_OF.get(binary) || '';
+}
+
+/**
  * What to do about a refusal the same command can never survive.
  *
  * The refusal messages were already informative — "not in the allowed program list",
@@ -37,15 +106,24 @@ const OUTPUT_TOKENS = 400;
  * within, not an obstacle to route around.
  *
  * @param {string | undefined} code
+ * @param {string} [command] The refused command, used to name the tool that replaces it.
  * @returns {string} Text to append to the observation, or '' when a retry is sensible.
  */
-function nextStepAfterRefusal(code) {
+function nextStepAfterRefusal(code, command) {
   switch (code) {
-    case 'BINARY_NOT_ALLOWED':
+    case 'BINARY_NOT_ALLOWED': {
+      // A tool that already does the job outranks the generic advice below. "Tell the
+      // user which command to run themselves" is the wrong answer for `mkdir`, where
+      // the agent was one step away from doing it correctly on its own.
+      const redirect = toolForRefusedCommand(command);
+      if (redirect) {
+        return ` Do not send it again — it will be refused identically. ${redirect}`;
+      }
       return (
         ' Sending it again will be refused identically — do not retry it. Either use one of the allowed ' +
         'programs, or stop and tell the user which command they should run themselves and why.'
       );
+    }
     case 'BINARY_NOT_FOUND':
       return (
         ' It is allowed but not installed on this machine, so no retry will find it. Tell the user what ' +
@@ -114,7 +192,7 @@ module.exports = async function runScript(args, context) {
   if (!decision.allowed) {
     return {
       ok: false,
-      observation: `\`${command}\` was not run: ${decision.reason}${nextStepAfterRefusal(decision.code)}`,
+      observation: `\`${command}\` was not run: ${decision.reason}${nextStepAfterRefusal(decision.code, command)}`,
       error: decision.code,
     };
   }
@@ -152,3 +230,5 @@ module.exports = async function runScript(args, context) {
 
 module.exports.describeRun = describeRun;
 module.exports.nextStepAfterRefusal = nextStepAfterRefusal;
+module.exports.toolForRefusedCommand = toolForRefusedCommand;
+module.exports.TOOL_INSTEAD_OF = TOOL_INSTEAD_OF;
