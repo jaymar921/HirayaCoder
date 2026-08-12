@@ -639,6 +639,24 @@ The first makes the downloaded `Code.exe` start as a plain Node process, which a
 tries to `require()` the workspace folder. They are stripped from the child environment
 so the suite behaves identically from an integrated terminal, an external shell, and CI.
 
+And on macOS, `downloadAndUnzipVSCode()` returns a path it *composes* rather than one it
+checks. Windows and Linux have flat, stable binary names (`Code.exe`, `code`) so the
+prediction holds; macOS points inside the application bundle at
+`Visual Studio Code.app/Contents/MacOS/Electron`, whose name has not been stable across
+versions. On `macos-latest` (darwin-arm64) nothing was at that path and the suite died
+with a bare `spawn … ENOENT` that said nothing about what *was* there — while Ubuntu and
+Windows passed on the same commit. The launcher now trusts the predicted path only if it
+exists, otherwise takes the real binary from the directory it named, and if that fails
+reports the directory's actual contents. Helper binaries are excluded, since they would
+start and do nothing useful.
+
+The CI cache was tightened at the same time, because it could produce the same symptom
+from a different direction: `restore-keys` allowed a near-miss to be layered underneath a
+fresh download, and a half-extracted macOS bundle looks like a valid cache hit. Restore
+and save are now separate steps with no fallback keys, saving only after the editor has
+actually run a suite, and covering only the downloaded editor rather than the throwaway
+profile.
+
 ### Fixed — four more ways a write could ruin a file, found by one benchmark sweep
 
 A full sweep of eight models on a second machine produced a damaged file in **six of
