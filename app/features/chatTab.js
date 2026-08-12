@@ -22,6 +22,7 @@ const path = require('path');
 const vscode = require('vscode');
 
 const logger = require('../utils/logger');
+const { budgetsFor } = require('../core/modelCapability');
 const { AgentSession, ChangeSet } = require('../agent/agentSession');
 const { readImage, modelSupportsImages } = require('./imageContext');
 
@@ -144,7 +145,7 @@ class ChatTab {
         this.thinkingCapacity = ['low', 'medium', 'high'].includes(message.capacity)
           ? message.capacity
           : 'medium';
-        return undefined;
+        return this._postStatus();
       case 'model':
         return this._switchModel(String(message.model || ''));
       case 'permissions':
@@ -181,6 +182,34 @@ class ChatTab {
       history: this.history,
     });
     this._postVision();
+    this._postStatus();
+  }
+
+  /**
+   * The one-line budget summary in the composer hint.
+   *
+   * Deliberately the numbers the header does *not* already carry. Model name and
+   * tier are in the dropdown and the badge; what a user cannot otherwise see is how
+   * many steps this combination of tier and thinking capacity allows, and whether
+   * the model is trusted with a TODO list. Both explain a run stopping early, which
+   * is the question a small model provokes most often.
+   *
+   * @private
+   */
+  _postStatus() {
+    const capability = this.app.capability;
+    if (!capability) return;
+
+    const budgets = budgetsFor(capability.tier, this.thinkingCapacity);
+    const context =
+      budgets.promptTokenTarget >= 1000
+        ? `~${Math.round(budgets.promptTokenTarget / 100) / 10}k ctx`
+        : `~${budgets.promptTokenTarget} ctx`;
+
+    this._post({
+      type: 'status',
+      text: `${budgets.maxSteps} steps · ${context}${capability.canPlanTodos ? ' · TODO lists' : ''}`,
+    });
   }
 
   /** @private */
@@ -204,6 +233,7 @@ class ChatTab {
       capability: this.app.capability,
     });
     this._postVision();
+    this._postStatus();
   }
 
   /** @private */
@@ -434,8 +464,13 @@ class ChatTab {
         });
       case 'todo':
         return this._post({ type: 'todo', items: event.items });
+      // Both ends of an item redraw the checklist: one marks the row active, the
+      // other records how it finished. Without this the list sat at "all pending"
+      // for the whole run and only filled in from `result.todos` at the end — on a
+      // multi-minute session, no sign of which item was being worked on.
+      case 'todo-item':
       case 'todo-item-done':
-        return undefined;
+        return event.items ? this._post({ type: 'todo-progress', items: event.items }) : undefined;
       default:
         return undefined;
     }
