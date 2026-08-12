@@ -199,6 +199,26 @@ describe('scriptRunner.run', () => {
     assert.match(result.stdout, /42/);
   });
 
+  // Every other run test here spawns `node` directly, which on Windows is an .exe and
+  // never touches cmd.exe. The whole shim path — the one `npm`, `npx`, and `yarn` take
+  // — therefore had no coverage at all, and a live benchmark found it broken: node
+  // installs to `C:\Program Files\nodejs`, and the space in that path was enough for
+  // `npm test` to fail with "'C:\Program' is not recognized".
+  const itOnWindows = process.platform === 'win32' ? it : it.skip;
+
+  itOnWindows('runs a .cmd shim installed under a path containing spaces', async () => {
+    fs.writeFileSync(
+      path.join(cwd, 'package.json'),
+      JSON.stringify({ name: 'shim-probe', version: '1.0.0', scripts: { test: 'node -e "console.log(42)"' } })
+    );
+
+    const result = await run('npm test', { cwd, timeoutMs: 60000 });
+
+    assert.strictEqual(result.ok, true, `npm test failed: ${result.stderr}`);
+    assert.doesNotMatch(result.stderr, /is not recognized as an internal or external command/);
+    assert.match(result.stdout, /42/);
+  });
+
   it('reports a non-zero exit without throwing', async () => {
     const result = await run('node -e "process.exit(3)"', { cwd });
     assert.strictEqual(result.ok, false);
