@@ -171,6 +171,39 @@ describe('chat tab', () => {
     fs.writeFileSync(target, before);
   });
 
+  it('restores the conversation when a closed session is reopened', async () => {
+    // Reported from real use: close the tab, reopen session 1 from the picker, and the
+    // panel comes up empty — the memory file was still on disk, but everything the
+    // user had actually read was gone.
+    stub = await startStubOllama({
+      replies: [JSON.stringify({ action: 'done', summary: 'It prints Hello, World!' })],
+    });
+    const app = await useEndpoint(stub.endpoint);
+
+    const first = new ChatTab({ context: app.context, app, sessionId: 910 });
+    first._post = () => {};
+    await first._run('explain myjava.java');
+    await first.transcript.flush();
+    first._dispose();
+
+    // A brand-new tab object for the same session, exactly as reopening produces.
+    const reopened = new ChatTab({ context: app.context, app, sessionId: 910 });
+    /** @type {any[]} */
+    const posted = [];
+    reopened._post = (message) => posted.push(message);
+    await reopened._onMessage({ type: 'ready' });
+
+    const init = posted.find((m) => m.type === 'init');
+    assert.ok(init, 'no init message');
+    assert.deepStrictEqual(
+      init.history.map((entry) => entry.role),
+      ['user', 'assistant'],
+      'the reopened session did not carry its conversation'
+    );
+    assert.strictEqual(init.history[0].text, 'explain myjava.java');
+    assert.match(init.history[1].text, /Hello, World!/);
+  });
+
   it('writes an audit record for the action it took', async () => {
     const auditPath = path.join(workspaceRoot(), '.hirayacoder', 'audit.log');
     assert.ok(fs.existsSync(auditPath), 'no audit log was written for a completed turn');
