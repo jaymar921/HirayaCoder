@@ -47,6 +47,9 @@ const scriptRunner = require('./scriptRunner');
  * @property {string} detail
  * @property {'normal' | 'elevated'} risk  'elevated' for always-confirm commands.
  * @property {string} [path]
+ * @property {string} [absolute]           Resolved path, for a UI that opens the file.
+ * @property {string | null} [before]      Current file content; null for a new file.
+ * @property {string} [after]              Proposed content. Present only for writes.
  * @property {string} [command]
  */
 
@@ -105,13 +108,19 @@ class PermissionGate {
   }
 
   /**
-   * @param {{path: string, sessionId?: string, mode?: string, preview?: string, isNew?: boolean}} request
+   * `before` and `after` are optional and carry no authority — they are passed
+   * through to the confirmation UI so it can show a real diff. The decision is still
+   * made from the resolved path and the permission mode.
+   *
+   * @param {{path: string, sessionId?: string, mode?: string, preview?: string, isNew?: boolean, before?: string | null, after?: string}} request
    * @returns {Promise<Decision>}
    */
   async requestWrite(request) {
     return this._requestMutation('write_file', request, {
       title: request.isNew ? `Create ${request.path}?` : `Apply changes to ${request.path}?`,
       detail: request.preview || '',
+      before: request.isNew ? null : typeof request.before === 'string' ? request.before : undefined,
+      after: typeof request.after === 'string' ? request.after : undefined,
     });
   }
 
@@ -131,7 +140,7 @@ class PermissionGate {
    *
    * @param {'write_file' | 'delete_file'} action
    * @param {{path: string, sessionId?: string, mode?: string}} request
-   * @param {{title: string, detail: string}} prompt
+   * @param {{title: string, detail: string, before?: string | null, after?: string}} prompt
    * @returns {Promise<Decision>}
    * @private
    */
@@ -166,6 +175,11 @@ class PermissionGate {
           : prompt.detail,
       risk: action === 'delete_file' ? 'elevated' : 'normal',
       path: resolved.relative,
+      // The guard's own output, never the model's string — a confirmation UI that
+      // opens this path must not be handed something that skipped resolution.
+      absolute: resolved.absolute,
+      before: prompt.before,
+      after: prompt.after,
     });
 
     await this._audit({
