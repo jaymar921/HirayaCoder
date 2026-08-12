@@ -6,6 +6,8 @@
 .hirayacoder/audit.log
 *.hirayacoder.tmp
 
+.ignore/
+
 # --- Node / build ---
 node_modules/
 out/
