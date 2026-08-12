@@ -512,6 +512,58 @@ describe('TODO-driven sessions', () => {
     assert.deepStrictEqual(todoEvent.items, ['Update src/a.js', 'Update src/b.js']);
   });
 
+  it('answers a question directly instead of planning items for it', async () => {
+    // ornith:9b, asked "how to run it" about a file it had just written, produced
+    // "Read myjava.java to understand its contents and dependencies" and "Determine how
+    // to compile and run myjava.java" — two loops, two reads, nothing changed, and the
+    // answer buried under a completion report.
+    const client = scriptedClient([json({ action: 'done', summary: 'Run it with `node src/a.js`.' })]);
+
+    const result = await todoSession(client).run('how do I run it', { mode: 'agent' });
+
+    assert.strictEqual(result.todos, undefined, 'a question was split into a TODO list');
+    assert.match(result.summary, /node src\/a\.js/);
+    // One inference, not a planning call plus one loop per invented item.
+    assert.strictEqual(client.calls, 1);
+  });
+
+  it('still plans when the request asks for work, however it is phrased', async () => {
+    const client = scriptedClient([
+      '1. Update src/a.js\n2. Update src/b.js',
+      json({ action: 'write_file', path: 'src/a.js', code: 'export const a = 2;\n' }),
+      json({ action: 'done', summary: 'a updated' }),
+      json({ action: 'write_file', path: 'src/b.js', code: 'export const b = 2;\n' }),
+      json({ action: 'done', summary: 'b updated' }),
+    ]);
+
+    // Opens like a question, but it is an instruction — the imperative decides.
+    const result = await todoSession(client).run('can you update a and also update b?', { mode: 'agent' });
+    assert.ok(result.todos, 'a request to change two files was not planned');
+    assert.strictEqual(result.todos.length, 2);
+  });
+
+  it('numbers steps continuously across items, not from one again each time', async () => {
+    const client = scriptedClient([
+      '1. Update src/a.js\n2. Update src/b.js',
+      json({ action: 'write_file', path: 'src/a.js', code: 'export const a = 2;\n' }),
+      json({ action: 'done', summary: 'a updated' }),
+      json({ action: 'write_file', path: 'src/b.js', code: 'export const b = 2;\n' }),
+      json({ action: 'done', summary: 'b updated' }),
+    ]);
+
+    const events = [];
+    await todoSession(client).run('Update a and also update b', {
+      mode: 'agent',
+      onEvent: (e) => events.push(e),
+    });
+
+    const steps = events.filter((e) => e.type === 'action').map((e) => e.step);
+    // Item 2's action must not repeat item 1's number: the trace showed two rows both
+    // labelled "1" under a header reading "Steps (1)".
+    assert.deepStrictEqual(steps, [...new Set(steps)], `duplicate step numbers: ${steps.join(', ')}`);
+    assert.deepStrictEqual(steps, [1, 2]);
+  });
+
   it('reports progress as it goes, not only at the end', async () => {
     const client = scriptedClient([
       '1. Update src/a.js\n2. Update src/b.js',
