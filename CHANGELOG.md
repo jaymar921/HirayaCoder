@@ -5,7 +5,10 @@ All notable changes to HirayaCoder are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.0] — 2026-08-12
+
+First release. Everything below shipped in it; the sections are in build order, so the
+earliest work is at the bottom.
 
 ### Added — Phase 1: foundation
 
@@ -588,6 +591,104 @@ The client read its deadline with `opts.timeoutMs || this.timeoutMs`, so an expl
 zero was falsy and fell back to the 5-minute default. Model pulls legitimately run for
 an hour; the download would have been aborted partway and started over.
 
+### Added — a session's conversation survives closing its tab
+
+Reported from real use: close a chat tab, reopen the same session, and the panel comes
+up empty. The memory file was still on disk and the agent still recalled its notes, but
+everything the user had actually read was gone — the transcript lived only in the
+`ChatTab` object, which is discarded when the panel is disposed.
+
+`core/transcriptStore.js` now keeps it in
+`.hirayacoder/transcripts/session<N>.json`, restored before the first paint so a resumed
+session shows its conversation rather than the welcome screen.
+
+It is deliberately **not** part of `memoryStore`, which answers a different question.
+Memory is what the *agent* recalls: composed, redacted, injection-neutralised,
+deliberately lossy, and fed back into the model's context. This is what the *user* sees:
+the messages as written, in order, and **never sent to the model**. Keeping it out of the
+context is exactly what makes it safe to store verbatim — it is display state, so it
+cannot influence a later turn, and restoring it changes what a reopened tab looks like
+rather than how the agent behaves.
+
+The file is treated as untrusted on read, like the memory file it sits beside: entries
+are shape- and role-checked, oversized messages are trimmed, an implausibly large file
+is refused unparsed, and corrupt JSON yields an empty transcript instead of an error.
+Losing scrollback is a nuisance; refusing to open the tab is worse. Writes are
+serialized, so two quick turns cannot interleave into a half-written file.
+
+**Clear Session Memory** now clears the conversation too. Leaving it behind would show
+an exchange the agent has been made to forget — two different answers on screen to "what
+happened in this session".
+
+### Added — a home in the activity bar, and an icon on the tab
+
+HirayaCoder now has an activity bar container listing every chat session in the
+workspace: each one is a separate memory file that outlives the tab it was opened from,
+and previously the only way to reach an old one was the command palette's quick-pick,
+which appeared only while you were already opening a chat. Clicking a session reveals
+its existing tab rather than opening a second view onto the same memory. Empty
+workspaces get welcome content with a **Start a chat** button instead of a blank panel.
+
+The container uses a **new** `docs/assets/activity-bar.svg` rather than the existing
+tile. The two have different jobs: the tile is 128px, full colour, on an opaque rounded
+background, while the activity bar recolours a 24px glyph per theme and per
+active/inactive state — an opaque background there renders as a solid block. The new one
+is monochrome line art on transparency using `currentColor`, keeping only the spark,
+since the gradient and code brackets turn to mush at 24px.
+
+Chat tabs also carry the icon now, via `panel.iconPath`, so a HirayaCoder tab is
+distinguishable from any other webview at a glance. That one keeps the full-colour tile,
+because tab icons are *not* recoloured by the theme and the flat glyph would read as a
+smudge.
+
+`.vscodeignore` excludes `docs/assets/**`, so the new icon needed an explicit exception —
+without it the extension packages cleanly and shows a blank square in the sidebar. An
+integration test now checks the icon exists on disk relative to the installed extension
+and that it follows the theme, rather than trusting the manifest to be enough.
+
+### Fixed — the audit log could not say what had been read
+
+`_sanitize` guarded the target with `if (entry.path)`, and an empty relative path is
+falsy — so it dropped the key. An empty relative path is not a missing value: it is the
+**workspace root**, which is what `list_files` and `search_workspace` resolve to when
+they operate on the whole project.
+
+The result, from a real session's log: **ten of fourteen entries recorded a `read_file`
+with no indication of what was read.** The workspace root is now recorded as `.`, and an
+action that genuinely has no path — a command, say — still gets none.
+
+An audit log exists to answer "what was touched", and it is relied on by
+`PROMPT.md` §15.7 and by the threat model. A record that silently omits the target is
+worse than a noisy one, because it reads as complete.
+
+### Fixed — two faults found by the first real user session
+
+Both on `ornith:9b`, a 9B Tier A model, in an ordinary two-prompt session.
+
+**A question was turned into a work plan.** Asked "how to run it" about a file it had
+just written, the planner produced "Read myjava.java to understand its contents and
+dependencies" and "Determine how to compile and run myjava.java" — two loops, two reads,
+nothing changed, and the actual answer buried under a completion report for items nobody
+asked for. Requests that read as questions now skip the TODO split entirely.
+
+The detection is deliberately shallow, because both ways of being wrong are cheap: a
+missed question runs as a plan, and a misread instruction runs as a single pass, which
+is what every model did before this path existed. An imperative anywhere in the text
+wins over the opening word, so "can you update a and also update b?" is still planned as
+work.
+
+Measured on the same prompt and model, three runs: two finished cleanly in ~40s with a
+correct answer, against a path that previously always spent two loops to get there. The
+third hit the repeat guard after the model tried `javac`, `which`, and `find` and was
+refused each time — no answer, but nothing touched either, which is the guards working.
+
+**Steps were numbered from one again on every item.** Each TODO item runs a fresh loop,
+and a loop numbers its steps from its own `steps.length + 1`, so item 2's first action
+announced itself as step 1. The trace showed two rows both labelled "1" under a header
+reading "Steps (1)", because the view tracks the highest number it has seen. The loops
+are right not to know they are one item of several; the driver that does know now
+offsets them.
+
 ### Added — Phase 6: harden & ship
 
 - **Integration tests** (`npm run test:integration`) — 12 tests inside a real VS Code
@@ -880,7 +981,7 @@ Auto-approve now means *routine local work*.
   `textContent` rule, which is a security rule kept in the design guide because that is
   where someone reaches when adding a component.
 
-## [0.1.0] — unreleased
+### Added — the initial scaffold
 
-Initial scaffold: documentation set, model-facing system prompts, threat model, icon,
-and the publishing guide.
+Where it started: the documentation set, the model-facing system prompts, the threat
+model, the icon, and the publishing guide.
