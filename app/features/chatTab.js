@@ -445,11 +445,17 @@ class ChatTab {
       gate: this.app.gate,
       workspaceRoot: this.app.workspaceRoot,
       memory: this.app.memoryFor(this.sessionId),
-      translator: this.app.translator,
+      // This tab's own translator. A shared one wrote every tab's notes into whichever
+      // session the extension happened to open at activation.
+      translator: this.app.translatorFor(this.sessionId),
       contextFiles: this.app.contextFiles,
       thinkingCapacity: this.thinkingCapacity,
       sessionId: String(this.sessionId),
       scriptTimeoutMs: this.app.settings.scriptTimeoutMs,
+      // Shared across tabs: what a model has earned is a fact about this project, not
+      // about this conversation.
+      ledger: this.app.ledger,
+      adaptation: this.app.settings.adaptation,
       images: images.map((image) => image.base64),
     });
 
