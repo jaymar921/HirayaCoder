@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!--
+      CSP is the webview's real boundary. `default-src 'none'` denies everything and
+      each source is then allowed back deliberately:
+
+        script-src 'nonce-%NONCE%'  — only the one module tag below runs. No inline
+                                      handlers, no eval, and nothing a model emits can
+                                      execute even if it reached the DOM.
+        img-src    %CSP_SOURCE% data: — bundled assets, plus data: URIs for the images
+                                      the user attaches, which are read locally and
+                                      never fetched.
+        style-src  %CSP_SOURCE% 'unsafe-inline' — the stylesheet, plus the inline styles
+                                      VS Code itself injects for theming.
+
+      There is no connect-src: the webview never talks to the network. Ollama is
+      reached by the extension host, not from here.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; img-src %CSP_SOURCE% data:; style-src %CSP_SOURCE% 'unsafe-inline'; font-src %CSP_SOURCE%; script-src 'nonce-%NONCE%';"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="%STYLE_URI%" />
+    <title>HirayaCoder</title>
+  </head>
+  <body>
+    <header class="header" id="header">
+      <div class="header-title">
+        <span class="glyph" aria-hidden="true"></span>
+        <span>HirayaCoder</span>
+        <span class="session-badge" id="session-badge"></span>
+      </div>
+
+      <label class="visually-hidden" for="model">Model</label>
+      <select class="control" id="model" title="Ollama model"></select>
+      <span class="badge" id="tier-badge" title="Capability tier"></span>
+
+      <div class="segmented" id="mode" role="group" aria-label="Mode">
+        <button type="button" data-mode="agent" aria-pressed="true">Agent</button>
+        <button type="button" data-mode="plan" aria-pressed="false">Plan</button>
+        <button type="button" data-mode="ask" aria-pressed="false">Ask</button>
+      </div>
+
+      <div class="segmented" id="thinking" role="group" aria-label="Thinking capacity">
+        <button type="button" data-capacity="low" aria-pressed="false">Low</button>
+        <button type="button" data-capacity="medium" aria-pressed="true">Med</button>
+        <button type="button" data-capacity="high" aria-pressed="false">High</button>
+      </div>
+
+      <button class="control" id="permissions" type="button" aria-haspopup="true">
+        <span id="perm-summary">Edits: Approve · Scripts: Approve</span>
+      </button>
+    </header>
+
+    <main class="messages" id="messages" aria-live="polite" aria-relevant="additions"></main>
+
+    <form class="composer" id="composer">
+      <div class="composer-inner">
+        <div class="chips" id="chips"></div>
+
+        <div class="input-row">
+          <button class="icon-btn" id="add-file" type="button" title="Add a context file" aria-label="Add a context file">
+            +
+          </button>
+          <button
+            class="icon-btn"
+            id="add-image"
+            type="button"
+            title="Attach an image"
+            aria-label="Attach an image"
+            disabled
+          >
+            <span aria-hidden="true">🖼</span>
+          </button>
+          <label class="visually-hidden" for="input">Message</label>
+          <textarea id="input" rows="1" placeholder="Ask, plan, or tell HirayaCoder what to build…"></textarea>
+          <button class="send" id="send" type="submit">Send</button>
+        </div>
+
+        <div class="composer-hint">
+          <span>Enter to send · Shift+Enter for a new line · wrap code in backticks</span>
+          <span id="status"></span>
+        </div>
+      </div>
+    </form>
+
+    <script type="module" nonce="%NONCE%" src="%MAIN_URI%"></script>
+  </body>
+</html>
