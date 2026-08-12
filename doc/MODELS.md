@@ -543,6 +543,27 @@ A guard that fires is not a failed run. A session that ends "repeating" with the
 workspace intact is the system working; the outcome to look for is a file that is
 worse than it started.
 
+### The build benchmark
+
+The sweep above edits a fixture project. The second benchmark starts from an **empty
+folder** and asks the model to build a TODO app in Java, JavaScript, and Python —
+grading adding, reading, running, and modifying files separately, and checking the
+result by compiling and running the program itself rather than by believing the summary:
+
+```bash
+node tools/bench-build.js <model> --machine <A|B|C> --notes "<ollama ps split>"
+```
+
+Every run writes one JSON file into `benchmarks/results/<machine>/`, which is what lets
+all three machines run it at once without their branches conflicting. Commit those files
+unedited; the tables here are compiled from them. Protocol and result shape:
+[benchmarks/README.md](../benchmarks/README.md).
+
+It answers a different question from the sweep above, and the difference matters when
+reading a row: a model can operate every tool correctly — writes that land, reads that
+return, edits that apply — and still never produce a program that runs. Those are
+reported as separate columns for exactly that reason.
+
 ---
 
 ## Recommendation for the desktop (Machine B)
