@@ -42,7 +42,7 @@ Shipped before any agent loop, per the spec's build order.
   write/delete-protected so the agent cannot rewrite its own audit log or memory.
 - `security/scriptRunner.js` — `spawn` with an argument array and `shell: false`.
   Shell operators are rejected at tokenize time; `argv[0]` must match a user-extensible
-  allow-list; Windows `.cmd` shims run through `cmd.exe /d /s /c` with pre-screened
+  allow-list; Windows `.cmd` shims run through `cmd.exe /d /c` with pre-screened
   arguments; timeouts kill the whole process tree (`taskkill /T` on Windows).
 - `security/permissionModes.js` — the four states as two independent toggles.
   Auto-approve-scripts cannot be enabled without an explicit confirmation callback.
@@ -588,6 +588,197 @@ The client read its deadline with `opts.timeoutMs || this.timeoutMs`, so an expl
 zero was falsy and fell back to the 5-minute default. Model pulls legitimately run for
 an hour; the download would have been aborted partway and started over.
 
+### Fixed — four more ways a write could ruin a file, found by one benchmark sweep
+
+A full sweep of eight models on a second machine produced a damaged file in **six of
+sixteen runs**, across four models. Every one passed the existing guards, and the unit
+suite — 565 tests at the time — was green throughout. Each is now refused, and each
+refusal tells the model what to send instead.
+
+**The exports were deleted.** `llama3.2:1b` and `llama3.2:latest` both rewrote
+`src/greet.js` with correct-looking logic and no `module.exports`:
+
+```js
+function greet(name) { return name === '' ? 'Hello there' : name; }
+```
+
+67 bytes against 80 clears the shrink ratio, the brackets balance, nothing is commented
+out — and every file importing it breaks with "greet is not a function".
+
+**The module system was switched.** `stable-code:latest`, twice, silently converted a
+CommonJS module to `export default greet;`. It still exports *something*, so a check for
+"does this file export anything" waves it through, while `require()` breaks just as
+completely. The two systems are tracked separately for that reason.
+
+**The export pointed at nothing.** `qwen3.5:2b`, asked only to handle an empty name,
+renamed the function and left the export list untouched:
+
+```js
+const greeting = (name) => { … };
+module.exports = { greet };
+```
+
+The file parses, it has `module.exports`, and `require('./greet').greet` is `undefined`.
+This is the renamed twin of the commented-out module that kept its exports.
+
+**The implementation was deleted and the exports kept.** `llama3.2:1b` again, *after*
+two worse attempts had already been refused:
+
+```js
+module.exports = { name: '' };
+```
+
+The export style survives; the entry has a colon so it is not a shorthand name; 30
+against 80 bytes clears the shrink ratio. The narrow signal is that the file used to
+define something callable and now defines nothing — that is not an edit to a module, it
+is its removal, and `delete_file` exports that behind a confirmation this would bypass.
+A data-only module of constants is unaffected, having had no definitions to lose.
+
+The rules deliberately stop short of "the exported names must not change", which would
+block a legitimate rename. A rename that updates the export list to match is allowed.
+
+Live effect: given the first refusal, `stable-code:latest` read the message and resent a
+valid CommonJS module. That is what these are for — not to stop a session, but to give a
+small model something it can act on.
+
+### Fixed — a typed-out tool call was accepted as a finished answer
+
+`llama3.2:latest` ended a Tier A session with `stopReason: done` and this as its entire
+summary:
+
+```json
+{"name": "edit_file", "parameters": {"file": "src/greet.js", "new_content": "…"}}
+```
+
+No tool ran, nothing was written, and the user was handed raw JSON as the report of a
+task that never happened. `edit_file` is not one of this project's tools — the model
+invented a plausible name and wrote it out as prose.
+
+A reply with no tool calls normally does mean the model is finished, which is why the
+one exception has to be checked before that conclusion is drawn. The loop now
+recognises a tool call written as text — Ollama's shape, OpenAI's, and this project's
+own Tier B action shape, fenced or bare — tells the model to use the tool-calling
+interface and which tools exist, and after two such replies stops with
+`narrated-tool-calls` and a summary that says nothing was changed.
+
+### Fixed — the TODO planner turned a one-file edit into four loops
+
+Measured on the single-file benchmark task, the planner returned:
+
+- `qwen3.5:2b` — "Read src/greet.js" / "Update greet function…" / "Verify updated
+  behavior in browser or test runner"
+- `gemma4:e2b` — "Open src/greet.js." / "Update the greet function…" / "Ensure the
+  function returns…" / "Save changes to src/greet.js."
+
+Three or four separate loops to make one edit, most of them items that can only re-read
+the file and then get stopped as repeating. The TODO path was making the simple task
+*worse* than the single pass that already passed on both models.
+
+`TODO_PROMPT` has always said "Read the file" is not an item. Models ignore it, so the
+list is now filtered in code — the same decision `todoList.js` already makes about who
+owns the list: the model proposes, the extension decides. Below the two-item floor the
+session falls back to a single pass, which is what happens to a task like this one.
+
+The filter errs towards keeping, deliberately: a junk item costs one wasted loop, while
+a wrongly dropped item means work the user asked for silently never happens. An
+inspection verb only counts when nothing follows it but a target, so "Open a websocket
+connection in src/client.js" survives. A verification item is kept when it names a file
+the request itself refers to, compared on the filename stem so that "the obsolete file"
+in a request matches `src/obsolete.js` in a plan — so "Ensure README.md mentions the new
+flag" survives a request that mentions the README, while "Check if obsolete.js is still
+needed", invented by `qwen3.5:2b` during a task about `src/greet.js` alone, does not.
+Verification items are kept outright when the request itself mentions testing or
+checking.
+
+Live result on `qwen3.5:2b`, same task, same machine: **68.0s → 30.8s**, `partial` →
+`done`, 17 audit entries → 6.
+
+### Fixed — finished work was reported as a failure, and unfinished work as a success
+
+Two halves of the same problem: `judgeItem` had only two verdicts.
+
+**Work that landed but never closed.** Reproduced on `qwen3.5:2b` in three consecutive
+runs — the model writes the file correctly, re-reads it "to verify", spends the rest of
+the item's steps doing that, and never emits `done`. Flat `failed` reads as "nothing
+happened" for an item that, in substance, happened. There is now a third state,
+`done-with-warning`, still decided from evidence: the change set grew and no step
+failed. What is missing is only the model's sign-off, which was never worth anything.
+It counts as completed in the headline — the files did change — and the session summary
+says how many needed the caveat.
+
+**Work that never happened but was claimed.** The mirror case, found by the same
+benchmark on `gemma4:e2b`: the user declined the delete, `src/obsolete.js` stayed on
+disk, the model closed the item with `done`, and the checklist read "Delete the obsolete
+file — done". An item is now refused that verdict when nothing changed *and* something
+failed. Narrow on purpose — an item that changed nothing without failing anything is a
+legitimate check, and an item that landed its change after recovering from a failed step
+is an ordinary success.
+
+Neither half is fixed by trusting the model's account of itself, which is the failure
+the whole judgement exists to avoid.
+
+### Fixed — `npm test` could not run on a default Windows install
+
+`cmd.exe` was invoked as `/d /s /c`, and `/s` overrides Node's own argument escaping:
+the quotes it puts around a path with spaces are stripped before `cmd` parses the line.
+Node installs to `C:\Program Files\nodejs`, so every `npm`, `npx`, or `yarn` command —
+each one a `.cmd` shim, each one routed through `cmd.exe` for CVE-2024-27980 — died
+with:
+
+```
+'C:\Program' is not recognized as an internal or external command
+```
+
+on the extension's primary platform, at its default install location. `/d` stays: it
+suppresses AutoRun, so a registry key cannot inject a command into a run the user
+approved. `/s` buys nothing here and is gone.
+
+Found by a live benchmark run. The unit suite could not have caught it — every
+`scriptRunner.run` test spawns `node` directly, which is an `.exe`, so nothing
+exercised the shim path at all. A test that actually runs `npm test` through a real
+shim now covers it on Windows.
+
+### Fixed — the TODO checklist never moved until the run ended
+
+`agentSession` emitted `todo-item` and `todo-item-done`, the webview had a
+`todo-progress` handler, and nothing connected them: `chatTab._onAgentEvent` returned
+`undefined` for both. The checklist sat at "all pending" for an entire multi-minute
+session and filled in only at the end. Both events now carry a snapshot of the
+checklist — a copy, so a later item cannot rewrite an earlier event in flight — and the
+tab forwards it.
+
+### Fixed — the diff viewer was dead code
+
+`diffApply.confirmChange` was written, tested, and never called; write confirmations
+used a plain modal showing only "+7 / -5 lines", which tells the user how much changed
+but not whether it is what they wanted. The permission gate now passes both versions of
+the file and the resolved absolute path through to the confirmation, and "Review diff"
+opens VS Code's own diff view. The content is carried for display only — the decision
+still comes from the resolved path and the permission mode.
+
+`confirmChange` became modal in the process, matching every other gated action: an
+approval that scrolls past in a toast is not an approval.
+
+### Fixed — the composer's status line was never written to
+
+The webview rendered a `status` message into the composer hint; nothing ever sent one.
+It now shows the step budget, prompt-token target, and whether the model is trusted
+with a TODO list — deliberately the facts the header does *not* already carry, since
+they are what explains a run stopping early.
+
+### Fixed — `MODULE_TYPELESS_PACKAGE_JSON` on every test run
+
+`app/webview/package.json` declares `{"type": "module"}` for the webview folder only;
+the extension host half stays CommonJS. Verified that `vsce package` still produces a
+complete `.vsix` afterwards.
+
+### Fixed — the `.vsix` shipped development-only files
+
+`vsce ls` showed `tools/bench-agent.js` and `setup/FOLLOWUP-PROMPT.md` in the package.
+`.vscodeignore` excluded source *folders* but not those two. `setup/prompts/**` is
+still shipped, deliberately — the extension reads its model-facing prompts from there
+at runtime.
+
 ### Added beyond the spec — always-confirm commands
 
 A handful of allow-listed commands always require a click, even in Auto Approve
@@ -612,6 +803,13 @@ Auto-approve now means *routine local work*.
   back incomplete.
 - **`eslint.config.js` replaces `.eslintrc.json`.** ESLint 9 uses flat config; matching
   the filename in section 3 would mean pinning an unmaintained ESLint major.
+- **The `frontend-design` skill did not exist when the CSS was written.** `PROMPT.md`
+  section 10 says to read it before building `app/webview/*`; the conventions were
+  applied directly instead. It now exists at `.claude/skills/frontend-design/SKILL.md`,
+  written from `app/webview/style.css` — the worked example — so the instruction
+  resolves for anyone picking the work up. It also carries the `createElement` +
+  `textContent` rule, which is a security rule kept in the design guide because that is
+  where someone reaches when adding a component.
 
 ## [0.1.0] — unreleased
 
