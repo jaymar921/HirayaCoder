@@ -75,6 +75,15 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "sha256=$(sha256sum "$VSIX" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
+          # Semver already carries this judgement: 0.x means the public interface is
+          # not settled, and a `-rc.1`-style suffix says so outright. Rather than add a
+          # switch someone has to remember, the version decides. 1.0.0 is the first
+          # release that is not flagged, which is exactly what reaching 1.0.0 means.
+          case "$VERSION" in
+            0.*|*-*) echo "prerelease=true" >> "$GITHUB_OUTPUT" ;;
+            *)       echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+
       # Kept even on a dry run: the build is the thing worth inspecting.
       - name: Upload the .vsix as a build artifact
         uses: actions/upload-artifact@v4
@@ -93,6 +102,7 @@ jobs:
           VSIX: ${{ steps.artifact.outputs.path }}
           SHA256: ${{ steps.artifact.outputs.sha256 }}
           VERSION: ${{ steps.artifact.outputs.version }}
+          PRERELEASE: ${{ steps.artifact.outputs.prerelease }}
         run: |
           cat > notes.md <<EOF
           HirayaCoder v${VERSION} — a fully offline, local-first AI coding agent for VS Code.
@@ -121,7 +131,25 @@ jobs:
           \`security/\` for the threat model and SAST report.
           EOF
 
+          # Kept at the same indentation as the block above: inside `run: |`, YAML strips
+          # only the common indentation, so a further-indented heredoc body would arrive
+          # in the notes with leading spaces and render as a code block.
+          FLAGS=""
+          if [ "$PRERELEASE" = "true" ]; then
+          FLAGS="--prerelease"
+          cat >> notes.md <<'EOF'
+
+          ---
+
+          **This is a pre-release.** Offered to try, not to depend on: the agent edits and
+          deletes files in your workspace, and while every such action is permission-gated
+          and audited, it has not yet been used by anyone but the author. Start on a
+          scratch folder, or a repository with a clean git state.
+          EOF
+          fi
+
           gh release create "${GITHUB_REF_NAME}" "$VSIX" \
             --title "HirayaCoder ${GITHUB_REF_NAME}" \
             --notes-file notes.md \
-            --generate-notes
+            --generate-notes \
+            $FLAGS
