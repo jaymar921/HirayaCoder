@@ -31,6 +31,8 @@ const testGenerator = require('./features/testGenerator');
 const inlineCompletion = require('./features/inlineCompletion');
 const diffApply = require('./features/diffApply');
 const modelManager = require('./features/modelManager');
+const { SessionsProvider } = require('./features/sessionsView');
+const { TranscriptStore } = require('./core/transcriptStore');
 
 /** Workspace-state key holding models the user has waved off the ">7B" nudge for. */
 const DISMISSED_RECOMMENDATIONS_KEY = 'hirayacoder.dismissedRecommendations';
@@ -38,6 +40,10 @@ const DISMISSED_RECOMMENDATIONS_KEY = 'hirayacoder.dismissedRecommendations';
 /** Open chat tabs by session id — one tab per session, never two onto one memory file. */
 /** @type {Map<number, ChatTab>} */
 const openChatTabs = new Map();
+
+/** The activity bar list, so any command that changes the sessions can refresh it. */
+/** @type {import('./features/sessionsView').SessionsProvider | null} */
+let sessionsProvider = null;
 
 /**
  * @typedef {object} Settings
@@ -522,12 +528,29 @@ function activate(context) {
 
     vscode.commands.registerCommand('hirayacoder.openChat', () => openChatCommand(context, app)),
 
+    // Invoked by the activity bar list, which supplies the id. Falls back to the
+    // ordinary picker if it is ever called without one.
+    vscode.commands.registerCommand('hirayacoder.openSession', (sessionId) => {
+      if (typeof sessionId !== 'number') return openChatCommand(context, app);
+      return openSession(context, app, sessionId);
+    }),
+
+    vscode.commands.registerCommand('hirayacoder.refreshSessions', () => {
+      if (sessionsProvider) sessionsProvider.refresh();
+    }),
+
     vscode.commands.registerCommand('hirayacoder.pullModel', () => modelManager.pullModelCommand(app))
   );
 
   // Editor-side features. Each one funnels into the same chat session rather than
   // running its own agent, so the permission gate and audit log see every action
   // regardless of which entry point started it.
+  sessionsProvider = new SessionsProvider(() => workspaceRoot());
+  context.subscriptions.push(
+    vscode.window.registerTreeDataProvider('hirayacoder.sessions', sessionsProvider),
+    sessionsProvider
+  );
+
   diffApply.register(context);
   codeActions.register(context, (task, opts) => sendToChat(context, app, task, opts));
   testGenerator.register(context, (task, opts) => sendToChat(context, app, task, opts));
@@ -620,6 +643,20 @@ async function openChatCommand(context, app) {
     sessionId = picked.id === -1 ? nextSessionId(root) : picked.id;
   }
 
+  openSession(context, app, sessionId);
+}
+
+/**
+ * Reveal a session's tab, creating it if it is not already open.
+ *
+ * Tabs are tracked by session id so two entry points — the command's quick-pick and
+ * the activity bar list — can never open two views onto the same memory file.
+ *
+ * @param {vscode.ExtensionContext} context
+ * @param {HirayaCoder} app
+ * @param {number} sessionId
+ */
+function openSession(context, app, sessionId) {
   const open = openChatTabs.get(sessionId);
   if (open) {
     open.reveal();
@@ -630,6 +667,10 @@ async function openChatCommand(context, app) {
   openChatTabs.set(sessionId, tab);
   const panel = tab.reveal();
   panel.onDidDispose(() => openChatTabs.delete(sessionId));
+
+  // A brand-new session has no memory file until something is remembered, so the list
+  // would not show it otherwise.
+  if (sessionsProvider) sessionsProvider.refresh();
 }
 
 /**
@@ -894,6 +935,15 @@ async function clearMemoryCommand(app) {
   const store =
     picked.sessionId === app.memory.sessionId ? app.memory : new MemoryStore(workspaceRoot(), picked.sessionId);
   await store.clear();
+
+  // The conversation goes with it. Leaving the transcript behind would show the user
+  // an exchange the agent has been made to forget — two different answers on screen to
+  // "what happened in this session".
+  await new TranscriptStore(workspaceRoot(), picked.sessionId).clear();
+
+  const openTab = openChatTabs.get(picked.sessionId);
+  if (openTab) openTab.history = [];
+
   vscode.window.showInformationMessage(`HirayaCoder: cleared memory for session ${picked.sessionId}.`);
 }
 
