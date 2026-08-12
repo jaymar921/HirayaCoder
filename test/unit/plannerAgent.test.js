@@ -109,6 +109,35 @@ describe('plannerAgent.dropNonDeliverables', () => {
     assert.deepStrictEqual(dropNonDeliverables(items, task), items);
   });
 
+  it('drops an item that only creates folders, which no tool can do and none needs to', () => {
+    // ornith:9b, verbatim, on a plain-Java task. The first item burned three loops on
+    // refused `mkdir` calls and was reported as failed — while the second and third
+    // items created `src/main/java` on their way to writing the files.
+    const task = 'Create a simple Java TODO application with src/main/java and build folders.';
+    const items = [
+      'Create project directory structure (src/main/java and build folders)',
+      'Implement TodoManager.java with ArrayList-based TODO storage',
+      'Implement TodoApp.java with console text menu interface',
+    ];
+    assert.deepStrictEqual(dropNonDeliverables(items, task), [
+      'Implement TodoManager.java with ArrayList-based TODO storage',
+      'Implement TodoApp.java with console text menu interface',
+    ]);
+  });
+
+  it('keeps a folder item that also delivers a file', () => {
+    // The folder is incidental; the file is the work, and write_file makes both.
+    const task = 'Add a config directory with default settings.';
+    const items = ['Create the config directory with config/settings.json'];
+    assert.deepStrictEqual(dropNonDeliverables(items, task), items);
+  });
+
+  it('keeps real work that merely mentions a directory', () => {
+    const task = 'Make the build output configurable.';
+    const items = ['Make the output directory configurable via a CLI flag'];
+    assert.deepStrictEqual(dropNonDeliverables(items, task), items);
+  });
+
   it('leaves an empty list empty rather than inventing one', () => {
     assert.deepStrictEqual(dropNonDeliverables([], TASK), []);
   });
