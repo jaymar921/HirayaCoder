@@ -139,11 +139,26 @@
         }
       ],
       "hirayacoder.editorSubmenu": [
-        { "command": "hirayacoder.explain", "group": "1_read@1" },
-        { "command": "hirayacoder.refactor", "group": "2_write@1" },
-        { "command": "hirayacoder.document", "group": "2_write@2" },
-        { "command": "hirayacoder.fix", "group": "2_write@3" },
-        { "command": "hirayacoder.generateTests", "group": "2_write@4" }
+        {
+          "command": "hirayacoder.explain",
+          "group": "1_read@1"
+        },
+        {
+          "command": "hirayacoder.refactor",
+          "group": "2_write@1"
+        },
+        {
+          "command": "hirayacoder.document",
+          "group": "2_write@2"
+        },
+        {
+          "command": "hirayacoder.fix",
+          "group": "2_write@3"
+        },
+        {
+          "command": "hirayacoder.generateTests",
+          "group": "2_write@4"
+        }
       ]
     },
     "submenus": [
@@ -306,7 +321,10 @@
     "lint": "eslint app test",
     "test:unit": "mocha \"test/unit/**/*.test.js\"",
     "test": "npm run lint && npm run test:unit",
-    "audit:security": "npm audit --omit=dev"
+    "audit:security": "npm audit --omit=dev",
+    "package": "node scripts/package.js",
+    "test:integration": "node test/integration/runTests.js",
+    "test:all": "npm run lint && npm run test:unit && npm run test:integration"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",
