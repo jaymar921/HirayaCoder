@@ -5,6 +5,37 @@ All notable changes to HirayaCoder are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed — a Java project could be written but never compiled
+
+`mvn` and `gradle` were on the allow-list; `javac` and `java` were not. Both build tools
+compile and run arbitrary Java — including whatever a build script says — so the effect
+was to permit the heavyweight path while refusing the two-command beginner one.
+
+Found in real use: asked for a `Room.java`, a `Guest.java`, and a `Main.java` to exercise
+them, the agent wrote all three correctly and then could not compile any of it. The JDK
+was installed and on `PATH` the whole time. Same session, after the fix: `javac` and
+`java` both run, and the scenario finishes with class files on disk.
+
+### Fixed — a dead-end refusal was retried until the repeat guard stopped it
+
+The refusal messages were already informative — "not in the allowed program list", with
+the list — and models resent the identical command anyway. Observed on `ornith:9b`:
+`javac …` refused, then sent three more times unchanged until the item ended as
+`stopped: repeating`. The user saw that instead of "you need a JDK, here is the command
+to run".
+
+Saying *why* is not the same as saying *what to do instead*. A refusal that no retry can
+survive now says so outright and names the way forward — use an allowed program, drop
+the shell operators, tell the user what to install, or accept that a declined action was
+a decision rather than an obstacle. That last one is the same lesson the declined-delete
+hint already teaches.
+
+Live effect on the same prompt: a chained `cd … && javac … 2>&1 || true; javac …` was
+refused, and the next attempt was a single plain `javac Guest.java Room.java Main.java`
+that ran — rather than three more copies of the first line.
+
 ## [0.1.0] — 2026-08-12
 
 First release. Everything below shipped in it; the sections are in build order, so the
