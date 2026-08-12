@@ -105,6 +105,20 @@ row to `doc/MODELS.md` **naming the machine it ran on**. A timing without its ha
 is not a measurement. Do not overwrite another machine's numbers; add a column or a
 table.
 
+Then run the build benchmark, which starts from an empty folder rather than a fixture
+and grades adding, reading, running, and modifying files separately:
+
+```bash
+node tools/bench-build.js <model> --machine <A|B|C> --notes "<ollama ps split>"
+```
+
+It writes one JSON file into `benchmarks/results/<your machine>/`. **Commit that file
+unedited** — it is generated, and the tables in `README.md` and `doc/MODELS.md` are
+compiled from it afterwards. Because every machine writes only into its own directory
+and never appends to a shared file, three people can benchmark simultaneously and every
+branch merges into `main` without a conflict. Protocol:
+[benchmarks/README.md](benchmarks/README.md).
+
 ## Reporting a security issue
 
 Please do not open a public issue for anything that would let the agent escape the
