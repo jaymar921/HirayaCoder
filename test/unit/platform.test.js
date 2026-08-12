@@ -19,8 +19,18 @@ describe('platform.resolveShell', () => {
   it('selects cmd.exe on Windows with an argument array', () => {
     const shell = resolveShell('win32', { ComSpec: 'C:\\Windows\\system32\\cmd.exe' });
     assert.strictEqual(shell.command, 'C:\\Windows\\system32\\cmd.exe');
-    assert.deepStrictEqual(shell.args, ['/d', '/s', '/c']);
+    assert.deepStrictEqual(shell.args, ['/d', '/c']);
     assert.strictEqual(shell.windows, true);
+  });
+
+  it('keeps /d so AutoRun cannot inject into an approved command', () => {
+    assert.ok(resolveShell('win32', {}).args.includes('/d'));
+  });
+
+  it('omits /s, which breaks a shim installed under a path with spaces', () => {
+    // `/s` overrides Node's argument escaping, and `C:\Program Files\nodejs\npm.cmd`
+    // then reaches cmd unquoted: "'C:\Program' is not recognized". See resolveShell.
+    assert.ok(!resolveShell('win32', {}).args.includes('/s'));
   });
 
   it('falls back to a bare cmd.exe when ComSpec is unset', () => {
