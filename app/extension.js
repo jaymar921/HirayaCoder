@@ -705,6 +705,20 @@ async function selectModelCommand(app) {
  * @returns {Promise<boolean>}
  */
 async function confirmAction(request) {
+  // A write arrives with both versions of the file, so the answer can be given
+  // against the actual diff rather than a line count. Anything else — a delete, a
+  // command, or a write whose content did not survive the trip — falls through to
+  // the plain modal below.
+  if (request.kind === 'write' && typeof request.after === 'string' && request.absolute) {
+    return diffApply.confirmChange({
+      path: request.path,
+      absolute: request.absolute,
+      before: request.before === undefined ? null : request.before,
+      after: request.after,
+      summary: request.detail,
+    });
+  }
+
   const approve = request.kind === 'delete' ? 'Delete' : request.kind === 'script' ? 'Run' : 'Apply';
   const detail =
     request.risk === 'elevated'
