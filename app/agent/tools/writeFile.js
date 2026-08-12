@@ -174,6 +174,83 @@ function bracketsBalanced(text) {
   return stack.length === 0;
 }
 
+/** Extensions where a module's exports are the interface other files depend on. */
+const MODULE_LANGUAGES = new Set(['.js', '.mjs', '.cjs', '.jsx', '.ts', '.tsx']);
+
+/**
+ * How a module publishes itself, if it does.
+ *
+ * The two systems are tracked separately on purpose: converting one to the other is
+ * the failure this detects, and a check that just asked "does it export anything?"
+ * would wave it through.
+ *
+ * @param {string} text
+ * @returns {{cjs: boolean, esm: boolean}}
+ */
+function exportStyles(text) {
+  const source = stripLiterals(text);
+  return {
+    cjs: /\bmodule\s*\.\s*exports\b/.test(source) || /\bexports\s*\.\s*[\w$]+\s*=/.test(source),
+    esm: /\bexport\s+(?:default|const|let|var|function|class|async|\{|\*)/.test(source),
+  };
+}
+
+/**
+ * The bare identifiers a module exports — `module.exports = { greet }`, `export { a }`.
+ *
+ * Only shorthand entries. `{ greet: somethingElse }` names a value that lives
+ * elsewhere in the file and is checked by nothing here, deliberately: the point is to
+ * catch an export pointing at a symbol that does not exist, not to type-check.
+ *
+ * @param {string} text
+ * @returns {Set<string>}
+ */
+function exportedNames(text) {
+  const source = stripLiterals(text);
+  /** @type {Set<string>} */
+  const names = new Set();
+
+  for (const pattern of [/\bmodule\s*\.\s*exports\s*=\s*\{([^}]*)\}/g, /\bexport\s*\{([^}]*)\}/g]) {
+    for (const match of source.matchAll(pattern)) {
+      for (const entry of match[1].split(',')) {
+        const trimmed = entry.trim();
+        if (!trimmed || trimmed.includes(':') || trimmed.includes('...')) continue;
+        const name = /^([A-Za-z_$][\w$]*)(?:\s+as\s+[\w$]+)?$/.exec(trimmed);
+        if (name) names.add(name[1]);
+      }
+    }
+  }
+  return names;
+}
+
+/**
+ * How many callable definitions a file contains — functions, classes, arrows.
+ *
+ * Not an exact count and does not need to be: it is compared against the same file's
+ * own previous count, so a consistent approximation on both sides answers the only
+ * question asked of it — did the implementation survive?
+ *
+ * @param {string} text
+ * @returns {number}
+ */
+function definitionCount(text) {
+  return (stripLiterals(text).match(/\bfunction\b|\bclass\s+[\w$]+|=>/g) || []).length;
+}
+
+/**
+ * Does this name exist anywhere in the file other than inside the export list?
+ *
+ * @param {string} text
+ * @param {string} name
+ * @returns {boolean}
+ */
+function definesName(text, name) {
+  const body = stripLiterals(text)
+    .replace(/\bmodule\s*\.\s*exports\s*=\s*\{[^}]*\}/g, '')
+    .replace(/\bexport\s*\{[^}]*\}/g, '');
+  return new RegExp(`\\b${name}\\b`).test(body);
+}
+
 /**
  * A compact diff summary. Enough for a confirmation prompt; the real side-by-side
  * diff is rendered by the webview from the change set.
@@ -345,6 +422,107 @@ module.exports = async function writeFile(args, context) {
     }
   }
 
+  // The third way a plausible-looking rewrite ruins a file: it keeps the logic and
+  // drops the module's interface. Nothing above can see it — the file is a normal
+  // size, its brackets balance, and nothing is commented out.
+  //
+  // Measured across a full benchmark sweep, four runs on three different models:
+  //
+  //   llama3.2:1b       function greet(name) { return name === '' ? 'Hello there' : name; }
+  //   llama3.2:latest   function greet(name) { return name ? `Hello, ${name}!` : "Hello there"; }
+  //
+  // — both dropping `module.exports = { greet };` entirely, so every caller breaks
+  // with "greet is not a function". And `stable-code:latest`, twice, silently
+  // rewriting a CommonJS module to `export default greet;`, which breaks `require`
+  // just as thoroughly while still looking like it exports something.
+  //
+  // The rule is that an edit may change what a module exports, but not stop it being
+  // importable the way it was. Its callers were not part of the request.
+  //
+  // The cost is a legitimate CommonJS→ESM migration, which is a deliberate act across
+  // a whole project rather than a side effect of "handle an empty name" — and the
+  // refusal explains itself, so a model asked to do that can say so and be believed by
+  // the user rather than by this function.
+  if (!isNew && MODULE_LANGUAGES.has(path.extname(args.path).toLowerCase())) {
+    const before = exportStyles(existing);
+    const after = exportStyles(nextContent);
+
+    const lostCjs = before.cjs && !after.cjs;
+    const lostEsm = before.esm && !after.esm;
+
+    if (lostCjs || lostEsm) {
+      const style = lostCjs ? 'module.exports' : 'export';
+      const nowHas = after.cjs || after.esm ? 'a different export style' : 'no exports at all';
+      return {
+        ok: false,
+        observation:
+          `Refused: ${args.path} currently publishes its API with ${style}, and the content you sent has ` +
+          `${nowHas}. Every file that imports it would break. Keep the existing export statement exactly ` +
+          'as it is and change only the code you were asked to change. If removing the export is genuinely ' +
+          'part of the task, say so in your summary instead of doing it silently.',
+        error: 'EXPORTS_REMOVED',
+      };
+    }
+  }
+
+  // The export survived and now points at nothing. Observed on `qwen3.5:2b`, asked
+  // only to handle an empty name:
+  //
+  //     const greeting = (name) => { … };
+  //     module.exports = { greet };
+  //
+  // It renamed the function and left the export list alone. The file parses, it still
+  // has `module.exports`, so the check above is satisfied — and `require('./greet')
+  // .greet` is `undefined`. This is the same failure as the commented-out module that
+  // kept its exports, arrived at by renaming instead of commenting.
+  //
+  // Only names the previous version actually defined are checked, so a file that was
+  // already broken this way is not made un-editable.
+  if (!isNew && MODULE_LANGUAGES.has(path.extname(args.path).toLowerCase())) {
+    const orphaned = [...exportedNames(nextContent)].filter(
+      (name) => !definesName(nextContent, name) && definesName(existing, name)
+    );
+
+    if (orphaned.length > 0) {
+      return {
+        ok: false,
+        observation:
+          `Refused: ${args.path} exports ${orphaned.map((n) => `"${n}"`).join(', ')}, but the content you ` +
+          `sent no longer defines ${orphaned.length === 1 ? 'it' : 'them'}. Importing the file would give ` +
+          'undefined. If you renamed something, update the export list to match; otherwise keep the ' +
+          'original names and change only what you were asked to change.',
+        error: 'EXPORT_NOT_DEFINED',
+      };
+    }
+  }
+
+  // The module keeps a well-formed `module.exports` and has nothing left to export.
+  // Observed on `llama3.2:1b` after this file had already refused two worse attempts —
+  // it replaced an 80-byte module with:
+  //
+  //     module.exports = { name: '' };
+  //
+  // The export style survives, so the check above passes. The entry has a colon, so it
+  // is not a shorthand name and the check above that has nothing to test. 30 against 80
+  // bytes clears the shrink ratio, the brackets balance, and nothing is commented out.
+  // Every guard in this file waved through the deletion of the entire implementation.
+  //
+  // The signal is narrow and hard to argue with: the file used to define something
+  // callable and now defines nothing at all. That is not an edit to a module, it is its
+  // removal — and `delete_file` exists for that, behind a confirmation this would
+  // bypass. A data-only module is unaffected, having had no definitions to lose.
+  if (!isNew && definitionCount(existing) > 0 && definitionCount(nextContent) === 0) {
+    return {
+      ok: false,
+      observation:
+        `Refused: ${args.path} defines no functions or classes any more — the content you sent removed ` +
+        'the implementation and kept only the surrounding lines. Send the complete file with its code ' +
+        'intact, changing only what you were asked to change. If the file really should be removed, use ' +
+        'delete_file.',
+      error: 'IMPLEMENTATION_REMOVED',
+    };
+  }
+
   if (!isNew && existing === nextContent) {
     // Not an error — the model reached the right state, it just did so already.
     return {
@@ -363,6 +541,11 @@ module.exports = async function writeFile(args, context) {
     preview: isNew
       ? `New file, ${toLf(args.code).split('\n').length} lines.`
       : `+${change.added} / -${change.removed} lines.`,
+    // Both sides of the change travel with the request so the confirmation can offer
+    // a real side-by-side diff. A "+7 / -5 lines" summary tells the user how much
+    // changed, never whether it is the change they wanted.
+    before: existing,
+    after: nextContent,
   });
 
   if (!decision.allowed) {
@@ -413,3 +596,7 @@ module.exports.MIN_LENGTH_FOR_SHRINK_CHECK = MIN_LENGTH_FOR_SHRINK_CHECK;
 module.exports.MIN_CODE_LINES_FOR_COMMENT_CHECK = MIN_CODE_LINES_FOR_COMMENT_CHECK;
 module.exports.countLines = countLines;
 module.exports.COMMENT_PREFIXES = COMMENT_PREFIXES;
+module.exports.exportStyles = exportStyles;
+module.exports.exportedNames = exportedNames;
+module.exports.definesName = definesName;
+module.exports.definitionCount = definitionCount;
