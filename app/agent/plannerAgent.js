@@ -75,6 +75,41 @@ const INSPECTION_VERB = /^(?:re-?read|read|open|view|inspect|examine|look\s+at|n
 const SAVE_NO_OP = /^save\s+(?:the\s+)?(?:changes?|edits?|file|it)\b/i;
 
 /**
+ * "Create the folder structure" — the same shape of no-op as saving.
+ *
+ * `write_file` creates every directory on the way to the file, so a folder never has to
+ * be made as its own step, and there is no tool that makes one: `mkdir` is not on the
+ * allow-list and never will be. An item asking for one is therefore not merely wasteful
+ * but unachievable, and it fails in the most confusing possible way — the work gets done
+ * regardless by the item that writes the files.
+ *
+ * Observed on `ornith:9b`, asked for a plain Java project: the first item was "Create
+ * project directory structure (src/main/java and build folders)", which spent three
+ * loops on refused `mkdir` calls before the repeat guard ended it, and was reported to
+ * the user as a failed step in a run where all the real work succeeded — the directories
+ * included, created by the very next item.
+ *
+ * The folder noun has to be what the item *ends* on — the caller strips a trailing
+ * parenthetical first, since that is where these items list the paths — and not merely
+ * appear somewhere in it. That is what separates "Create the src/main/java and build folders", whose whole
+ * object is a directory, from "Make the output directory configurable via a CLI flag",
+ * which is a feature that happens to mention one. Anything with a predicate after the
+ * noun is kept, in line with the rest of this filter.
+ *
+ * "structure" and "layout" only count as the noun when something directory-ish
+ * qualifies them, so "Add a queue data structure" — real work with the same shape —
+ * does not match.
+ */
+const FOLDER_NO_OP =
+  /^(?:create|make|set\s*-?\s*up|add|initiali[sz]e|scaffold|prepare|establish)\b[^\n]*\b(?:(?:director(?:y|ies)|folder|file|project|package|source)\s+(?:structure|layout|tree)|director(?:y|ies)|folders?)[\s.:]*$/i;
+
+/** The parenthetical these items trail — "(src/main/java and build folders)". */
+const TRAILING_PARENTHETICAL = /\([^)]*\)[\s.:]*$/;
+
+/** A filename with an extension, anywhere in the text — `TodoApp.java`, `app.json`. */
+const NAMES_A_FILENAME = /[\w-]+\.[a-z0-9]{1,6}\b/i;
+
+/**
  * Items that only check work another item does.
  *
  * "Run tests" is here rather than with the no-op verbs because it does do something —
@@ -154,9 +189,11 @@ function isBareTarget(rest) {
  *
  * Deliberately towards keeping. A junk item costs a wasted loop and a row in the
  * summary that reads badly. A wrongly dropped item means work the user asked for
- * silently never happens, and they find out later. So both rules are narrow:
+ * silently never happens, and they find out later. So every rule is narrow:
  *
  *  - An inspection verb only counts when nothing follows it but a target.
+ *  - A folder-creation item is dropped only when it names no actual file, since one
+ *    that does is delivering that file whatever it says about the directories.
  *  - A verification item is kept when it names a file the request itself refers to.
  *    "Ensure README.md mentions the new flag" survives a request that mentions the
  *    README; "Check if obsolete.js is still needed" does not survive a request about
@@ -179,6 +216,10 @@ function dropNonDeliverables(items, task) {
     const verb = INSPECTION_VERB.exec(item);
     if (verb && isBareTarget(item.slice(verb[0].length))) return false;
     if (SAVE_NO_OP.test(item)) return false;
+    // Errs towards keeping, like every other rule here: an item that names an actual
+    // file is doing real work regardless of how it describes the folders around it, so
+    // "Create src/config/app.json and its directory" survives.
+    if (FOLDER_NO_OP.test(item.replace(TRAILING_PARENTHETICAL, '')) && !NAMES_A_FILENAME.test(item)) return false;
     if (
       !wantsVerification &&
       VERIFICATION_ITEM.test(item) &&
