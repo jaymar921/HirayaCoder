@@ -68,6 +68,128 @@ Rules:
 
 Reply with a numbered list only — no preamble, no explanation.`;
 
+/** Verbs that, at the start of an item, might mean "just look at this". */
+const INSPECTION_VERB = /^(?:re-?read|read|open|view|inspect|examine|look\s+at|navigate\s+to|locate)\s+/i;
+
+/** "Save the changes", "save it" — a write is already saved, so this asks for a no-op. */
+const SAVE_NO_OP = /^save\s+(?:the\s+)?(?:changes?|edits?|file|it)\b/i;
+
+/**
+ * Items that only check work another item does.
+ *
+ * "Run tests" is here rather than with the no-op verbs because it does do something —
+ * it just does not deliver any part of a request that never mentioned testing.
+ */
+const VERIFICATION_ITEM =
+  /^(?:verify|confirms?|ensures?|checks?(?!-)|tests?(?!-)|validates?|make\s+sure|double-?check|review|run\s+(?:the\s+)?(?:unit\s+)?tests?\b|run\s+the\s+test\s+suite)\b/i;
+
+/** Does the request itself ask for anything to be checked? */
+const REQUESTED_VERIFICATION =
+  /\b(?:test|tests|testing|verify|verified|confirm|ensure|check|validate|make\s+sure|lint|typecheck)\b/i;
+
+/** A path or a filename anywhere in the text. */
+const NAMES_A_FILE = /[\w-]+\.[a-z0-9]{1,6}\b|[\w.-]+[/\\][\w./\\-]+/i;
+
+/** Every filename in a string, reduced to its stem: `src/greet.js` → `greet`. */
+const FILE_STEMS = /([\w-]+)\.[a-z0-9]{1,6}\b/gi;
+
+/**
+ * Does the request itself refer to this file?
+ *
+ * Compared on the stem, because a request says "delete the obsolete file" where the
+ * plan says `src/obsolete.js`, and those are the same subject.
+ *
+ * @param {string} item
+ * @param {string} task
+ * @returns {boolean}
+ */
+function targetsAFileTheRequestMentions(item, task) {
+  const haystack = String(task || '').toLowerCase();
+  for (const match of item.matchAll(FILE_STEMS)) {
+    if (haystack.includes(match[1].toLowerCase())) return true;
+  }
+  return false;
+}
+
+/**
+ * Is everything after an inspection verb just a target, with no work in it?
+ *
+ * This is the whole safety margin of the verb rule. "Read src/greet.js" is a target and
+ * nothing else; "Open a websocket connection in src/client.js" starts with the same
+ * verb and is a feature. Only the first is dropped.
+ *
+ * @param {string} rest
+ * @returns {boolean}
+ */
+function isBareTarget(rest) {
+  const cleaned = rest
+    .trim()
+    .replace(/[.\s]+$/, '')
+    .replace(/^(?:the|its|this|current)\s+/i, '')
+    .replace(/^(?:file|contents?\s+of)\s+/i, '');
+
+  if (cleaned === '') return true;
+  if (/^[\w@.-]+[/\\][\w@./\\-]*$/.test(cleaned)) return true; // a path
+  if (/^[\w@-]+\.[a-z0-9]{1,6}$/i.test(cleaned)) return true; // a filename
+  return /^(?:files?|code|contents?|source|project|codebase)$/i.test(cleaned);
+}
+
+/**
+ * Drop items that are not deliverables.
+ *
+ * `TODO_PROMPT` already asks for one item per deliverable and gives "Read the file" as
+ * the counter-example. Models ignore it. Measured on the one-file benchmark task:
+ * `qwen3.5:2b` returned "Read src/greet.js" / "Update greet function…" / "Verify
+ * updated behavior in browser or test runner", and `gemma4:e2b` returned "Open
+ * src/greet.js" / "Update the greet function…" / "Ensure the function returns…" /
+ * "Save changes to src/greet.js" — three or four loops to make one edit, most of which
+ * could only re-read the file and get stopped as repeating. A single-pass run of the
+ * same task passes on both models, so the TODO path made the simple task worse.
+ *
+ * So the list is filtered here rather than asked for more nicely, which is the same
+ * decision `todoList.js` makes about who owns the list: the model proposes, the
+ * extension decides.
+ *
+ * ## Which way this errs
+ *
+ * Deliberately towards keeping. A junk item costs a wasted loop and a row in the
+ * summary that reads badly. A wrongly dropped item means work the user asked for
+ * silently never happens, and they find out later. So both rules are narrow:
+ *
+ *  - An inspection verb only counts when nothing follows it but a target.
+ *  - A verification item is kept when it names a file the request itself refers to.
+ *    "Ensure README.md mentions the new flag" survives a request that mentions the
+ *    README; "Check if obsolete.js is still needed" does not survive a request about
+ *    `src/greet.js` alone, because that file was the planner's own idea. Comparison is
+ *    on the filename stem, since a request says "the obsolete file" where the plan says
+ *    `src/obsolete.js`.
+ *
+ * Verification items are also kept outright when the request itself mentions testing
+ * or checking, since then it is the user's own instruction — "update it and make sure
+ * the tests pass" keeps its second item.
+ *
+ * @param {string[]} items
+ * @param {string} task  The user's request, verbatim.
+ * @returns {string[]}
+ */
+function dropNonDeliverables(items, task) {
+  const wantsVerification = REQUESTED_VERIFICATION.test(String(task || ''));
+
+  return items.filter((item) => {
+    const verb = INSPECTION_VERB.exec(item);
+    if (verb && isBareTarget(item.slice(verb[0].length))) return false;
+    if (SAVE_NO_OP.test(item)) return false;
+    if (
+      !wantsVerification &&
+      VERIFICATION_ITEM.test(item) &&
+      !(NAMES_A_FILE.test(item) && targetsAFileTheRequestMentions(item, task))
+    ) {
+      return false;
+    }
+    return true;
+  });
+}
+
 /**
  * Pull numbered steps out of a model reply.
  *
@@ -199,7 +321,14 @@ async function planTodos(options) {
       return [];
     }
 
-    const items = parsePlanSummary(message.content || '');
+    const proposed = parsePlanSummary(message.content || '');
+    const items = dropNonDeliverables(proposed, options.task);
+    if (items.length !== proposed.length) {
+      logger.info(
+        `TODO planner proposed ${proposed.length} item(s); ${proposed.length - items.length} were not ` +
+          'deliverables and were dropped.'
+      );
+    }
     logger.info(`TODO planner produced ${items.length} item(s).`);
     return items;
   } catch (err) {
@@ -210,4 +339,4 @@ async function planTodos(options) {
   }
 }
 
-module.exports = { plan, planTodos, parsePlanSummary, MAX_PLAN_STEPS };
+module.exports = { plan, planTodos, parsePlanSummary, dropNonDeliverables, MAX_PLAN_STEPS };
