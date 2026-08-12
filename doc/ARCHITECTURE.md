@@ -164,6 +164,7 @@ because a session with nothing on disk yet still owns its number.
 | Unit (573) | `npm run test:unit` | Logic, guards, parsing, permission decisions — against a stubbed `vscode`. |
 | Integration (12) | `npm run test:integration` | Activation, command registration, webview protocol, and a full turn to disk **in a real VS Code**, against a stub Ollama on loopback. |
 | Live benchmark | `node tools/bench-agent.js <model>` | What a real model does to a real workspace. |
+| Build benchmark | `node tools/bench-build.js <model> --machine <A\|B\|C>` | Whether a model can build a project from an empty folder — add, read, run, and modify — in Java, JavaScript, and Python. Results land in `benchmarks/results/<machine>/`. |
 
 That third row is not optional, and the reason is written into the project's history:
 **the mocked suite has passed clean while a real model destroyed a file**, repeatedly.
