@@ -666,6 +666,36 @@ describe('AgentSession', () => {
       assert.strictEqual(session.model, 'test-model');
     });
 
+    it('records how long the turn and its steps took', async () => {
+      // The first question anyone asks about a session that felt slow, and until now
+      // the ledger could not answer it at all.
+      const client = scriptedClient([
+        json({ action: 'read_file', path: 'src/app.js' }),
+        json({ action: 'done', summary: 'Had a look.' }),
+      ]);
+      await makeSession({ client, ledger }).run('what does src/app.js do');
+      await ledger.flush();
+
+      const records = await ledger.read();
+      const session = records.find((r) => r.kind === 'session');
+      const step = records.find((r) => r.kind === 'step');
+
+      assert.ok(typeof session.ms === 'number' && session.ms >= 0, 'no session duration');
+      assert.ok(typeof step.ms === 'number' && step.ms >= 0, 'no step duration');
+    });
+
+    it('survives a client with no health tracking rather than writing NaN', async () => {
+      // The scripted double has no `health`, which is also what an older client or a
+      // test stub looks like. A missing measurement must be a zero, not a NaN that
+      // lands in the file and poisons every average built from it.
+      const client = scriptedClient([json({ action: 'done', summary: 'Done.' })]);
+      await makeSession({ client, ledger }).run('check the project');
+      await ledger.flush();
+
+      const session = (await ledger.read()).find((r) => r.kind === 'session');
+      assert.strictEqual(session.modelMs, 0);
+    });
+
     it('records a declined action as a decision by the user', async () => {
       const client = scriptedClient([
         json({ action: 'delete_file', path: 'src/old.js' }),

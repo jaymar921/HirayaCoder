@@ -106,6 +106,37 @@ function emptyProfile(model) {
     declined: 0,
     trips: new Map(),
     stops: new Map(),
+    // Timing, summed rather than averaged on the way in, so the window can be resized
+    // without the numbers having already been flattened.
+    sessionMs: 0,
+    sessionsTimed: 0,
+    slowestSessionMs: 0,
+    modelMs: 0,
+    stepMs: 0,
+    stepsTimed: 0,
+    /** Health state → how many times this workspace saw it. */
+    outages: new Map(),
+  };
+}
+
+/**
+ * Averages, derived rather than stored.
+ *
+ * `sessionsTimed` and not `sessions` as the divisor: records written before timing
+ * existed carry no `ms`, and dividing by every session would quietly report a model as
+ * twice as fast as it is for as long as the old records stayed in the window.
+ *
+ * @param {ModelProfile} profile
+ * @returns {{averageSessionMs: number | null, averageStepMs: number | null, modelShare: number | null}}
+ */
+function timings(profile) {
+  return {
+    averageSessionMs: profile.sessionsTimed > 0 ? Math.round(profile.sessionMs / profile.sessionsTimed) : null,
+    averageStepMs: profile.stepsTimed > 0 ? Math.round(profile.stepMs / profile.stepsTimed) : null,
+    // What fraction of a session is spent waiting on the model. Near 1.0 says the
+    // model is the cost and a smaller one would help; well below says something else
+    // — a script, a huge file — is where the time went.
+    modelShare: profile.sessionMs > 0 ? Math.round((profile.modelMs / profile.sessionMs) * 100) / 100 : null,
   };
 }
 
@@ -142,16 +173,31 @@ function summarize(records) {
     if (!byModel.has(model)) byModel.set(model, emptyProfile(model));
     const profile = /** @type {ModelProfile} */ (byModel.get(model));
 
+    if (record.kind === 'health') {
+      if (typeof record.state === 'string' && record.state) bump(profile.outages, record.state);
+      continue;
+    }
+
     if (record.kind === 'session') {
       profile.sessions += 1;
       if (record.changed === true) profile.sessionsThatChanged += 1;
       if (typeof record.stopReason === 'string' && record.stopReason) bump(profile.stops, record.stopReason);
+      if (typeof record.ms === 'number') {
+        profile.sessionMs += record.ms;
+        profile.sessionsTimed += 1;
+        if (record.ms > profile.slowestSessionMs) profile.slowestSessionMs = record.ms;
+      }
+      if (typeof record.modelMs === 'number') profile.modelMs += record.modelMs;
       continue;
     }
 
     if (record.kind !== 'step') continue;
 
     profile.steps += 1;
+    if (typeof record.ms === 'number') {
+      profile.stepMs += record.ms;
+      profile.stepsTimed += 1;
+    }
     if (record.ok === false) {
       profile.failures += 1;
       if (typeof record.code === 'string' && record.code) bump(profile.trips, record.code);
@@ -198,6 +244,20 @@ class OutcomeLedger extends JsonlLog {
   }
 
   /**
+   * Ollama went up, down, or stopped answering.
+   *
+   * Written on the *transition* rather than per request, so a server that is quietly
+   * fine costs nothing and a flapping one is legible as a short list of flips with
+   * timestamps. "It was slow last Tuesday" is a question this file can now answer.
+   *
+   * @param {{model?: string, state: string, wasState?: string, ms?: number, code?: string}} event
+   * @returns {Promise<void>}
+   */
+  recordHealth(event) {
+    return this.append({ ...event, kind: 'health' });
+  }
+
+  /**
    * Drop every key that is not part of the record shape, and bound what is left.
    *
    * An allow-list rather than a deny-list, so a caller that grows a new field — a
@@ -233,6 +293,18 @@ class OutcomeLedger extends JsonlLog {
       ok: flag(entry.ok),
       changed: flag(entry.changed),
       steps: count(entry.steps),
+      // Durations, in milliseconds. Numbers, so they cost the privacy story nothing —
+      // "how long did this take" is answerable without knowing what it was doing.
+      //
+      // `ms` is wall-clock for the whole thing: a step, or a session. `modelMs` is the
+      // part spent waiting on Ollama, which on CPU inference is nearly all of it, and
+      // separating them is the point: a session that took four minutes is a different
+      // bug depending on whether the model was thinking or a script was hanging.
+      ms: count(entry.ms),
+      modelMs: count(entry.modelMs),
+      // Health records only.
+      state: text(entry.state),
+      wasState: text(entry.wasState),
     };
 
     // Absent keys stay absent rather than serializing as null, so `'code' in record`
@@ -295,6 +367,7 @@ class OutcomeLedger extends JsonlLog {
 module.exports = {
   OutcomeLedger,
   summarize,
+  timings,
   emptyProfile,
   MAX_LEDGER_BYTES,
   MAX_VALUE_CHARS,

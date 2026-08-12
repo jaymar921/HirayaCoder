@@ -10,7 +10,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { OutcomeLedger, summarize, emptyProfile } = require('../../app/core/outcomeLedger');
+const { OutcomeLedger, summarize, timings, emptyProfile } = require('../../app/core/outcomeLedger');
 
 /** @param {object} [over] */
 function step(over = {}) {
@@ -233,5 +233,117 @@ describe('outcomeLedger.summarize', () => {
     assert.strictEqual(profile.steps, 0);
     assert.strictEqual(profile.sessions, 0);
     assert.strictEqual(profile.declined, 0);
+  });
+});
+
+describe('OutcomeLedger timing and health', () => {
+  /** @type {string} */
+  let root;
+
+  beforeEach(() => {
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'hiraya-ledger-t-')));
+  });
+
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  });
+
+  it('stores durations, which are numbers and so cost the privacy story nothing', async () => {
+    const ledger = new OutcomeLedger(root);
+    await ledger.recordSession({
+      model: 'ornith:9b',
+      tier: 'A',
+      mode: 'agent',
+      sessionId: '1',
+      stopReason: 'done',
+      steps: 4,
+      changed: true,
+      ms: 92000,
+      modelMs: 88000,
+    });
+    await ledger.flush();
+
+    const [record] = await ledger.read(10);
+    assert.strictEqual(record.ms, 92000);
+    assert.strictEqual(record.modelMs, 88000);
+  });
+
+  it('still refuses anything that is not on the allow-list', async () => {
+    // The timing fields are an addition to the record shape, not an opening of it.
+    const ledger = new OutcomeLedger(root);
+    await ledger.recordSession({
+      model: 'm',
+      sessionId: '1',
+      stopReason: 'done',
+      steps: 1,
+      changed: false,
+      ms: 10,
+      path: 'src/secret.js',
+      command: 'curl http://evil',
+      summary: 'the model said something',
+    });
+    await ledger.flush();
+
+    const [record] = await ledger.read(10);
+    assert.strictEqual(record.path, undefined);
+    assert.strictEqual(record.command, undefined);
+    assert.strictEqual(record.summary, undefined);
+    assert.strictEqual(record.ms, 10);
+  });
+
+  it('writes a health transition with what it was before', async () => {
+    const ledger = new OutcomeLedger(root);
+    await ledger.recordHealth({ model: 'm', state: 'down', wasState: 'up', ms: 3000 });
+    await ledger.flush();
+
+    const [record] = await ledger.read(10);
+    assert.strictEqual(record.kind, 'health');
+    assert.strictEqual(record.state, 'down');
+    assert.strictEqual(record.wasState, 'up');
+  });
+
+  it('averages over timed records only', () => {
+    // Records written before timing existed carry no `ms`. Dividing by every session
+    // would report the model as twice as fast as it is until they aged out.
+    const profiles = summarize([
+      { kind: 'session', model: 'm', ms: 100, modelMs: 90 },
+      { kind: 'session', model: 'm', ms: 300, modelMs: 270 },
+      { kind: 'session', model: 'm' },
+    ]);
+    const profile = profiles.get('m');
+
+    assert.strictEqual(profile.sessions, 3);
+    assert.strictEqual(profile.sessionsTimed, 2);
+    assert.strictEqual(timings(profile).averageSessionMs, 200);
+    assert.strictEqual(profile.slowestSessionMs, 300);
+  });
+
+  it('reports what share of the time went to the model', () => {
+    const profiles = summarize([{ kind: 'session', model: 'm', ms: 1000, modelMs: 900 }]);
+    assert.strictEqual(timings(profiles.get('m')).modelShare, 0.9);
+  });
+
+  it('reports no averages rather than zero when nothing was timed', () => {
+    const t = timings(emptyProfile('m'));
+    assert.strictEqual(t.averageSessionMs, null);
+    assert.strictEqual(t.averageStepMs, null);
+    assert.strictEqual(t.modelShare, null);
+  });
+
+  it('counts outages per state', () => {
+    const profiles = summarize([
+      { kind: 'health', model: 'm', state: 'down' },
+      { kind: 'health', model: 'm', state: 'up' },
+      { kind: 'health', model: 'm', state: 'down' },
+    ]);
+
+    assert.strictEqual(profiles.get('m').outages.get('down'), 2);
+    assert.strictEqual(profiles.get('m').outages.get('up'), 1);
+  });
+
+  it('does not let a health record inflate the step or session counts', () => {
+    const profiles = summarize([{ kind: 'health', model: 'm', state: 'down' }]);
+    assert.strictEqual(profiles.get('m').steps, 0);
+    assert.strictEqual(profiles.get('m').sessions, 0);
   });
 });

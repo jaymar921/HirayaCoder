@@ -14,7 +14,11 @@
 const vscode = require('vscode');
 
 const logger = require('./utils/logger');
-const { createClient, assertLoopbackEndpoint } = require('./core/ollamaClient');
+const {
+  createClient,
+  assertLoopbackEndpoint,
+  TIMEOUTS_BEFORE_UNRESPONSIVE,
+} = require('./core/ollamaClient');
 const { ModelDiscovery, pickRecommendation } = require('./core/modelDiscovery');
 const modelCapability = require('./core/modelCapability');
 const { StatusBar } = require('./features/statusBar');
@@ -342,6 +346,56 @@ class HirayaCoder {
   }
 
   /**
+   * Ollama's reachability changed.
+   *
+   * Fired on the *transition*, never per request, so a healthy server costs nothing and
+   * a flapping one leaves a short readable trail. Three things happen here and they are
+   * deliberately different in loudness:
+   *
+   *  - The ledger gets a line, always. That is the record that answers "was it slow
+   *    last Tuesday, or was it me?" weeks later.
+   *  - The status bar updates, because it is already the place that shows connection.
+   *  - A notification appears **only** for the states a user can act on, and only on
+   *    the way into one. A toast every time a laptop wakes up would train them to
+   *    dismiss the one that matters.
+   *
+   * @param {ReturnType<import('./core/ollamaClient').OllamaClient['healthSnapshot']>} health
+   * @param {string} previous
+   */
+  onOllamaHealthChange(health, previous) {
+    if (this.ledger) {
+      void this.ledger.recordHealth({
+        model: this.activeModel || undefined,
+        state: health.state,
+        wasState: previous,
+        ms: health.lastLatencyMs === null ? undefined : health.lastLatencyMs,
+      });
+    }
+
+    this.statusBar.update({
+      connection: health.state === 'up' ? 'online' : 'offline',
+      error: health.state === 'up' ? undefined : health.lastError || `Ollama is ${health.state}.`,
+    });
+
+    if (!health.needsRestart) {
+      // Recovery is worth saying once, and only to someone who saw the failure.
+      if (previous === 'down' || previous === 'unresponsive') {
+        vscode.window.setStatusBarMessage('$(check) HirayaCoder: Ollama is responding again.', 5000);
+      }
+      return;
+    }
+
+    const detail =
+      health.state === 'down'
+        ? `Nothing is listening on ${this.settings.endpoint}. Start it with \`ollama serve\`.`
+        : `Ollama accepted the connection but did not answer ${TIMEOUTS_BEFORE_UNRESPONSIVE} requests in a row. It is probably wedged — restarting it usually fixes this.`;
+
+    void vscode.window.showWarningMessage(`HirayaCoder: Ollama is ${health.state}. ${detail}`, 'Show Logs').then((choice) => {
+      if (choice === 'Show Logs') void vscode.commands.executeCommand('hirayacoder.showLogs');
+    });
+  }
+
+  /**
    * (Re)create the client from current settings. A non-loopback endpoint fails here
    * rather than at request time, so the status bar can explain it immediately.
    */
@@ -353,6 +407,7 @@ class HirayaCoder {
         this.client.reconfigure({ endpoint: this.settings.endpoint, timeoutMs: this.settings.requestTimeoutMs });
       } else {
         this.client = createClient({ endpoint: this.settings.endpoint, timeoutMs: this.settings.requestTimeoutMs });
+        this.client.onHealthChange = (health, previous) => this.onOllamaHealthChange(health, previous);
         this.discovery = new ModelDiscovery(this.client);
       }
       if (this.discovery) this.discovery.invalidate();
@@ -1269,6 +1324,42 @@ async function attachContextFileCommand(app) {
  *
  * @param {HirayaCoder} app
  */
+/**
+ * How Ollama has been behaving, in one paragraph.
+ *
+ * The numbers that matter when a session felt slow and it is not obvious why: what the
+ * last call cost, what calls cost on average, and the worst one — because on CPU
+ * inference the average hides the model-load spike that is usually the actual
+ * complaint. The full per-turn history is in `.hirayacoder/outcomes.jsonl`; this is the
+ * glance.
+ *
+ * Empty until something has been asked of the server, rather than reporting zeros as
+ * though they were measurements.
+ *
+ * @param {HirayaCoder} app
+ * @returns {string}
+ */
+function describeResponsiveness(app) {
+  if (!app.client || !app.client.health || app.client.health.requests === 0) return '';
+
+  const health = app.client.healthSnapshot();
+  const seconds = (ms) => `${(ms / 1000).toFixed(1)}s`;
+
+  const parts = [
+    `Ollama is ${health.state}.`,
+    `${health.requests} request(s) this session:`,
+    `last ${seconds(health.lastLatencyMs || 0)},`,
+    `average ${seconds(health.averageLatencyMs || 0)},`,
+    `slowest ${seconds(health.slowestMs)}.`,
+  ];
+
+  if (health.consecutiveFailures > 0) {
+    parts.push(`\n${health.consecutiveFailures} failure(s) in a row — last: ${health.lastError}`);
+  }
+
+  return parts.join(' ');
+}
+
 async function showStatusCommand(app) {
   const s = app.statusBar.state;
 
@@ -1295,6 +1386,7 @@ async function showStatusCommand(app) {
     capability ? `${capability.model}: Tier ${capability.tier} (${capability.label}), ${capability.strategy} loop.` : 'No model selected.',
     capability ? capability.reason : '',
     budgets ? `At ${app.settings.thinkingCapacity} thinking: ${budgets.maxSteps} steps max, ${budgets.memoryRecallEntries === Infinity ? 'full' : budgets.memoryRecallEntries}-entry memory recall.` : '',
+    describeResponsiveness(app),
   ]
     .filter(Boolean)
     .join('\n\n');

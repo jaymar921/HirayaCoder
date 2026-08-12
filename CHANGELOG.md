@@ -14,6 +14,51 @@ of the individual fixes. Three of the four bugs below had been shipped and unnot
 since the features they belong to were written, and each of them silently degraded a
 whole feature rather than failing loudly.
 
+### Added — how long it took, and whether Ollama is still there
+
+Both recorded locally, in the file that already exists for exactly this kind of thing.
+Durations are numbers and states are enums, so `outcomes.jsonl` keeps the property that
+makes it safe to keep: no paths, no commands, no content.
+
+**Timing.** Each turn logs its wall-clock duration and how much of it was spent waiting
+on Ollama — to the output channel as it happens, and to the ledger for afterwards:
+
+    Turn finished in 94.2s (96% waiting on the model) — done, 4 step(s).
+
+The split is what makes the number useful. A four-minute turn is a different bug
+depending on whether the model was thinking or a script was hanging, and this says
+which without anyone having to guess. Steps are timed individually too, confirmation
+waits included: a session that looks slow because a dialog sat unanswered for two
+minutes is not a slow model, and that should be visible rather than inferred.
+
+Timing lives in `ollamaClient.request`, which is the single funnel every call passes
+through — the agent loops, the model list, the status-bar ping, inline completion. The
+per-session figure is a subtraction across that running total rather than a sum of
+instrumented call sites, so the planning and TODO-splitting passes, which happen outside
+any loop, are counted too. They are often where the time went.
+
+**Up, down, or wedged — three states, not a boolean.** The two failures need opposite
+responses, and collapsing them would give the wrong advice half the time:
+
+- **down** — nothing is listening. `OllamaUnreachableError` says so on the first try, so
+  there is no reason to wait for a second. Start Ollama.
+- **unresponsive** — it accepted the connection and then did not answer, twice running.
+  That is the wedged case, and it is the one where restarting actually helps. One
+  timeout is never enough to call it: on CPU inference a large model loading into memory
+  legitimately blows a deadline, and telling someone to restart a server that was merely
+  busy is worse than saying nothing.
+- **up, request failed** — a 4xx or 5xx. The server is healthy and the request was
+  wrong. Reporting an outage here would send the user to restart something that works.
+
+A cancelled request counts for nothing at all. Pressing Stop is not evidence about the
+server, and counting it would have every long session end by declaring an outage.
+
+Transitions are what get written, never individual requests, so a healthy server costs
+nothing and a flapping one is legible as a few flips with timestamps. Notifications fire
+only on entering a state the user can act on, and recovery is a quiet status-bar line
+shown only to someone who saw the failure. **Show Status** carries the glance version:
+last, average, and slowest call, plus any current failure streak.
+
 ### Fixed — "okay proceed" was answered as small talk
 
 Caught on the first real test of the intent router, and it is the exact failure the

@@ -439,6 +439,12 @@ class AgentSession {
     this.conversation = Array.isArray(options.conversation) ? options.conversation : [];
     this._controller = new AbortController();
     this.running = true;
+    this._startedAt = Date.now();
+    // Snapshotted rather than measured per call: the client already totals every
+    // request it makes, so the difference across a session is the time spent waiting on
+    // Ollama — including the planning and TODO-splitting passes, which happen outside
+    // any loop and would be missed by instrumenting the loops instead.
+    this._modelMsAtStart = this._modelMsSoFar();
 
     try {
       // Only Agent mode is routed by intent — Plan and Ask are the user saying what they
@@ -892,9 +898,10 @@ class AgentSession {
    * @param {import('./toolRegistry').ToolResult} result
    * @param {import('../core/promptRouter').Route} activeRoute
    * @param {boolean} mutating Whether the tool could change the workspace.
+   * @param {number} [ms] How long the tool took, including any confirmation wait.
    * @private
    */
-  _recordStep(action, result, activeRoute, mutating) {
+  _recordStep(action, result, activeRoute, mutating, ms) {
     if (!this._adapting()) return;
 
     // A permission prompt only decided this step if the tool was one that asks. A
@@ -913,6 +920,7 @@ class AgentSession {
       ok: Boolean(result.ok),
       code: result.ok ? undefined : result.error,
       decision,
+      ms,
     });
   }
 
@@ -928,6 +936,18 @@ class AgentSession {
    * @private
    */
   async _recordSession(result) {
+    const ms = this._startedAt ? Date.now() - this._startedAt : undefined;
+    const modelMs =
+      typeof this._modelMsAtStart === 'number' ? this._modelMsSoFar() - this._modelMsAtStart : undefined;
+
+    // Logged whether or not the ledger is on. Adaptation is a choice about whether the
+    // extension *learns*; how long a turn took is the first thing anyone needs when a
+    // session felt slow, and the output channel is where they will look for it.
+    if (typeof ms === 'number') {
+      const share = ms > 0 && typeof modelMs === 'number' ? ` (${Math.round((modelMs / ms) * 100)}% waiting on the model)` : '';
+      logger.info(`Turn finished in ${(ms / 1000).toFixed(1)}s${share} — ${result.stopReason}, ${result.steps.length} step(s).`);
+    }
+
     if (!this._adapting()) return;
 
     await this.ledger.recordSession({
@@ -939,7 +959,22 @@ class AgentSession {
       stopReason: result.stopReason,
       steps: result.steps.length,
       changed: !result.changeSet.isEmpty(),
+      ms,
+      modelMs,
     });
+  }
+
+  /**
+   * Total milliseconds this client has spent on Ollama since it was created.
+   *
+   * Returns 0 for a client without health tracking — a test double, mostly — so the
+   * subtraction still produces a number rather than a NaN that would land in the file.
+   *
+   * @returns {number}
+   * @private
+   */
+  _modelMsSoFar() {
+    return this.client && this.client.health ? this.client.health.totalLatencyMs : 0;
   }
 
   /**
@@ -1132,6 +1167,7 @@ class AgentSession {
 
     /** @type {import('./toolRegistry').ToolResult} */
     let result;
+    const startedAt = Date.now();
     try {
       result = await tool.handler(action, context);
     } catch (err) {
@@ -1140,10 +1176,15 @@ class AgentSession {
       logger.error(`Tool ${action.action} threw: ${message}`);
       result = { ok: false, observation: `${action.action} failed: ${message}`, error: 'TOOL_ERROR' };
     }
+    // Includes any time the user spent looking at a confirmation dialog, which is the
+    // honest reading of "how long did this step take" and is worth being able to see:
+    // a session that looks slow because a prompt sat unanswered for two minutes is not
+    // a slow model.
+    const ms = Date.now() - startedAt;
 
     // Recorded here rather than in the loops, because this is the one place every
     // action passes through regardless of which tier produced it.
-    this._recordStep(action, result, activeRoute, Boolean(tool.mutating));
+    this._recordStep(action, result, activeRoute, Boolean(tool.mutating), ms);
     return result;
   }
 

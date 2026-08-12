@@ -155,6 +155,46 @@ instead of several.
 
 ---
 
+## When it feels slow, or stops answering
+
+A local model on a laptop is slow in several different ways, and they need different
+responses. All of this is recorded locally in `.hirayacoder/outcomes.jsonl` and never
+leaves the machine — durations and states are numbers and enums, so the file's existing
+rule holds: no paths, no commands, no content.
+
+**Timing.** Every turn logs how long it took and how much of that was spent waiting on
+Ollama, to the output channel as it happens and to the ledger for later:
+
+```
+Turn finished in 94.2s (96% waiting on the model) — done, 4 step(s).
+```
+
+The split is the useful part. A four-minute turn is a different problem depending on
+whether the model was thinking or a script was hanging, and 96% says which. Individual
+steps are timed too, including any wait on a confirmation dialog — a session that looks
+slow because a prompt sat unanswered is not a slow model.
+
+**Up, down, or wedged.** Three states, because two of them need opposite actions from
+you:
+
+| State | What it means | What to do |
+|---|---|---|
+| `down` | Nothing is listening on the endpoint | Start it — `ollama serve` |
+| `unresponsive` | It accepted the connection and then didn't answer, twice running | Restart it; it's wedged |
+| `up`, request failed | The server answered with an error | Nothing — the request was wrong, not the server |
+
+The last row is why this isn't a boolean. A 404 for a model that isn't pulled would
+otherwise be reported as an outage and send you to restart something that is working.
+And one timeout is never enough to call a server wedged: on CPU inference a large model
+loading into memory legitimately blows a deadline.
+
+Transitions are recorded, not individual requests, so a healthy server costs nothing and
+a flapping one reads as a short list of flips with timestamps. You get a notification
+only when entering a state you can act on. **Show Status** has the numbers at a glance —
+last, average, and slowest call, plus any current failure streak.
+
+---
+
 ## Safety
 
 The parts that decide what the agent is *allowed* to do.

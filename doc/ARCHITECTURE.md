@@ -148,7 +148,7 @@ Everything lives under `.hirayacoder/` in the workspace, and nothing leaves the 
 | `.hirayacoder/transcripts/session<N>.json` | The conversation, restored when a tab is reopened **and** fed to the model as context |
 | `.hirayacoder/facts.jsonl` | Typed facts about this workspace and machine, shared by every session |
 | `.hirayacoder/audit.log` | Append-only JSONL: action, decision, mode, timestamp |
-| `.hirayacoder/outcomes.jsonl` | Append-only JSONL: model, tier, action, guard code, stop reason — counts only, no paths or content |
+| `.hirayacoder/outcomes.jsonl` | Append-only JSONL: model, tier, action, guard code, stop reason, durations, Ollama up/down transitions — counts only, no paths or content |
 | `.hirayacoder/context-files/` | Index of files attached with `+` |
 
 The three memory-ish files answer three different questions, which is why they are not

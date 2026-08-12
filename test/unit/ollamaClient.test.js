@@ -189,4 +189,114 @@ describe('OllamaClient against a local stub server', () => {
     await createClient({ endpoint }).chat({ model: 'm', messages: [], stream: true });
     assert.strictEqual(received.stream, false);
   });
+  describe('health and latency tracking', () => {
+    it('starts out knowing nothing rather than assuming the server is up', () => {
+      const client = createClient({ endpoint });
+      assert.strictEqual(client.health.state, 'unknown');
+      assert.strictEqual(client.healthSnapshot().needsRestart, false);
+    });
+
+    it('records how long a call took, and calls the server up', async () => {
+      handler = (_req, res) => res.end('{}');
+      const client = createClient({ endpoint });
+
+      await client.chat({ model: 'm', messages: [] });
+      const health = client.healthSnapshot();
+
+      assert.strictEqual(health.state, 'up');
+      assert.strictEqual(health.requests, 1);
+      assert.ok(typeof health.lastLatencyMs === 'number' && health.lastLatencyMs >= 0);
+      assert.strictEqual(health.needsRestart, false);
+    });
+
+    it('accumulates across calls, so a session can subtract the difference', async () => {
+      handler = (_req, res) => res.end('{}');
+      const client = createClient({ endpoint });
+
+      await client.chat({ model: 'm', messages: [] });
+      const after1 = client.health.totalLatencyMs;
+      await client.chat({ model: 'm', messages: [] });
+
+      assert.strictEqual(client.health.requests, 2);
+      assert.ok(client.health.totalLatencyMs >= after1);
+      assert.ok(client.healthSnapshot().averageLatencyMs !== null);
+    });
+
+    it('calls a server that is not listening down on the first failure', async () => {
+      // Nothing to wait for: the connection was refused, so a second attempt tells
+      // nobody anything they do not already know.
+      const client = createClient({ endpoint: 'http://127.0.0.1:1' });
+      await assert.rejects(() => client.chat({ model: 'm', messages: [] }));
+
+      const health = client.healthSnapshot();
+      assert.strictEqual(health.state, 'down');
+      assert.strictEqual(health.needsRestart, true);
+      assert.ok(health.lastError);
+    });
+
+    it('keeps a server that answered with an error marked up', async () => {
+      // A 404 means the request was wrong, not that the server is unwell. Reporting an
+      // outage here would send the user to restart something that is working.
+      handler = (_req, res) => {
+        res.statusCode = 404;
+        res.end('{"error":"no such model"}');
+      };
+      const client = createClient({ endpoint });
+      await assert.rejects(() => client.show('ghost'));
+
+      assert.strictEqual(client.healthSnapshot().state, 'up');
+      assert.strictEqual(client.healthSnapshot().needsRestart, false);
+    });
+
+    it('needs more than one timeout before calling the server wedged', async () => {
+      // A large model loading into memory legitimately blows a deadline. Telling the
+      // user to restart a server that was merely busy is worse than saying nothing.
+      handler = () => {};
+      const client = createClient({ endpoint, timeoutMs: 40 });
+
+      await assert.rejects(() => client.chat({ model: 'm', messages: [] }), /timed out/i);
+      assert.strictEqual(client.healthSnapshot().state, 'up', 'one timeout is not an outage');
+      assert.strictEqual(client.healthSnapshot().needsRestart, false);
+
+      await assert.rejects(() => client.chat({ model: 'm', messages: [] }), /timed out/i);
+      assert.strictEqual(client.healthSnapshot().state, 'unresponsive');
+      assert.strictEqual(client.healthSnapshot().needsRestart, true);
+    });
+
+    it('does not blame the server when the user pressed Stop', async () => {
+      handler = () => {};
+      const client = createClient({ endpoint });
+      const controller = new AbortController();
+
+      const promise = client.chat({ model: 'm', messages: [] }, { signal: controller.signal });
+      controller.abort();
+      await assert.rejects(() => promise, /aborted/i);
+
+      assert.strictEqual(client.health.consecutiveFailures, 0, 'a cancellation was counted as a failure');
+      assert.notStrictEqual(client.healthSnapshot().state, 'down');
+    });
+
+    it('announces a transition once, with what it was before', async () => {
+      handler = (_req, res) => res.end('{}');
+      const client = createClient({ endpoint });
+      /** @type {Array<{state: string, previous: string}>} */
+      const seen = [];
+      client.onHealthChange = (health, previous) => seen.push({ state: health.state, previous });
+
+      await client.chat({ model: 'm', messages: [] });
+      await client.chat({ model: 'm', messages: [] });
+
+      assert.deepStrictEqual(seen, [{ state: 'up', previous: 'unknown' }], 'a steady server should stay quiet');
+    });
+
+    it('survives a listener that throws', async () => {
+      handler = (_req, res) => res.end('{}');
+      const client = createClient({ endpoint });
+      client.onHealthChange = () => {
+        throw new Error('status bar exploded');
+      };
+
+      await assert.doesNotReject(() => client.chat({ model: 'm', messages: [] }));
+    });
+  });
 });

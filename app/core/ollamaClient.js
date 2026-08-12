@@ -30,6 +30,15 @@ const DEFAULT_ENDPOINT = 'http://127.0.0.1:11434';
 const DEFAULT_TIMEOUT_MS = 300000;
 
 /**
+ * Consecutive timeouts before the server is called unresponsive rather than slow.
+ *
+ * One is not enough and never will be: on CPU inference a large model loading into
+ * memory legitimately blows a deadline, and telling the user to restart a server that
+ * was merely busy is worse than saying nothing. Two in a row is not a load.
+ */
+const TIMEOUTS_BEFORE_UNRESPONSIVE = 2;
+
+/**
  * @typedef {object} OllamaModelDetails
  * @property {string} [parameter_size]
  * @property {string} [quantization_level]
@@ -154,6 +163,29 @@ class OllamaClient {
     this.timeoutMs = config.timeoutMs || DEFAULT_TIMEOUT_MS;
     // Validate eagerly so a bad setting surfaces at construction, not mid-task.
     this.url = assertLoopbackEndpoint(this.endpoint);
+
+    /**
+     * Running health and latency, updated by `_observe` on every settled request.
+     *
+     * Lives on the client because that is the only place that sees every call — the
+     * agent loop, the model list, the status-bar ping, and inline completion all go
+     * through here, so a picture assembled anywhere else would be partial.
+     */
+    this.health = {
+      state: /** @type {'unknown' | 'up' | 'down' | 'unresponsive'} */ ('unknown'),
+      consecutiveFailures: 0,
+      consecutiveTimeouts: 0,
+      requests: 0,
+      totalLatencyMs: 0,
+      slowestMs: 0,
+      lastLatencyMs: /** @type {number | null} */ (null),
+      lastOkAt: /** @type {number | null} */ (null),
+      lastErrorAt: /** @type {number | null} */ (null),
+      lastError: /** @type {string | null} */ (null),
+    };
+
+    /** @type {((health: object, previous: string) => void) | null} Set by the host. */
+    this.onHealthChange = null;
   }
 
   /**
@@ -183,7 +215,19 @@ class OllamaClient {
    * @returns {Promise<any>} Parsed JSON response.
    */
   request(method, apiPath, body, opts = {}) {
+    const startedAt = Date.now();
     return new Promise((resolve, reject) => {
+      // Wrapped so every settle path — success, HTTP error, malformed body, transport
+      // failure — passes through the health tracker exactly once. Timing at this layer
+      // rather than at each call site is what makes "why was that turn slow?" a
+      // question the ledger can answer without every caller remembering to measure.
+      const settle = (fn, err) => (value) => {
+        this._observe(apiPath, Date.now() - startedAt, err ? value : null);
+        fn(value);
+      };
+      const done = settle(resolve, false);
+      const failed = settle(reject, true);
+
       const chunks = [];
       const req = this._open(method, apiPath, body, opts, (res) => {
         res.on('data', (chunk) => chunks.push(chunk));
@@ -191,20 +235,20 @@ class OllamaClient {
           const text = Buffer.concat(chunks).toString('utf8');
           const status = res.statusCode || 0;
           if (status < 200 || status >= 300) {
-            reject(new OllamaResponseError(status, text, apiPath));
+            failed(new OllamaResponseError(status, text, apiPath));
             return;
           }
           if (!text.trim()) {
-            resolve({});
+            done({});
             return;
           }
           try {
-            resolve(JSON.parse(text));
+            done(JSON.parse(text));
           } catch (err) {
-            reject(new Error(`Ollama ${apiPath} returned malformed JSON: ${/** @type {Error} */ (err).message}`));
+            failed(new Error(`Ollama ${apiPath} returned malformed JSON: ${/** @type {Error} */ (err).message}`));
           }
         });
-      }, reject);
+      }, failed);
 
       if (req) req.end();
     });
@@ -267,6 +311,102 @@ class OllamaClient {
 
       if (req) req.end();
     });
+  }
+
+  /**
+   * Fold one finished request into the running health picture.
+   *
+   * ## Why three failure states and not one boolean
+   *
+   * "Is Ollama up?" is the wrong question on a laptop running a local model, because
+   * the two ways it goes wrong need opposite responses from the user:
+   *
+   *  - **down** — nothing is listening. The process is not running, or it is on a
+   *    different port. `OllamaUnreachableError` says so on the first try, so there is
+   *    no reason to wait for a second: start Ollama.
+   *  - **unresponsive** — something is listening and did not answer inside the
+   *    deadline. On CPU inference the innocent explanation is real (a large model
+   *    loading into memory can take minutes), which is why one timeout is not enough
+   *    to call it. Repeated ones are the wedged-server case, and that is the one that
+   *    actually needs a restart.
+   *  - **up**, with the request having failed anyway — a 4xx or 5xx. The server is
+   *    healthy and the *request* was wrong, which is a different bug entirely and must
+   *    not be reported as an outage.
+   *
+   * Latency is recorded on every settle, including failures: a timeout's duration is
+   * the most informative number in a slow session, and dropping it would leave exactly
+   * the case worth debugging unmeasured.
+   *
+   * @param {string} apiPath
+   * @param {number} ms
+   * @param {Error | null} error
+   * @private
+   */
+  _observe(apiPath, ms, error) {
+    const previous = this.health.state;
+
+    this.health.lastLatencyMs = ms;
+    this.health.requests += 1;
+    this.health.totalLatencyMs += ms;
+    if (ms > this.health.slowestMs) this.health.slowestMs = ms;
+
+    if (!error) {
+      this.health.state = 'up';
+      this.health.consecutiveFailures = 0;
+      this.health.consecutiveTimeouts = 0;
+      this.health.lastOkAt = Date.now();
+      this.health.lastError = null;
+    } else {
+      // An abort is the user pressing Stop, or a session being cancelled. It says
+      // nothing about the server and must never be counted against it.
+      if (/aborted/i.test(error.message || '')) return;
+
+      this.health.consecutiveFailures += 1;
+      this.health.lastErrorAt = Date.now();
+      this.health.lastError = String(error.message || '').slice(0, 200);
+
+      if (error instanceof OllamaUnreachableError) {
+        this.health.state = 'down';
+        this.health.consecutiveTimeouts = 0;
+      } else if (/timed out/i.test(error.message || '')) {
+        this.health.consecutiveTimeouts += 1;
+        this.health.state = this.health.consecutiveTimeouts >= TIMEOUTS_BEFORE_UNRESPONSIVE ? 'unresponsive' : 'up';
+      } else {
+        // The server answered, so it is up; the request is what failed.
+        this.health.state = 'up';
+        this.health.consecutiveTimeouts = 0;
+      }
+    }
+
+    if (this.health.state !== previous) {
+      logger.info(`Ollama is ${this.health.state} (was ${previous}) after ${apiPath} in ${ms}ms.`);
+      if (this.onHealthChange) {
+        try {
+          this.onHealthChange(this.healthSnapshot(), previous);
+        } catch (err) {
+          // A reporting hook must never break the request that triggered it.
+          logger.warn(`Health listener threw: ${/** @type {Error} */ (err).message}`);
+        }
+      }
+    }
+  }
+
+  /**
+   * The current picture, as a plain copy.
+   *
+   * `needsRestart` is the whole point of the distinction above: it is true only for the
+   * two states a user can actually act on, so a UI can say "start Ollama" without
+   * having to re-derive which failures mean that.
+   *
+   * @returns {{state: string, needsRestart: boolean, lastLatencyMs: number | null, averageLatencyMs: number | null, slowestMs: number, requests: number, consecutiveFailures: number, lastOkAt: number | null, lastErrorAt: number | null, lastError: string | null}}
+   */
+  healthSnapshot() {
+    return {
+      ...this.health,
+      needsRestart: this.health.state === 'down' || this.health.state === 'unresponsive',
+      averageLatencyMs:
+        this.health.requests > 0 ? Math.round(this.health.totalLatencyMs / this.health.requests) : null,
+    };
   }
 
   /**
@@ -457,4 +597,5 @@ module.exports = {
   assertLoopbackEndpoint,
   DEFAULT_ENDPOINT,
   DEFAULT_TIMEOUT_MS,
+  TIMEOUTS_BEFORE_UNRESPONSIVE,
 };
