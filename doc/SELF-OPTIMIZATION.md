@@ -1,8 +1,9 @@
 # Self-Optimization — design note
 
-Planned for **0.2.0**, after Phase 6 ships. This records what was asked for, what this
-project can actually do, and what was decided, so the reasoning does not have to be
-rebuilt later.
+Being built in **0.2.0**. The first two slices — the outcome ledger and earned
+corrective hints — have shipped; see [Status](#status) at the bottom for what is in the
+code and what is not. This records what was asked for, what this project can actually
+do, and what was decided, so the reasoning does not have to be rebuilt later.
 
 ---
 
@@ -68,26 +69,59 @@ Every session already produces an honest, local, evidence-based record — guard
 with error codes, `judgeItem` verdicts, stop reasons, change sets, declined
 confirmations. Nothing consumes it. That is the gap.
 
-### 1. Outcome ledger (first slice)
+### 1. Outcome ledger (first slice) — shipped
 
-Append-only `.hirayacoder/outcomes.jsonl`, reusing `auditLog`'s redaction and its
-serialized-append discipline. One record per step: model, tier, thinking capacity,
-action, guard error code, stop reason, whether the change set grew, whether the user
-approved or declined.
+Append-only `.hirayacoder/outcomes.jsonl` (`core/outcomeLedger.js`). The
+serialized-append discipline, rotation, bounded fields, and tolerant reads that
+`auditLog` had were lifted into `utils/jsonlLog.js` and are now shared by both, so
+there is one implementation of "this file cannot be torn or lost" rather than two.
+
+Two records: one per step (model, tier, thinking capacity, mode, action, guard error
+code, whether the user declined) and one per message (stop reason, step count, whether
+the change set grew).
 
 The reward signal is taken from **evidence, never from the model's self-report** — the
 principle `judgeItem` already enforces, for the same reason.
 
-### 2. Earned corrective hints
+One thing the design gained on contact with the code: **no free text, ever.** The record
+shape is an allow-list of enum-shaped fields, so no path, command, or summary can reach
+the file even if a later caller passes one. The audit log next door already answers
+"what was touched"; the ledger only has to answer "how often does this model trip this
+guard". Keeping workspace content out of it is what makes it safe for the learning layer
+to read back into a prompt.
 
-`reactLoop` carries per-error corrective hints today, hardcoded and identical for every
-model. Once a *specific model* trips a *specific guard* N times, the matching hint is
-promoted into that model's prompt preamble. `llama3.2:1b` repeatedly dropping exports
-earns "always include the module's existing export statement".
+### 2. Earned corrective hints — shipped
+
+`reactLoop` carries per-error corrective hints, hardcoded and identical for every model,
+and reactive: the guard fires, the hint is shown, the next session starts over knowing
+nothing. `agent/earnedHints.js` closes that loop. Once a *specific model* trips a
+*specific guard* three times in this workspace, the matching correction is promoted into
+that model's prompt preamble. `llama3.2:1b` repeatedly dropping exports now starts its
+next session already being told to keep them.
 
 This is the meta-learning idea implemented where it can actually run: the model does not
 learn, the extension learns what to tell it. Measured by guard-trip rate before and
 after, using `tools/bench-agent.js`.
+
+Three decisions worth keeping:
+
+- **Counts select, they never compose.** Every hint is a constant in `earnedHints`; the
+  ledger only decides which ones apply. `promptRouter` re-checks each hint against the
+  catalogue before rendering it, so a corrupted or hand-edited ledger can change which
+  hint appears and can never introduce a sentence of its own. That is why none of this
+  needs the neutralisation `memoryStore` entries require.
+- **Three trips, three hints, most-tripped first.** One trip is an accident, two a
+  coincidence. And the preamble competes with the task for a Tier B budget of ~1800
+  tokens, so a model that has struggled with everything must not be made worse at
+  everything.
+- **Read once, before the first turn.** A session does not adapt to itself mid-run; the
+  evidence it produces counts towards the next message. A prompt that shifts underneath
+  a task in progress is one more variable when a run goes wrong.
+
+Visible and disposable, per the rule below: **Show Learned Adaptation** prints each
+model's record and the hints in force, **Reset Learned Adaptation** discards the lot, and
+`hirayacoder.adaptation.enabled` turns off recording and hinting together — a user who
+declines the feature should not find the file in their project either.
 
 ### 3. Later slices, in the order they earned their place
 
@@ -115,3 +149,24 @@ guards stay unconditional, and no ledger statistic is an input to either.
 
 Profiles are advisory, visible to the user, and resettable. A learned setting that makes
 things worse must be as easy to discard as it was to acquire.
+
+`earnedHints.NEVER_EARNED` is where that rule lives in code, and `USER_DENIED` is the
+entry that matters. Repeated denials are the user exercising judgement, not a habit to
+correct out of a model — so no amount of evidence promotes a hint about them, and the
+only response to a denial stays the one `reactLoop` already gives in the moment: move on.
+
+---
+
+## Status
+
+| Slice | State |
+|---|---|
+| Outcome ledger | Shipped — `core/outcomeLedger.js`, `utils/jsonlLog.js` |
+| Earned corrective hints | Shipped — `agent/earnedHints.js`, rendered by `core/promptRouter.js` |
+| Per-model calibration | Not started |
+| Self-consistency on risky writes | Not started |
+| Retrieval memory | Not started, and blocked on an Ollama server started with `--embeddings` |
+
+The three unshipped slices are unchanged from the plan above. The next one worth doing is
+per-model calibration: the ledger now holds the evidence a calibration command would
+otherwise have to gather from scratch.
