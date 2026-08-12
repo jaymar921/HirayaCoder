@@ -5,6 +5,76 @@ All notable changes to HirayaCoder are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-08-12
+
+### Fixed — a refusal now names the tool that does the job
+
+Observed on `ornith:9b`, asked to build a plain Java project: it opened with
+`mkdir -p src/main/java build`, was refused, and sent the identical line twice more
+until the repeat guard ended the item — reported to the user as a failed step in a run
+where every other part succeeded, including the directories, which the next step created
+by itself. Later in the same run it reached for `ls build/` while `list_files` sat
+unused.
+
+The refusal was accurate and useless. `mkdir` will never be on the allow-list — programs
+whose purpose is moving or destroying files are exactly what it exists to keep out — but
+"not in the allowed program list, tell the user which command to run themselves" is the
+wrong answer when the agent was one step away from doing it correctly. **`write_file`
+already creates every directory on the way to the file.**
+
+So `agent/tools/runScript.js` now maps the shell commands that have a HirayaCoder tool
+to that tool — `ls`→`list_files`, `cat`→`read_file`, `rm`→`delete_file`,
+`grep`→`search_workspace`, `cp`/`mv`/`sed`→read-then-write — and answers `mkdir` with
+"you do not need to create directories at all", because a model told to find another way
+to make a folder will find one. A program no tool replaces keeps the original advice.
+
+`run_script`'s own description now says it is for build tooling rather than for files,
+so the command is less likely to be proposed at all.
+
+### Fixed — the planner no longer writes a step that cannot be completed
+
+"Create project directory structure (src/main/java and build folders)" is not merely
+wasteful, it is unachievable: no tool makes a folder and none needs to. `plannerAgent`
+drops it, alongside the existing "save the changes" no-op. Narrow, like every rule in
+that filter: the folder noun must be what the item ends on, so "Make the output directory
+configurable via a CLI flag" survives, as does any item naming an actual file.
+
+### Added — the build benchmark
+
+`tools/bench-build.js`. Where `bench-agent.js` asks whether a model can *edit* a project
+that exists, this asks whether it can *build* one that does not — starting from a
+completely empty directory, which is what makes the failure above reproducible.
+
+Three phases (create → run → modify) in Java, JavaScript, and Python, grading **adding,
+reading, running, and modifying** files separately. A missing toolchain is recorded as
+`skipped`, never as a failure: Machine A having no JDK says nothing about the model.
+
+**Nothing is graded on the model's own account.** After every phase the harness compiles
+and runs the program itself and checks its output; the model's summary is stored beside
+that and counts for nothing. Java is compiled into the harness's own directory rather
+than the agent's `build/`, so a stale `.class` cannot pass a phase whose source broke.
+The app has no interactive menu on purpose — a `Scanner` loop would hang every run until
+the timeout.
+
+Tool use and correctness are reported as separate columns, because a model can operate
+every tool correctly and still never produce a program that runs. On the first live run,
+`stable-code:latest` did exactly that.
+
+Results land one file per run in `benchmarks/results/<machine>/`, so three machines can
+benchmark simultaneously and every branch merges into `main` without a conflict — nothing
+is ever appended to a shared file. Protocol: `benchmarks/README.md`.
+
+### Added — a Requirements section in the README
+
+What is actually needed to run HirayaCoder, and — the part that was missing — which
+toolchains `run_script` needs before it can run anything. HirayaCoder installs nothing:
+ask for a Python script and want it run, Python must be on your `PATH`; ask for a Java
+project and want it compiled, you need a JDK. Without them the agent still writes the
+code and reports that it could not run it.
+
+The allow-list is documented in full, and a test now fails if a binary is added to
+`scriptRunner.js` without appearing there.
+
 ## [0.2.0] — 2026-08-12
 
 ### Added — the extension now learns from what actually happened
