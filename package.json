@@ -2,7 +2,7 @@
   "name": "hirayacoder",
   "displayName": "HirayaCoder",
   "description": "A fully offline, privacy-first AI coding agent powered by your local Ollama instance. Agentic on every model — even 1B.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "jaymar921",
   "author": {
     "name": "jaymar921",
@@ -83,6 +83,16 @@
       {
         "command": "hirayacoder.showAuditLog",
         "title": "Show Audit Log",
+        "category": "HirayaCoder"
+      },
+      {
+        "command": "hirayacoder.showAdaptation",
+        "title": "Show Learned Adaptation",
+        "category": "HirayaCoder"
+      },
+      {
+        "command": "hirayacoder.resetAdaptation",
+        "title": "Reset Learned Adaptation",
         "category": "HirayaCoder"
       },
       {
@@ -331,6 +341,17 @@
             ".hirayacoder"
           ],
           "markdownDescription": "Workspace-relative paths the agent may never write to or delete. Reads are still permitted. `.hirayacoder` is listed so the agent cannot rewrite its own audit log or memory."
+        },
+        "hirayacoder.adaptation.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Let HirayaCoder learn from what happens in this workspace. Outcomes are recorded to `.hirayacoder/outcomes.jsonl` — model, tier, action, which guard refused it, how the session ended — and a model that trips the same guard repeatedly gets the matching correction added to its prompt. **Adaptation never touches permissions, path confinement, or the allow-list**: it only changes what the model is told, never what it is allowed to do. Run *Show Learned Adaptation* to see it, *Reset Learned Adaptation* to discard it."
+        },
+        "hirayacoder.adaptation.hintThreshold": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "markdownDescription": "How many times one model must trip the same guard before the matching correction is added to its prompt. Lower learns faster and spends more of a small model's prompt budget on corrections; one trip is an accident rather than a habit."
         },
         "hirayacoder.statusBar.enabled": {
           "type": "boolean",
