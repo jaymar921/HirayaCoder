@@ -59,6 +59,7 @@ run, at the default 8192-token context:
 | `stable-code:latest` | 1.6 GB | 3.1 GB | 49% / 51% |
 | `qwen3.5:2b` | 2.7 GB | 3.0 GB | 39% / 61% |
 | `qwen3.5:4b` | 3.4 GB | 4.4 GB | 54% / 46% |
+| `ornith:9b` | 5.6 GB | 6.1 GB | 63% / 37% |
 | `gemma4:e2b` | 7.2 GB | 6.8 GB | 78% / 22% |
 | `gemma4:e4b` | 9.6 GB | 9.2 GB | 85% / 15% |
 
@@ -96,6 +97,7 @@ set for the numbers below.
 | `qwen3.5:4b` | 4.7B | 3.4 GB | 262144 | yes | **yes** | **A** (native) | **yes** |
 | `gemma4:e2b` | 5.1B | 7.2 GB | — | yes | no | **A** (native) | no |
 | `gemma4:e4b` | 8.0B | 9.6 GB | 131072 | yes | **yes** | **A** (native) | **yes** |
+| `ornith:9b` | 9.0B | 5.6 GB | — | yes | **yes** | **A** (native) | **yes** |
 
 Tier comes from `core/modelCapability.js`: ≤ 3B **or** no tool support → Tier B.
 `gemma4:e2b` is named for its ~2B *effective* parameters, but Ollama reports 5.1B raw,
@@ -182,6 +184,7 @@ reported success.
 | `gemma4:e2b` | A native | 43.2s | 25.5s | 78% / 22% | **passes both.** The best time-to-correctness on this machine |
 | `gemma4:e2b` forced Tier B | B react | — | 71.9s | 78% / 22% | **passes.** Same correct result on the ReAct loop, ~2.8× the Tier A time |
 | `gemma4:e4b` | A native | 79.0s | 63.0s | 85% / 15% | **passes both.** The model the laptop could not run at all |
+| `ornith:9b` | A native | 64.5s | 91.9s | 63% / 37% | **passes both.** Correct guard clause, README noted, and it produced the clearest demonstration of the completion judge: it claimed the declined delete was "waiting for you to confirm", and the session recorded the item as not completed and stated what actually happened |
 | `llama3.2:latest` | A native | 24.3s | 20.3s | 32% / 68% | **fails.** Reports `done` having never edited `greet.js`. The full run edited only the README |
 | `stable-code:latest` | B react | 37.1s | 36.5s | 49% / 51% | **passes with a caveat.** Correct behaviour and exports intact, but only after a guard refused its ESM rewrite; the result defines the function twice |
 
