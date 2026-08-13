@@ -125,6 +125,19 @@ const RULES = [
       'same name ending in `.cjs` and delete the `.js` one. Then run the command again.',
     fixFirst: true,
   },
+  // Tailwind 4 moved its PostCSS plugin into `@tailwindcss/postcss`, and the config
+  // every model writes from memory is the Tailwind 3 one. `npm install tailwindcss`
+  // now gets v4, so this fires on essentially every Vite + Tailwind scaffold a model
+  // produces. Caught live on `qwen3.5:4b`, where it left Vite serving 500s.
+  {
+    reason: 'TAILWIND_PLUGIN_MOVED',
+    pattern: /tailwindcss` directly as a PostCSS plugin|install `?@tailwindcss\/postcss`?/i,
+    summary: 'this Tailwind version keeps its PostCSS plugin in a separate package',
+    fix:
+      'Tailwind 4 split the PostCSS plugin out. Install `@tailwindcss/postcss`, then change postcss.config.js to ' +
+      'use `"@tailwindcss/postcss": {}` in place of `tailwindcss: {}`. Then run the command again.',
+    fixFirst: true,
+  },
   {
     reason: 'SYNTAX_ERROR',
     pattern: /SyntaxError|Unexpected token|Parse failure|error TS\d+|\berror: expected\b|Unterminated|Transform failed/i,
@@ -179,6 +192,50 @@ function isServerCommand(command) {
 }
 
 /**
+ * Folders whose files are nobody's to edit — a stack trace runs through them on the way
+ * to the one file that matters.
+ */
+const NOT_YOURS = /(?:^|[/\\])(?:node_modules|dist|build|\.vite|\.next|out)[/\\]/i;
+
+/**
+ * A path with a source-file extension, as it appears anywhere in a line of output.
+ *
+ * Each repetition must consume a separator and at least one character after it, so no
+ * two ways of splitting the same token exist — the same construction `completionCheck`
+ * uses, and unambiguous for the same reason.
+ */
+/* eslint-disable-next-line security/detect-unsafe-regex -- unambiguous by construction */
+const PATH_IN_OUTPUT = /[\w@.-]+(?:[/\\][\w@.-]+)*\.(?:jsx?|tsx?|mjs|cjs|css|s[ac]ss|html?|json|md|ya?ml|py|java|go|rs|rb|php|vue|svelte)\b/gi;
+
+/**
+ * The project file an unrecognised error points at, if it points at one.
+ *
+ * This is the answer to "what happens when the error is one nobody wrote a rule for".
+ * A rule list only ever covers the failures somebody has already seen; every new
+ * toolchain version invents another. But nearly every build error names the file it
+ * choked on, and "open the file the error names and fix what it says" is a correct
+ * instruction without anyone having to know what the error means.
+ *
+ * Files under `node_modules` and build output are skipped — a Tailwind stack trace runs
+ * four frames deep through `node_modules/postcss` before it mentions `src/index.css`,
+ * and only the last of those is the model's to edit.
+ *
+ * @param {string} text
+ * @returns {string | null}
+ */
+function fileFromError(text) {
+  for (const match of String(text).match(PATH_IN_OUTPUT) || []) {
+    const candidate = match.replace(/^\.[/\\]/, '');
+    if (NOT_YOURS.test(candidate)) continue;
+    // A bare `package.json` in a line of npm chatter is not a location. A path with a
+    // folder in it, or a config file at the root, is.
+    if (!/[/\\]/.test(candidate) && !/\.config\.[cm]?[jt]s$/i.test(candidate)) continue;
+    return candidate.replace(/\\/g, '/');
+  }
+  return null;
+}
+
+/**
  * The first rule whose pattern appears in either stream.
  *
  * @param {{stdout?: string, stderr?: string}} result
@@ -217,6 +274,8 @@ function matchRules(result) {
 function diagnose(result, opts = {}) {
   if (!result) return null;
 
+  const text = `${result.stderr || ''}\n${result.stdout || ''}`;
+
   if (result.timedOut) {
     // A server that printed `EADDRINUSE` and then sat there is not "a server doing what
     // servers do" — it is a broken start that happens to have no exit code, and saying
@@ -226,6 +285,22 @@ function diagnose(result, opts = {}) {
     // budget is not something to run a second time on the chance the network was flaky.
     const specific = matchRules(result);
     if (specific && !specific.retryable) return specific;
+
+    // A server killed at the probe deadline while printing errors the whole time is the
+    // case that got through: Vite kept running and served nothing but 500s. The probe
+    // decides whether it started; this decides what to say once it has not.
+    const brokenFile = fileFromError(text);
+    if (brokenFile && isServerCommand(opts.command || '')) {
+      return {
+        reason: 'UNRECOGNISED',
+        summary: `it kept running but was failing on ${brokenFile}`,
+        fix:
+          `It stayed up, but it was reporting errors the whole time — read them literally: they name ${brokenFile}. ` +
+          `Open ${brokenFile}, change what the error says is wrong, and run the command again.`,
+        retryable: false,
+        fixFirst: true,
+      };
+    }
 
     return isServerCommand(opts.command || '')
       ? {
@@ -244,6 +319,23 @@ function diagnose(result, opts = {}) {
 
   const matched = matchRules(result);
   if (matched) return matched;
+
+  // No rule knew this one. If the error names a file the model could open, that is
+  // enough to act on without anyone having classified the failure first — see
+  // `fileFromError`.
+  const file = fileFromError(text);
+  if (file) {
+    return {
+      reason: 'UNRECOGNISED',
+      summary: `the command failed and the error points at ${file}`,
+      fix:
+        `This failure has not been seen before, so read the error above literally: it names ${file}. ` +
+        `Open ${file}, change what the error says is wrong with it, and run the same command again. ` +
+        'If the error asks for a package to be installed, install it first.',
+      retryable: false,
+      fixFirst: true,
+    };
+  }
 
   // A server that exits is a server that failed, whatever it printed on the way out.
   // Vite announces "VITE v5.4.21 ready in 2912 ms" and *then* dies on a bad config, so
@@ -267,4 +359,4 @@ function diagnose(result, opts = {}) {
   return null;
 }
 
-module.exports = { diagnose, isServerCommand, RULES, SERVER_COMMAND };
+module.exports = { diagnose, isServerCommand, fileFromError, RULES, SERVER_COMMAND };

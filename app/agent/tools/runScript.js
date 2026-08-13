@@ -38,18 +38,31 @@ const PROBE_MS = 20000;
 /**
  * Did a server fall over during the probe, as opposed to simply staying up?
  *
- * Being killed at the probe deadline is the *expected* outcome, so the exit status
- * says nothing. What separates "started" from "broke" is whether it complained on the
- * way — a port collision, a config error, a module it could not resolve.
+ * Being killed at the probe deadline is the *expected* outcome, so the exit status says
+ * nothing. What separates "started" from "broke" is whether it complained on the way.
+ *
+ * This began as a list of specific failures — a port collision, a missing module, a
+ * config that would not load — and that list was too short by exactly the failure that
+ * turned up first. A live `qwen3.5:4b` run left Vite serving nothing but 500s:
+ *
+ *   VITE v8.2.1  ready in 906 ms
+ *   [vite] Internal server error: [postcss] It looks like you're trying to use
+ *   `tailwindcss` directly as a PostCSS plugin…
+ *
+ * None of the named patterns matched, so the probe reported a working dev server and
+ * the model believed it. The test is now the general one — did it say the word "error"
+ * — because a dev server that started cleanly does not, and being wrong in that
+ * direction costs one honest failure report rather than a broken app declared finished.
  *
  * @param {import('../../security/scriptRunner').RunResult} result
  * @returns {boolean}
  */
 function looksLikeStartupFailure(result) {
-  const text = `${result.stderr || ''}\n${result.stdout || ''}`;
-  return /\b(EADDRINUSE|ERR_MODULE_NOT_FOUND|Cannot find module|SyntaxError|failed to load config|Transform failed)\b/i.test(
-    text
-  );
+  const text = `${result.stderr || ''}\n${result.stdout || ''}`
+    // "0 errors" and "no problems found" are how build tools announce the opposite.
+    .replace(/\b(?:0|no)\s+(?:errors?|problems?|warnings?)\b/gi, '');
+
+  return /\b(?:error|errors|failed|failure|exception|ERR!|cannot|unable to|not found)\b/i.test(text);
 }
 
 /**

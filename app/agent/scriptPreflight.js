@@ -61,6 +61,59 @@ function parseRun(command) {
 }
 
 /**
+ * The package manager a command drives, or ''.
+ *
+ * @param {string} command
+ * @returns {string}
+ */
+function packageManagerOf(command) {
+  const first = String(command || '').trim().split(/\s+/)[0] || '';
+  const runner = first.split(/[/\\]/).pop().replace(/\.(exe|cmd|bat)$/i, '').toLowerCase();
+  return NODE_RUNNERS.has(runner) ? runner : '';
+}
+
+/**
+ * The folder whose `package.json` a package manager would act on, searching no higher
+ * than the workspace root.
+ *
+ * This is the one guard that stands between an approved command and the rest of the
+ * disk. Path confinement applies to the agent's *tools*; a spawned process resolves
+ * paths however it likes, and npm's rule is to walk up from the working directory until
+ * it finds a `package.json`. Nothing in this extension sees that walk happen.
+ *
+ * Observed, live, on a `qwen3.5:4b` run: the workspace was
+ * `.ignore/0.6.0-todo-app-qwen3.5-4b`, the project was in `todo-glass-app/` under it,
+ * and one `npm install --save lucide-react` went out without a `cwd`. There is no
+ * package.json at that workspace root, so npm climbed out of the workspace, out of
+ * `.ignore/`, and installed the dependency into the extension's own package.json —
+ * exit code 0, reported as a success, three directories outside anything the user had
+ * opened.
+ *
+ * Returning null therefore means "npm would resolve to something outside this project",
+ * which is a refusal, not a fallback.
+ *
+ * @param {string} directory   Absolute, already confined.
+ * @param {string} workspaceRoot Absolute.
+ * @returns {string | null} The folder holding the manifest, or null if none is in scope.
+ */
+function manifestDirectoryWithin(directory, workspaceRoot) {
+  const root = path.resolve(workspaceRoot);
+  let current = path.resolve(directory);
+
+  for (;;) {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- both paths are confined
+    if (fs.existsSync(path.join(current, 'package.json'))) return current;
+    if (current === root) return null;
+
+    const parent = path.dirname(current);
+    // Defensive: a path that is not actually under the root would otherwise walk to the
+    // filesystem root one directory at a time.
+    if (parent === current || !parent.startsWith(root)) return null;
+    current = parent;
+  }
+}
+
+/**
  * Read a package.json, or null if it is absent or unparseable.
  *
  * Unparseable counts as absent on purpose: this module exists to save a run, not to
@@ -90,8 +143,8 @@ function readManifest(directory) {
  * @returns {PreflightRefusal | null} null when there is no reason not to run it.
  */
 function preflight({ command, cwd, workspaceRoot }) {
-  const run = parseRun(command);
-  if (!run || !workspaceRoot) return null;
+  const runner = packageManagerOf(command);
+  if (!runner || !workspaceRoot) return null;
 
   /** @type {string} */
   let directory;
@@ -105,16 +158,27 @@ function preflight({ command, cwd, workspaceRoot }) {
     return null;
   }
 
-  const manifest = readManifest(directory);
-  if (!manifest) {
-    const where = cwd ? `"${cwd}"` : 'the project root';
+  // Checked for every package-manager command, not just `run`: `npm install` climbing
+  // out of the workspace is the case that actually happened, and it climbs from exactly
+  // the same starting point.
+  const manifestDirectory = manifestDirectoryWithin(directory, workspaceRoot);
+  if (!manifestDirectory) {
+    const where = cwd ? `"${cwd}"` : 'the workspace root';
     return {
       code: 'NO_PACKAGE_JSON',
       reason:
-        `there is no package.json in ${where}, so ${run.runner} has no scripts to run. ` +
-        'Use list_files to find the folder that has one and set "cwd" to it, or create the project first.',
+        `there is no package.json in ${where} or any folder above it inside this project. ` +
+        `${runner} searches upwards for one, so this would have acted on a project outside the workspace ` +
+        'entirely — installing into someone else\'s package.json, or running someone else\'s script. ' +
+        'Use list_files to find the folder that has package.json and pass it as "cwd", or create the project first.',
     };
   }
+
+  const run = parseRun(command);
+  if (!run) return null;
+
+  const manifest = readManifest(manifestDirectory);
+  if (!manifest) return null;
 
   const scripts = manifest.scripts && typeof manifest.scripts === 'object' ? manifest.scripts : {};
   const available = Object.keys(scripts);
@@ -134,17 +198,27 @@ function preflight({ command, cwd, workspaceRoot }) {
   // confident wrongness this module is supposed to avoid.
   const declaresDependencies =
     Object.keys(manifest.dependencies || {}).length > 0 || Object.keys(manifest.devDependencies || {}).length > 0;
+  // Checked beside the manifest rather than beside the cwd: npm installs into the
+  // folder whose package.json it resolved, so that is where node_modules will be.
   // eslint-disable-next-line security/detect-non-literal-fs-filename
-  if (declaresDependencies && !fs.existsSync(path.join(directory, 'node_modules'))) {
+  if (declaresDependencies && !fs.existsSync(path.join(manifestDirectory, 'node_modules'))) {
+    const where = path.relative(path.resolve(workspaceRoot), manifestDirectory).replace(/\\/g, '/');
     return {
       code: 'DEPENDENCIES_NOT_INSTALLED',
       reason:
         'this project\'s dependencies have never been installed — there is no node_modules folder. ' +
-        `Run "npm install"${cwd ? ` with "cwd": "${cwd}"` : ''} first, then run this again.`,
+        `Run "npm install"${where ? ` with "cwd": "${where}"` : ''} first, then run this again.`,
     };
   }
 
   return null;
 }
 
-module.exports = { preflight, parseRun, NODE_RUNNERS, IMPLICIT_SCRIPTS };
+module.exports = {
+  preflight,
+  parseRun,
+  packageManagerOf,
+  manifestDirectoryWithin,
+  NODE_RUNNERS,
+  IMPLICIT_SCRIPTS,
+};

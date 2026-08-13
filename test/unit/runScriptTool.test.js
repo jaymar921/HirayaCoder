@@ -291,6 +291,86 @@ describe('a build broken by the model\'s own config', () => {
   });
 });
 
+describe('a server that stays up while serving nothing but errors', () => {
+  // Verbatim shape from a live `qwen3.5:4b` run. Vite started, announced itself, and
+  // then failed every request — and the probe called it a working dev server, because
+  // the failure list it checked named EADDRINUSE and missing modules and nothing else.
+  const VITE_SERVING_500S = [
+    '  VITE v8.2.1  ready in 906 ms',
+    '  ➜  Local:   http://localhost:5173/',
+    "10:12:33 PM [vite] Internal server error: [postcss] It looks like you're trying to use `tailwindcss` " +
+      'directly as a PostCSS plugin. The PostCSS plugin has moved to a separate package, so to continue using ' +
+      'Tailwind CSS with PostCSS you\'ll need to install `@tailwindcss/postcss` and update your PostCSS configuration.',
+    '  File: F:/app/todo-glass-app/src/index.css:undefined:NaN',
+    '      at mt (F:\\app\\todo-glass-app\\node_modules\\tailwindcss\\dist\\lib.js:38:1643)',
+  ].join('\n');
+
+  it('is not reported as a server that started', async () => {
+    const { context } = runningContext([{ stdout: VITE_SERVING_500S, timedOut: true, code: null }]);
+    const result = await runScript({ command: 'npm run dev' }, context);
+
+    assert.strictEqual(result.ok, false, 'a broken app was reported as working');
+    assert.strictEqual(result.detail.reason, 'TAILWIND_PLUGIN_MOVED');
+    assert.match(result.observation, /@tailwindcss\/postcss/);
+  });
+
+  it('still calls a genuinely clean start a success', async () => {
+    const { context } = runningContext([
+      { stdout: '  VITE v5.4.21  ready in 300 ms\n  ➜  Local:   http://localhost:5173/', timedOut: true, code: null },
+    ]);
+    const result = await runScript({ command: 'npm run dev' }, context);
+
+    assert.strictEqual(result.ok, true);
+  });
+
+  it('does not treat a build reporting zero errors as a failure', async () => {
+    const { context } = runningContext([
+      { stdout: 'webpack compiled with 0 errors\n  ➜  ready', timedOut: true, code: null },
+    ]);
+    const result = await runScript({ command: 'npm run dev' }, context);
+
+    assert.strictEqual(result.ok, true);
+  });
+});
+
+describe('an error nobody wrote a rule for', () => {
+  it('sends the model to the file the error names', async () => {
+    // The honest answer to "can it handle an error we have never seen": no rule list
+    // covers a toolchain that has not shipped yet, but nearly every build error names
+    // the file it choked on, and that is enough to act on.
+    const { context } = runningContext([
+      { stderr: 'FooPlugin: unrecoverable widget mismatch\n    at src/hooks/useTodos.js:12:3', code: 1 },
+    ]);
+    const result = await runScript({ command: 'npm run build' }, context);
+
+    assert.strictEqual(result.detail.reason, 'UNRECOGNISED');
+    assert.strictEqual(result.detail.fixFirst, true);
+    assert.match(result.observation, /src\/hooks\/useTodos\.js/);
+  });
+
+  it('skips the frames that run through node_modules on the way', async () => {
+    const { context } = runningContext([
+      {
+        stderr:
+          'Error: something new\n    at x (node_modules/postcss/lib/lazy-result.js:367:16)\n' +
+          '    at y (src/index.css:2:1)',
+        code: 1,
+      },
+    ]);
+    const result = await runScript({ command: 'npm run build' }, context);
+
+    assert.match(result.observation, /src\/index\.css/);
+    assert.doesNotMatch(result.observation.split('What went wrong')[1] || '', /node_modules/);
+  });
+
+  it('says nothing rather than inventing a file when the error names none', async () => {
+    const { context } = runningContext([{ stderr: 'it broke', code: 1 }]);
+    const result = await runScript({ command: 'npm run build' }, context);
+
+    assert.strictEqual(result.detail.reason, undefined);
+  });
+});
+
 describe('a command that never exits', () => {
   it('calls a dev server that stayed up a success', async () => {
     // Every model in the v0.5.3 round burned its full two-minute script budget here and

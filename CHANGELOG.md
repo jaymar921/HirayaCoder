@@ -88,6 +88,60 @@ confirmation click, a subprocess, and a page of output for a 3B model to interpr
 bar for adding one is that being wrong must be impossible: a project that declares no
 dependencies is never told to install any.
 
+### Fixed — `npm install` could climb out of the workspace
+
+Found in a live `qwen3.5:4b` run. The workspace was `.ignore/0.6.0-todo-app-qwen3.5-4b`,
+the project was in `todo-glass-app/` inside it, and every npm command carried the right
+`cwd` — except one:
+
+```
+13:52:02  "command":"npm install --save lucide-react"   ← no cwd
+```
+
+There is no `package.json` at that workspace root, and npm's rule is to search *upwards*
+until it finds one. It left the workspace, left `.ignore/`, and installed the dependency
+into the extension's own `package.json`. Exit code 0, reported as a success, three
+directories outside anything the user had opened.
+
+Path confinement binds the agent's tools; a subprocess resolves paths however it likes,
+and nothing in the extension sees npm's search happen. `scriptPreflight` now performs
+that search itself and refuses any package-manager command whose manifest would resolve
+outside the workspace, naming what to set `cwd` to instead. A manifest in a parent folder
+that is still inside the workspace — a monorepo package — is allowed, because that one is
+the user's own.
+
+### Fixed — a dev server serving nothing but 500s counted as started
+
+The 20-second probe asked "did it fall over?" against a list of specific failures:
+a port collision, a missing module, a config that would not load. Vite starts fine with a
+broken PostCSS config and then fails every request:
+
+```
+VITE v8.2.1  ready in 906 ms
+[vite] Internal server error: [postcss] It looks like you're trying to use `tailwindcss`
+directly as a PostCSS plugin…
+```
+
+None of the named patterns matched, so the probe reported a working dev server and the
+model believed it. The test is now the general one — did it say "error" — because a
+server that started cleanly does not. Being wrong that way costs one honest failure
+report; being wrong the old way ships a broken app called finished.
+
+### Added — what happens when the error is one nobody wrote a rule for
+
+A rule list only covers failures somebody has already seen, and every toolchain version
+invents another. Two answers, one specific and one general.
+
+Specific: Tailwind 4 moved its PostCSS plugin to `@tailwindcss/postcss`, and the config
+every model writes from memory is the Tailwind 3 one — so this fires on essentially every
+Vite + Tailwind scaffold a model produces. It now has its own reason and names both
+halves of the fix.
+
+General: nearly every build error names the file it choked on. When nothing matches, the
+first project file mentioned in the output is extracted — skipping the frames that run
+through `node_modules` on the way — and the model is told to open that file, change what
+the error describes, and run the command again. No classification required.
+
 ### Fixed — closing a chat tab killed the run inside it
 
 Closing a tab called `session.cancel()`. That is right for a turn still queued and wrong
