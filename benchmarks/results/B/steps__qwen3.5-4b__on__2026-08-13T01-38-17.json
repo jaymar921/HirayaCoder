@@ -1,0 +1,38 @@
+{
+  "benchmark": "bench-steps",
+  "machine": "B",
+  "model": "qwen3.5:4b",
+  "stepSessions": true,
+  "startedAt": "2026-08-13T01:38:17.462Z",
+  "durationMs": 252368,
+  "tier": "A",
+  "canPlanTodos": true,
+  "stopReason": "done",
+  "steps": 11,
+  "graded": {
+    "appChanged": true,
+    "named": [
+      "useTodos",
+      "TodoInput",
+      "TodoList"
+    ],
+    "wired": [
+      "useTodos",
+      "TodoInput",
+      "TodoList"
+    ],
+    "broken": [],
+    "created": [
+      "src/hooks/useTodos.js",
+      "src/components/TodoInput.jsx",
+      "src/components/TodoList.jsx"
+    ],
+    "stillCounter": false
+  },
+  "appImportLines": [
+    "import { useTodos } from './hooks/useTodos';",
+    "import TodoInput from './components/TodoInput';",
+    "import TodoList from './components/TodoList';"
+  ],
+  "modelSummary": "4 of 4 item(s) completed.\n\n1. Create src/hooks/useTodos.js containing state and addTodo/removeToggle functions. — done\n2. Create src/components/TodoInput.jsx as a form that submits to the hook's addTodo function. — done\n3. Create src/components/TodoList.jsx to render todos with individual delete buttons for each item. — done\n4. Rewrite src/App.jsx to import useTodos, TodoInput, and TodoList instead of showing the counter demo. — done\n\nDetail:\n1. done\n2. done\n3. done. \n\n**Summary:**\n- Created `src/components/TodoList.jsx` that renders todos from the hook with individual delete buttons for each item, applying a \"completed\" class to finished items.\n4. done. The file has been updated to import and use `useTodos`, `TodoInput`, and `TodoList` instead of the counter demo. I've also added a form that allows users to add todos via keyboard (Enter key) in addition to using the TodoInput component, which already handles submission properly."
+}

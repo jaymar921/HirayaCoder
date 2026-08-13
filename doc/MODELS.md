@@ -476,6 +476,121 @@ through an agent session, which remains unexercised on macOS.
 (`transcriptStore`, `scriptRunner`, timing out) do not reproduce, which supports the
 reading that they are Machine A's OneDrive-synced working directory rather than the code.
 
+### Machine B — the paired control (`bench-steps.js`, 0.5.0)
+
+Machine B exists in this investigation to run the one thing Machine A could not afford: the
+same commit, the same model, the same fixture, with `steps` on and off. It is also the only
+machine where **partial GPU offload** happens at all — A is CPU-only and every one of C's 25
+runs reported `100% GPU`, so the split column below is measured nowhere else.
+
+Two sweeps of four paired models, 16 runs, one at a time with nothing else running and each
+model unloaded before the next. The table is the second sweep, on the tree of `c38c424`
+(`grade()` and `importGraph` identical to `fc6b47a`; the later commit only adds
+`graded.expected` to the record). The first sweep ran on `7c8ab04` — before the
+case-sensitivity fix — and is kept below as a repeat, not merged into the rate.
+
+| Model | Steps | `App.jsx` wired | Imports resolving | Still counter | Wall clock | CPU/GPU | Resident |
+|---|---|---|---|---|---|---|---|
+| `qwen3.5:4b` | on | yes | **3/3** | no | 252.4s (4.2 min) | 54%/46% | 3.9 GB |
+| `qwen3.5:4b` | off | yes | **3/3** | no | 211.3s (3.5 min) | 54%/46% | 3.9 GB |
+| `qwen3.5:2b` | on | yes | 0/3 | no | 348.4s (5.8 min) | 39%/61% | 3.0 GB |
+| `qwen3.5:2b` | off | yes | 0/3 | no | 310.5s (5.2 min) | 39%/61% | 3.0 GB |
+| `gemma4:e4b` | on | yes | **3/3** | no | 266.3s (4.4 min) | 85%/15% | 9.5 GB |
+| `gemma4:e4b` | off | yes | **3/3** | no | 216.2s (3.6 min) | 85%/15% | 9.5 GB |
+| `ornith:9b` | on | yes | 2/3 — no `useTodos` | no | 288.2s (4.8 min) | 63%/37% | 6.1 GB |
+| `ornith:9b` | off | yes | **3/3** | no | 225.3s (3.8 min) | 63%/37% | 6.1 GB |
+
+Runs that did not produce a working app (3/8), from `bench-steps-summary.js --machine B`:
+
+    B ornith:9b steps=on — only imported TodoInput, TodoList — never imported useTodos
+    B qwen3.5:2b steps=off — nothing it built was imported
+    B qwen3.5:2b steps=on — nothing it built was imported
+
+**1. Does `nosteps` fail where `steps` succeeds? No — and on this machine it never failed
+at all.** Every one of the 12 Tier A runs across both sweeps rewrote `App.jsx` and removed
+the counter demo, `steps` and `nosteps` alike. Machine A's motivating failure — components
+written and `App.jsx` never touched, in five sessions out of five under v0.4.0 — **did not
+reproduce once here**. That is the same conclusion Machine C reached from a distribution,
+arrived at independently on different hardware: **the three bug fixes in 0.5.0 did the
+work.**
+
+The pairs cannot separate the two arms, and the second sweep is what proves it rather than
+suggests it. Four cells changed answer between sweeps with nothing altered but the run:
+
+| Model | Steps | Sweep 1 (`7c8ab04`) | Sweep 2 (`c38c424`) |
+|---|---|---|---|
+| `qwen3.5:4b` | on | 3/3 · 267.3s | 3/3 · 252.4s |
+| `qwen3.5:4b` | off | **2/3** · 242.7s | **3/3** · 211.3s |
+| `gemma4:e4b` | on | **2/3** · 365.1s | **3/3** · 266.3s |
+| `gemma4:e4b` | off | 3/3 · 302.7s | 3/3 · 216.2s |
+| `ornith:9b` | on | 2/3 · 284.5s | 2/3 · 288.2s |
+| `ornith:9b` | off | 3/3 · 245.9s | 3/3 · 225.3s |
+
+Counting all 12 Tier A runs, `nosteps` is fully wired 5 times in 6 and `steps` 3 times in 6
+— which points the *opposite* way to Machine C's 8/10 against 7/10 and is equally
+insignificant (Fisher's exact p ≈ 0.55). Two machines disagreeing in direction at n≈6–10,
+neither significantly, is what no effect looks like. **Do not read a winner into either.**
+
+**What the pairs do separate is cost.** `nosteps` was faster in **all eight pairs**, mean
+255.0s against 297.6s — step sessions cost about **17% more wall clock** on this machine.
+Eight out of eight in the same direction is a real signal (sign test p ≈ 0.008) where the
+correctness difference is not, and it is exactly what the design predicts: an extra planning
+call up front, then one loop per item.
+
+**2. Does the broken-import guard fire? Not once in 16 runs — and the reason is
+informative.** Machine B produced **zero broken import paths**. Every miss was a *missing*
+import, not a wrong one: `ornith:9b` and three sweep-1 runs wrote `useTodos.js` and then
+imported `useState` from React instead, leaving the hook holding all the state written and
+unused. The guard needs a path pointing at nothing, and this machine kept producing paths
+that were simply absent. Machine C saw the guard fire live on a genuine wrong path; the two
+results are consistent, and together they say the failure has **two distinct modes** and
+only one of them is guardable.
+
+Two *other* guards did fire here on real model output:
+
+    Refused: the content you sent for src/hooks/useTodos.js has unclosed brackets — it
+    stops part-way through the file. Send the COMPLETE file from the first line to the
+    last, including every closing brace and any exports at the end.
+
+    Refused: src/components/TodoList.jsx currently publishes its API with export, and the
+    content you sent has no exports at all. Every file that imports it would break.
+
+**3. Does the retry fire at speed? It never fired on Machine B at all** — 0 times in 16
+runs. Machine A's run 3 was rescued by a timeout-induced retry and Machine C saw 3 retries
+in 20 runs from wrong-file writes; neither mechanism triggered here. On B the retry is
+carried, not used. Its value rests on C's evidence, not this machine's.
+
+**4. How much faster than Machine A?** On `qwen3.5:4b`, Machine A's four runs span 738–1450s
+(12.3–24.2 min, median ≈ 1030s) against Machine B's 211.3–267.3s (median 247.6s) — roughly
+**4.2× faster**. Machine C is a further ~6× beyond B. The three machines now span more than
+an order of magnitude on the same task, which is the reason `--machine` is mandatory.
+
+**5. Does `gemma4:e4b` change the answer? It is the most interesting row on this machine.**
+It is fully wired in 3 of its 4 runs, indistinguishable from `qwen3.5:4b`'s 3 of 4 on
+correctness — but it achieves that at **85% CPU / 15% GPU**, 9.5 GB resident against a 4 GB
+card, with only about a seventh of the model on the GPU. Despite that, it costs almost
+nothing: mean 241.3s against `qwen3.5:4b`'s 231.9s, a **4% penalty for a model 2.8× the
+size**. The intuition that a badly-split model is unusable is wrong on this task, because a
+long single generation is bottlenecked on the CPU-resident layers either way. `gemma4:e4b`
+is a reasonable default here, matching Machine C's recommendation for a different reason.
+
+**The 300s default is Machine A's problem, confirmed from a third machine.** No individual
+request timed out in any of the 16 runs. Whole-session times ran 211–348s, and a session is
+many requests, so per-request latency sits far below
+`hirayacoder.ollama.requestTimeoutMs`'s 300000 default. A exceeded it generating a single
+`App.jsx`; B and C never approach it. **Leave the default alone and document the override
+for slow machines** — that is now the position of all three machines.
+
+**Suite status: 947 passing, 1 failing.** The 4 `transcriptStore`/`scriptRunner` timeouts
+predicted from Machine A **do not reproduce here**, which with Machine C's identical result
+confirms them as Machine A's OneDrive-synced working directory rather than the code. The one
+real failure is unrelated to benchmarking and arrived with the README rewrite in `c38c424`:
+`the allow-list is documented in full, so the README cannot drift out of date` — the
+rewritten Requirements section says the agent runs "(`node`, `npm`, `python`, `git`, and
+similar)", which drops `gradle`, `make`, `java` and `javac` from
+`DEFAULT_ALLOWED_BINARIES`. Left unfixed deliberately: §5 forbids code changes inside a
+benchmark run, and Machine C's sweep at `a9a5869` predates the rewrite and was clean.
+
 ### Open: the laptop's TODO-path numbers
 
 These rows are now measured on the desktop, but they remain **unmeasured on the
