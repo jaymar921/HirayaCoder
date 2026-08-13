@@ -5,7 +5,7 @@ All notable changes to HirayaCoder are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — 0.5.0
+## [0.5.0] — 2026-08-13
 
 Everything here comes out of one evaluation **on Machine A** — the CPU-only laptop the
 design is shaped around: five models — `gemma4:e4b`, `ornith:9b`,
@@ -182,7 +182,52 @@ imports exceeded it: `Ollama request to /api/chat timed out after 300000ms`. Tha
 ordinary file on the machine this project exists for. Raise it for real work on a laptop —
 the benchmark runs use 900000. The default is left alone because it is also what makes a
 genuinely hung request noticeable on a fast machine, and Machines B and C never approach
-it. See `doc/MODELS.md`.
+it. Three machines have now answered this and they agree. See `doc/MODELS.md`.
+
+### Measured afterwards — step sessions do not improve correctness, and cost 17%
+
+Recorded here rather than quietly left out, because it is a result about the largest
+feature in this release and it did not go the way its design predicted.
+
+33 runs of the wiring benchmark across two machines, paired on the same commit with the
+toggle on and off:
+
+| | Fully wired | |
+|---|---|---|
+| Machine C, `qwen3.5:4b`, n=10 each | **8/10** with · **7/10** without | Fisher's exact p ≈ 1.0 |
+| Machine B, Tier A models, n=6 each | **3/6** with · **5/6** without | Fisher's exact p ≈ 0.55 |
+
+Two machines, disagreeing in *direction*, neither significantly. That is what no effect
+looks like, and no winner should be read into either. What is significant is the cost:
+Machine B's `nosteps` arm was faster in **all eight pairs**, mean 255.0s against 297.6s
+(sign test p ≈ 0.008) — about **17% more wall clock**, which is exactly what an extra
+planning call plus one loop per item should cost.
+
+**So the three bug fixes above are what fixed the original failure, not step sessions.**
+The v0.4.0 behaviour left `App.jsx` untouched in five sessions out of five; the *control*
+arm of these runs — step sessions off, same release — wires it in 7 of 10 on C and 5 of 6
+on B, and Machine A's motivating failure did not reproduce on B at all.
+
+The feature stays, off by default and labelled experimental, because it buys something the
+control arm does not: a step checked against its own text, and a run that stops and
+explains itself rather than cascading through steps that depend on a failed one. Machine C
+watched that happen — the import guard fired on a genuinely wrong path, the retry failed to
+fix it, and the run ended `3 of 4 completed` with the reason attached, where the same model
+in an unguarded run reported `4 of 4` for an app that still had the counter demo in it. It
+is honesty, not capability, and it is priced at 17%.
+
+### Fixed after the fact — the benchmark collator scored one import out of three as success
+
+Found by Machine C hand-counting 25 runs. `bench-steps-summary.js` used
+`wired.length > 0` while its own comment claimed "two out of three is a broken app", so a
+run that imported the components but never the hook — state written and unused — passed.
+It inflated the *control* arm specifically, which is the arm that makes the feature under
+test look bad, and the reading it produced was "step sessions made things worse" from data
+that says no such thing. The bar now requires all three of the task's imports and travels
+in each record as `graded.expected`; `benchStepsSummary.test.js` pins it.
+
+Re-grading cost nothing because the per-run JSON is the source of truth — the corrected
+numbers above come from re-scoring files written before anyone knew the bar was wrong.
 
 ## [0.4.0]
 

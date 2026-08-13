@@ -202,9 +202,27 @@ HirayaCoder can only run programs already installed on your computer. If you ask
 run a Python script, you need Python installed. It will still *write* the code — it just
 cannot run it for you.
 
-It also only runs a fixed list of safe, well-known commands (`node`, `npm`, `python`,
-`git`, and similar). Anything else is refused on purpose, so a mistake by the AI cannot
-damage your system.
+It also only runs a fixed list of well-known commands. **This is the whole list** —
+anything else is refused on purpose, so a mistake by the AI cannot damage your system:
+
+| For | It may run |
+|---|---|
+| JavaScript / Node | `node`, `npm`, `npx`, `yarn`, `pnpm` |
+| Python | `python`, `python3`, `pip`, `pip3`, `pytest` |
+| Java | `java`, `javac`, `mvn`, `gradle` |
+| Go, Rust, .NET | `go`, `cargo`, `dotnet` |
+| Testing and formatting | `jest`, `mocha`, `vitest`, `ava`, `tsc`, `eslint`, `prettier` |
+| Other | `git`, `make`, `ollama` |
+
+Two things worth knowing before they surprise you:
+
+- **Everyday shell commands are not on the list** — `rm`, `ls`, `mkdir`, `curl` are all
+  refused. Creating files and folders happens through the safe file tools instead, so
+  `mkdir` is never needed: writing a file creates the folders above it.
+- **No shell is involved.** Commands run directly, so `&&`, `|`, and `>` are refused
+  rather than interpreted. One command at a time.
+
+You can add to the list in HirayaCoder's settings. The AI cannot add to it itself.
 
 ---
 

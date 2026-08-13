@@ -195,8 +195,18 @@ relative imports of what it just wrote and, when one reaches nothing, says so an
 the path that would work. The file is still written — the content is usually right and
 only the route is wrong, and discarding it would cost more than it saves.
 
-The cost is one extra turn on any step that needs the retry, which on CPU inference is
-tens of seconds. That is why it is a toggle rather than the default.
+**Leave it off unless you have a reason.** It was measured on three machines after it
+shipped, and the result did not go the way the feature's author expected: across 33 runs
+of the wiring benchmark, step sessions made **no measurable difference to correctness** —
+Machine C saw 8/10 against 7/10 without, Machine B saw the two arms disagree in the
+opposite direction, and neither gap is significant. What *is* significant is the cost:
+Machine B's `nosteps` arm was faster in **all eight pairs**, about **17% less wall clock**,
+which is exactly what an extra planning call plus one loop per item should cost.
+
+The three bug fixes shipped alongside it in 0.5.0 are what fixed the original failure. Step
+sessions are worth turning on when you want the stricter reporting — a step checked against
+its own text, and a run that stops and explains itself instead of cascading — not because
+they make the model more likely to succeed.
 
 ### Memory recalled by subject
 
