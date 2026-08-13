@@ -362,6 +362,105 @@ It is worth stating what saved run 3: the timeout produced a step that wrote not
 step guard failed it, and the retry ran it again and succeeded. Under 0.4.0 that item
 would simply have ended empty. A slow machine and a step retry turn out to interact well.
 
+### Machine C — the same task, repeated (`bench-steps.js`, 0.5.0)
+
+Machine A could afford four runs and got three outcomes. This machine runs the wiring task
+in **30–65 seconds**, so it was asked for the thing four samples cannot give: a rate. 25
+runs, all `--machine C`, one at a time with nothing else running, every result file written
+by the harness. Every run on the same commit (`a9a5869`), APFS, M4 Pro / 24 GB.
+
+| Model | Steps | Runs | `App.jsx` wired | Imports resolving | Median | CPU/GPU |
+|---|---|---|---|---|---|---|
+| `qwen3.5:4b` | on | 10 | 10/10 | **8/10 (80%)** | 42.0s (0.7 min) | 100% GPU |
+| `qwen3.5:4b` | off | 10 | 10/10 | **7/10 (70%)** | 36.0s (0.6 min) | 100% GPU |
+| `gemma4:e4b` | on | 5 | 5/5 | **5/5 (100%)** | 44.7s (0.7 min) | 100% GPU |
+
+**Read the "imports resolving" column, not `bench-steps-summary.js`.** The collator reports
+`nosteps` as 100%, and that is wrong. Its own comment says *"Two out of three is a broken
+app that reports itself as finished"*, but the predicate is `(g.wired || []).length > 0` —
+**one** resolving import out of three passes. Three `nosteps` runs wired only part of the
+app: two imported `TodoInput` and `TodoList` but never `useTodos`, so the hook holding all
+the state is written and unused, and one imported only `useTodos`, so neither component is
+rendered. Those are not broken paths — they are *missing* ones, which is why `broken` is
+empty and the check passes. The table above requires all three to resolve. Left unpatched
+deliberately: Machine B is collating with the same tool right now, and changing a grading
+bar after seeing results is the one thing §5 of both handoffs forbids.
+
+**1. What is the success rate?** With step sessions, **8 in 10**. The two failures were
+different from each other — one wired all three imports correctly but left the counter demo
+in `App.jsx` alongside the todo app and reported `4 of 4 done`; one wrote every import a
+level too high. Not a bimodal split, just two distinct ways to be wrong at roughly 10% each.
+
+**2. Does `nosteps` differ from `steps`? No, and that is the finding.** 80% against 70% at
+n=10 each is indistinguishable (Fisher's exact p ≈ 1.0); the honest reading is that this
+experiment cannot separate them, not that steps won. What it does separate is 0.5.0 from
+0.4.0: on Machine A the v0.4.0 behaviour left `App.jsx` untouched in **five sessions out of
+five**, and here the same `nosteps` path wires it in 7 of 10. **The three bug fixes did the
+work, and step sessions are close to optional on a fast machine.** They still pay for
+themselves through the retry — see 4.
+
+**3. Does the broken-import guard fire? Yes — for the first time in a live run.** It
+reproduced Machine A's run 2 exactly, and the whole sequence is worth reading, because the
+retry did *not* rescue it:
+
+    --- step 4/4: Update src/App.jsx to import useTodos, TodoInput, and TodoList while removing counter logic.
+        13. write_file src/App.jsx
+        RETRY: the file was written, but 3 import(s) point at nothing — "../hooks/useTodos.js" in src/App.jsx, "../components/TodoInput.jsx" in src/App.jsx, "../components/TodoList.jsx" in src/App.jsx — so it cannot run
+        14. read_file src/App.jsx
+        15. read_file src/hooks/useTodos.js
+        16. read_file src/components/TodoInput.jsx
+        17. read_file src/components/TodoList.jsx
+        18. write_file src/App.jsx
+        => failed
+
+The model re-read all four files and wrote the same wrong paths again. It ended `partial`,
+and its own summary said **"3 of 4 item(s) completed"** with the reason attached — the same
+model that, in the still-counter run above, cheerfully reported `4 of 4`. The guard did not
+save the run; it stopped the run from lying about it, and told the user the files were fine
+and only the paths were wrong. That is the design working as intended.
+
+**4. Does the retry earn its place at speed? Yes.** It fired 3 times in 20 `qwen3.5:4b`
+runs, **none of them from a timeout** — the mechanism that saved Machine A's run 3 never
+occurred here. Twice it caught *"this step is about `src/App.jsx`, but what changed was
+`src/hooks/useTodos.js`"* — the model writing the wrong file — and both retries recovered
+to a fully wired app. It is not a slow-machine feature.
+
+**5. Is `gemma4:e4b` more reliable? On this evidence yes, and it costs nothing.** 5 of 5
+with all imports resolving, no retries, no guard firings, median 44.7s against 42.0s — a
+9.6 GB model that is fully GPU-resident only on this machine, matching a 3.4 GB model's
+speed while not missing. n=5 against n=10 is too small to call significant on its own
+(p ≈ 0.5), so this is a direction, not a proof; but combined with it being the correctness
+ceiling in the sweep above, **`gemma4:e4b` is the model to reach for on this machine when
+the task involves wiring one file to another.**
+
+**The 300s default is not a laptop problem — it is Machine A's problem.** The slowest of
+all 25 runs was **65s**, roughly one fifth of `hirayacoder.ollama.requestTimeoutMs`'s
+300000 default, and the fastest was 30s. Three machines have now answered this and they
+disagree by more than an order of magnitude: A exceeded 300s generating a single `App.jsx`,
+while nothing here came close. The default is right for this machine and wrong for that one,
+which is the argument for leaving it alone and documenting the override.
+
+**`ollama ps` reported `100% GPU` on all 25 runs**, including every `gemma4:e4b` run at
+9.6 GB. The earlier sweep's prediction holds under a long single generation, which is a
+different memory profile from the short ones that established it.
+
+**The macOS half, which had only ever run on Windows.** All four case tests in
+`test/unit/brokenImports.test.js` pass on APFS, so `existsExactly` — reading the parent
+directory and comparing segments byte-for-byte — behaves the same on a case-insensitive
+filesystem that is not Windows. The workspace boundary was checked separately against the
+paths macOS makes interesting: a workspace containing a space (`My Projects/thing`) reads
+and writes normally, and traversal out of it is refused as `OUTSIDE_WORKSPACE` whether the
+escape is plain, absolute, or spelled with differently-cased components. `isInside` folds
+case on darwin, so a case-variant of the workspace root is correctly treated as inside
+while a sibling sharing its prefix is not. `scriptRunner`'s POSIX `/bin/sh -c` branch is
+exercised by its own suite spawning real processes here, including the timeout kill and
+the metacharacter refusal — that is unit-level coverage, not a live `npm test` driven
+through an agent session, which remains unexercised on macOS.
+
+**The full suite is 932 passing, 0 failing on this machine.** The four Machine A failures
+(`transcriptStore`, `scriptRunner`, timing out) do not reproduce, which supports the
+reading that they are Machine A's OneDrive-synced working directory rather than the code.
+
 ### Open: the laptop's TODO-path numbers
 
 These rows are now measured on the desktop, but they remain **unmeasured on the
