@@ -62,6 +62,22 @@ class ChatTab {
     /** @type {AgentSession | null} */
     this.session = null;
     /**
+     * True from the moment a turn is accepted until it finishes — including the stretch
+     * where it is queued behind another tab and `session` is still null. Both halves
+     * count as busy, or a second message sent during the wait would queue behind the
+     * first message from the same tab.
+     *
+     * @type {boolean}
+     */
+    this._starting = false;
+    /**
+     * Cancels a turn that is still waiting for the shared lane. Distinct from
+     * `session.cancel()`, which can only stop a turn that has actually begun.
+     *
+     * @type {AbortController | null}
+     */
+    this._queueAbort = null;
+    /**
      * The visible conversation. Display state only — the model is given `memory` and a
      * freshly built context, never this. That is what makes it safe to persist
      * verbatim, and why restoring it changes what a reopened tab looks like rather
@@ -166,6 +182,9 @@ class ChatTab {
       case 'run-plan':
         return this._runPlan(Array.isArray(message.steps) ? message.steps : []);
       case 'cancel':
+        // Both, and in this order. A turn still queued has no session to cancel, and a
+        // running one has a spent queue controller — aborting it is a no-op.
+        if (this._queueAbort) this._queueAbort.abort();
         if (this.session) this.session.cancel();
         return undefined;
       case 'mode':
@@ -399,7 +418,7 @@ class ChatTab {
    * @returns {Promise<void>}
    */
   async runExternalTask(task, mode) {
-    if (this.session) {
+    if (this.session || this._starting) {
       vscode.window.showInformationMessage('HirayaCoder: finish or stop the current turn first.');
       return;
     }
@@ -447,6 +466,22 @@ class ChatTab {
       return;
     }
 
+    // A turn already running in *this* tab. Refused rather than queued: a second
+    // message to the same conversation almost always means the user thought the first
+    // had failed, and running both in sequence answers a question they have already
+    // moved on from. Queuing across tabs is different — see below.
+    //
+    // Without this, `this.session` was simply overwritten and the first session ran on
+    // orphaned: uncancellable, still posting into this panel, and clearing
+    // `this.session` for both when it finished.
+    if (this.session || this._starting) {
+      this._post({
+        type: 'error',
+        message: 'A turn is already running in this tab. Wait for it, or press Stop first.',
+      });
+      return;
+    }
+
     // Snapshotted before the new message joins it: what goes to the model is the
     // conversation *up to* this turn, and the turn itself arrives as the task.
     const conversation = this.history.slice();
@@ -457,6 +492,39 @@ class ChatTab {
 
     const images = this.pendingImages.slice();
     this.pendingImages = [];
+
+    // Set between the guard above and the queue below, so a message sent while this
+    // tab is still waiting for the lane is refused rather than queued behind itself.
+    this._starting = true;
+    // Cancels the wait as well as the turn. Stop, pressed on a tab that has not started
+    // yet, has to take it out of the queue — otherwise the tab sits there until an
+    // unrelated turn in another window finishes.
+    this._queueAbort = new AbortController();
+
+    /** @type {(() => void) | null} */
+    let releaseLane = null;
+    try {
+      releaseLane = await this.app.turns.acquire({
+        label: `session ${this.sessionId}`,
+        signal: this._queueAbort.signal,
+        onWait: ({ activeLabel }) => {
+          // The one thing that must not happen is a tab that looks frozen. Ollama holds
+          // one model at a time, so this wait can be a minute or more on CPU.
+          this._post({
+            type: 'status',
+            text: `Waiting for ${activeLabel} to finish — one model turn runs at a time.`,
+          });
+        },
+      });
+    } catch {
+      // Cancelled while queued. The user pressed Stop; nothing ran.
+      this._starting = false;
+      this._queueAbort = null;
+      this.history.push({ role: 'assistant', text: 'Stopped before this turn started.' });
+      this._post({ type: 'done', summary: 'Stopped before this turn started.', changes: [] });
+      this._postStatus();
+      return;
+    }
 
     this.session = new AgentSession({
       client: this.app.client,
@@ -511,6 +579,11 @@ class ChatTab {
       this._post({ type: 'error', message });
     } finally {
       this.session = null;
+      this._starting = false;
+      this._queueAbort = null;
+      // Released before the status post, so the next tab starts the moment this turn
+      // is done rather than after the UI has caught up.
+      if (releaseLane) releaseLane();
       // The status line is used for in-flight notes as well as the budget summary — a
       // step retry writes into it — so it is put back once the turn is over. Otherwise
       // "Retrying step 1…" sits under the composer for the rest of the conversation.
@@ -567,6 +640,10 @@ class ChatTab {
 
   /** @private */
   _dispose() {
+    // A closed tab must not keep the lane. Without the queue abort, a tab closed while
+    // waiting would hold its place in the chain and every other tab would sit behind a
+    // turn that no longer has anywhere to render.
+    if (this._queueAbort) this._queueAbort.abort();
     if (this.session) this.session.cancel();
     this.panel = null;
   }

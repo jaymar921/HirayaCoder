@@ -26,6 +26,7 @@ const { PermissionModes } = require('./security/permissionModes');
 const { PermissionGate } = require('./security/permissionGate');
 const { AuditLog } = require('./security/auditLog');
 const { IgnoreRules } = require('./security/ignoreRules');
+const { TurnQueue } = require('./core/turnQueue');
 const { DEFAULT_ALLOWED_BINARIES } = require('./security/scriptRunner');
 const { MemoryStore, nextSessionId, listSessions } = require('./core/memoryStore');
 const { OutcomeLedger } = require('./core/outcomeLedger');
@@ -153,6 +154,16 @@ class HirayaCoder {
     this.activeModel = null;
     /** @type {string | null} */
     this.configError = null;
+
+    /**
+     * One model turn at a time, shared by every tab.
+     *
+     * Ollama holds one model resident on the hardware this targets, so two tabs running
+     * at once made it unload and reload between them — the second turn stalled, and the
+     * first stalled behind it long enough that the user pressed Stop. Every "Request
+     * aborted." in the evaluation logs is that.
+     */
+    this.turns = new TurnQueue();
 
     /** @type {import('./core/modelDiscovery').ModelRecord[]} */
     this.models = [];

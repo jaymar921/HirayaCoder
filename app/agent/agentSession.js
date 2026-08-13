@@ -541,6 +541,9 @@ class AgentSession {
       if (activeRoute.strategy === 'none' || activeRoute.strategy === 'chat') {
         const askContext = await this._buildContext(task, activeRoute, options.editor);
         const summary = await this._answerDirectly(task, activeRoute, askContext);
+        // Nothing else records a conversational turn: no steps, no change set, no file
+        // history. Without this the whole exchange leaves memory empty.
+        await this._rememberExchange(task, summary, { changed: false });
         emit({ type: 'done', summary });
         /** @type {SessionResult} */
         const answered = {
@@ -609,6 +612,11 @@ class AgentSession {
       const checkedSummary = await this._rethink(task, outcome.summary, {
         changedFiles: !changeSet.isEmpty(),
       });
+
+      // A question answered with tools — "explain the auth flow" — leaves an action
+      // trail of reads and no record of what was concluded. The `changed` guard keeps
+      // this off the turns the action notes already cover.
+      await this._rememberExchange(task, checkedSummary, { changed: !changeSet.isEmpty() });
 
       /** @type {SessionResult} */
       const result = {
@@ -1366,6 +1374,61 @@ class AgentSession {
     } catch (err) {
       logger.warn(`Could not seed the workspace listing: ${/** @type {Error} */ (err).message}`);
       return [];
+    }
+  }
+
+  /**
+   * Record that a question was asked and answered.
+   *
+   * ## Why memory needed this
+   *
+   * `memoryStore` held nothing but actions. A forty-turn session produced a three-line
+   * file, every line a failed command; another produced one line, and that line was a
+   * malformed shell invocation the model had proposed in response to "Magandang hapon!".
+   * Nothing either party *said* was in there, which is why "have you already answered
+   * this?" could not be answered from memory — the memory did not contain answers.
+   *
+   * The transcript does hold the conversation, and `contextBuilder` carries the last
+   * ten turns of it. That covers "what did we just discuss" and not "you told me this
+   * an hour and thirty turns ago", which is precisely the range memory is for: it is
+   * recalled by relevance to the current question rather than by recency, so an
+   * exchange from early in a long session comes back when it becomes relevant again.
+   *
+   * ## Why only some turns
+   *
+   * A turn that changed files is already recorded three times over — the action notes
+   * below, `fileHistory`, and the change set. Adding a fourth entry would spend a Tier
+   * B recall budget of three to five slots on a duplicate.
+   *
+   * So this records the turns nothing else does: questions answered, and conversation.
+   * Those are exactly the turns that leave no trace anywhere and exactly the ones the
+   * user was asking about.
+   *
+   * @param {string} task
+   * @param {string} answer
+   * @param {{changed: boolean}} opts
+   * @returns {Promise<void>}
+   * @private
+   */
+  async _rememberExchange(task, answer, opts) {
+    if (!this.memory || opts.changed) return;
+
+    const question = String(task || '').replace(/\s+/g, ' ').trim();
+    const reply = String(answer || '').replace(/\s+/g, ' ').trim();
+    if (!question || !reply) return;
+
+    // Nothing was actually answered. Recording "I could not reach the model" as a fact
+    // about the project would be worse than recording nothing.
+    if (/^(?:the model could not be reached|no answer was produced|stopped before)/i.test(reply)) return;
+
+    // Head-truncated, like every other bounded quote in this codebase: a question says
+    // what it wants first, and an answer's first sentence is its answer.
+    const short = (text, limit) => (text.length > limit ? `${text.slice(0, limit).trimEnd()}…` : text);
+
+    try {
+      await this.memory.append(`Asked "${short(question, 90)}" — answered: ${short(reply, 160)}`);
+    } catch (err) {
+      logger.warn(`Could not record the exchange: ${/** @type {Error} */ (err).message}`);
     }
   }
 

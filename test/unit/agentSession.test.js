@@ -78,6 +78,7 @@ describe('AgentSession', () => {
       sessionId: '1',
       ledger: opts.ledger,
       adaptation: opts.adaptation,
+      memory: opts.memory,
     });
   }
 
@@ -167,6 +168,87 @@ describe('AgentSession', () => {
       assert.strictEqual(client.bodies[0].tools, undefined);
       assert.strictEqual(result.steps.length, 0);
       assert.strictEqual(client.calls, 1);
+    });
+  });
+
+  describe('remembering what was asked and answered', () => {
+    const { MemoryStore } = require('../../app/core/memoryStore');
+
+    it('records a conversational turn, which nothing else records', async () => {
+      // Session memory used to hold nothing but actions: a forty-turn session produced
+      // three lines, all of them failed commands. A conversation left no trace at all.
+      const memory = new MemoryStore(root, 1);
+      const client = scriptedClient(['LocoMenu is a food price comparison platform.']);
+
+      await makeSession({ client, memory }).run('what is this project about?', { mode: 'ask' });
+      await memory.flush();
+
+      const entries = await memory.load();
+      assert.strictEqual(entries.length, 1, `expected one entry, got ${JSON.stringify(entries)}`);
+      assert.match(entries[0], /what is this project about/i);
+      assert.match(entries[0], /food price comparison/i);
+    });
+
+    it('makes the earlier answer recallable by relevance', async () => {
+      // The point of putting it in memory rather than leaving it to the transcript:
+      // recall is by relevance, so an exchange from early in a long session comes back
+      // when the subject does. This is what "have you already answered this?" needs.
+      const memory = new MemoryStore(root, 1);
+      await memory.append('Asked "what is this project about?" — answered: LocoMenu is a food price platform.');
+      await memory.append('Edited src/app.js');
+      await memory.flush();
+
+      const recalled = await memory.renderForPrompt(2, { about: 'what is this project about?' });
+      assert.match(recalled, /food price platform/);
+    });
+
+    it('does not record a turn whose work is already in the change set', async () => {
+      // A write is recorded by the action notes, the file history, and the change set.
+      // A fourth copy would spend a Tier B recall budget of three slots on a duplicate.
+      const memory = new MemoryStore(root, 1);
+      const client = scriptedClient([
+        json({ thought: 'Write it.', action: 'write_file', path: 'notes.md', code: '# Notes\n' }),
+        json({ thought: 'Done.', action: 'done', summary: 'Added notes.md.' }),
+      ]);
+
+      await makeSession({ client, memory }).run('create notes.md with a heading', { mode: 'agent' });
+      await memory.flush();
+
+      const entries = await memory.load();
+      assert.ok(
+        !entries.some((entry) => entry.startsWith('Asked ')),
+        `a changing turn should not add an exchange note: ${JSON.stringify(entries)}`
+      );
+    });
+
+    it('does not record a failure to reach the model as a fact', async () => {
+      const memory = new MemoryStore(root, 1);
+      const client = {
+        calls: 0,
+        prompts: [],
+        bodies: [],
+        async chat() {
+          this.calls += 1;
+          throw new Error('Request aborted.');
+        },
+      };
+
+      await makeSession({ client, memory }).run('what is this project about?', { mode: 'ask' });
+      await memory.flush();
+
+      assert.deepStrictEqual(await memory.load(), []);
+    });
+
+    it('bounds a long question and a long answer', async () => {
+      const memory = new MemoryStore(root, 1);
+      const client = scriptedClient(['x'.repeat(4000)]);
+
+      await makeSession({ client, memory }).run(`explain ${'y'.repeat(4000)}`, { mode: 'ask' });
+      await memory.flush();
+
+      const entries = await memory.load();
+      assert.strictEqual(entries.length, 1);
+      assert.ok(entries[0].length < 400, `entry was ${entries[0].length} chars`);
     });
   });
 

@@ -5,7 +5,7 @@ All notable changes to HirayaCoder are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.5.2] — unreleased
+## [0.5.3] — unreleased
 
 Machine B, sessions 8–12, testing the 0.5.1 build. Project comprehension is fixed —
 session 8 opened with *"LocoMenu - Hyper-Local Food Price Intelligence Platform"* and a
@@ -115,13 +115,59 @@ Trying code first — which is what makes `` `**kwargs` `` stay literal — also
 span *containing* code could never match, and ``**run `npm test` now**`` rendered with
 its asterisks showing.
 
+### Fixed — two turns at once, which is where every "Request aborted." came from
+
+Two distinct bugs wearing the same symptom.
+
+*Within a tab*: `_run` had no guard. A message sent while a turn was still running built
+a second `AgentSession` and overwrote `this.session` with it. The first kept running,
+orphaned — nothing could cancel it, its result still posted into the same panel, and
+whichever finished last cleared `this.session` for both. Session 8 has two consecutive
+user turns with no reply between them, which is exactly this.
+
+*Across tabs*: `activeModel` is one global, the client is one instance, and Ollama holds
+one model resident on the hardware this targets. A turn started in a second tab made
+Ollama unload the first model and load the second; the first turn stalled behind it,
+long enough that the user pressed Stop. That is where the aborts came from — the user
+giving up on a hang, not a fault in the client.
+
+New `core/turnQueue`: one model turn at a time, shared by every tab. A second message to
+the *same* tab is refused, because it almost always means the user thought the first had
+failed. A turn in *another* tab queues and is told what it is waiting for, since
+retyping a lost message is worse than waiting and the wait can be a minute on CPU.
+
+Serialising costs nothing real — two turns interleaved through one Ollama are slower
+than two in order, and one of them is usually broken.
+
+The care is all in the cancellation paths. A queued turn that is cancelled, or whose tab
+is closed, has to leave the chain without stalling the turns behind it *and* without
+letting them start early. The first implementation got the second half wrong: a
+cancelled middle entry resolved its own link immediately, releasing the turn queued
+behind it while the turn in front was still running. Ordering assertions did not catch
+it; counting concurrent holders did, and that test is now in the suite.
+
+### Fixed — session memory recorded only actions
+
+A forty-turn session produced a three-line memory file, every line a failed command.
+Session 10 produced one line, and that line was the malformed
+`start_development_windows.bat` invocation the model proposed in reply to "Magandang
+hapon!". Nothing either party *said* was in there, which is why "have you already
+answered this?" was unanswerable from memory: the memory contained no answers.
+
+Questions answered and conversational turns are now recorded as exchanges. That matters
+beyond completeness, because memory is recalled by *relevance* to the current question
+rather than by recency — so an exchange from early in a long session comes back when its
+subject does, which is the range the ten-turn transcript window cannot reach.
+
+Turns that changed files are deliberately excluded. Those are already recorded by the
+action notes, `fileHistory`, and the change set, and a fourth copy would spend a Tier B
+recall budget of three to five slots on a duplicate.
+
 ### Known, still not fixed
 
-- **Two models cannot run at once.** Sessions 8 and 12 are full of "The model could not
-  be reached: Request aborted." and "No answer was produced." Unchanged from 0.5.1:
-  `activeModel` is global and `_run` has no busy guard.
-- **Session memory records only actions.** `memory/session10.txt` is one line, and that
-  line is the malformed shell command from the greeting above.
+- **Model selection is still global.** Switching models switches them for every open
+  tab. The queue means this no longer corrupts a turn in flight, but a tab does not
+  remember the model it was started with.
 
 ## [0.5.1] — unreleased
 
