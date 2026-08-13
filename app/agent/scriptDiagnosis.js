@@ -75,15 +75,29 @@ const RULES = [
     summary: 'there is no package.json where the command ran',
     fix: 'There is no package.json in that folder. If the project lives in a subfolder, set "cwd" to it. If it has not been created yet, create it before installing or building.',
   },
+  // Ordered before MISSING_DEPENDENCY, because Node reports a missing *file* and a
+  // missing *package* with the same four words. Caught on `gemma3:1b` in a live run: it
+  // ran `node src/main.js` before writing main.js, Node said
+  // `Cannot find module 'C:\…\src\main.js'`, and the model was told to run npm install
+  // — for a file it simply had not written yet. A specifier with a separator in it is a
+  // path the code named; only a bare word is a package.
+  {
+    reason: 'WRONG_PATH',
+    pattern: /(?:Cannot find module|Failed to resolve import) ['"](?:[A-Za-z]:[\\/]|\.{1,2}[\\/]|[\\/])[^'"]*['"]/i,
+    summary: 'the file the command named does not exist',
+    fix: 'That file is not there — it has not been written yet, or it is somewhere else. Use list_files to see what exists, then write the missing file. Do not install anything.',
+  },
   {
     reason: 'MISSING_DEPENDENCY',
-    pattern: /Cannot find module '[^.'/][^']*'|Cannot find package|ERR_MODULE_NOT_FOUND|Failed to resolve import|ModuleNotFoundError|is not recognized as an internal or external command.*\bnpx\b/i,
+    // A bare specifier: no slash, no backslash, no leading dot. `@scope/name` is the one
+    // package form with a separator, so it is admitted explicitly.
+    pattern: /Cannot find module '(?:@[\w.-]+\/)?[\w.-]+'|Cannot find package|ERR_MODULE_NOT_FOUND|ModuleNotFoundError|is not recognized as an internal or external command.*\bnpx\b/i,
     summary: 'a package the code imports is not installed',
     fix: 'A package is imported but not installed. Run the install command for this project first (npm install), then run this again — do not resend it before installing.',
   },
   {
     reason: 'WRONG_PATH',
-    pattern: /ENOENT|no such file or directory|cannot find the (file|path) specified|Could not resolve entry module/i,
+    pattern: /ENOENT|no such file or directory|cannot find the (file|path) specified|Could not resolve entry module|MODULE_NOT_FOUND/i,
     summary: 'a path in the command or the code does not exist',
     fix: 'Something the command referred to is not there. Use list_files to see what actually exists before naming that path again — do not guess a second path.',
   },

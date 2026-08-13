@@ -179,6 +179,26 @@ describe('failure reasons and the one retry', () => {
     assert.match(result.observation, /npm install/);
   });
 
+  it('tells a missing file from a missing package, though Node words them the same', async () => {
+    // Live catch, `gemma3:1b`: it ran `node src/main.js` before writing main.js and was
+    // told to run npm install for a file it had simply not created yet. A Windows
+    // absolute path begins with a drive letter, which the first version of this rule
+    // read as an ordinary package name.
+    const cases = [
+      ["Error: Cannot find module 'C:\\Users\\j\\app\\src\\main.js'", 'WRONG_PATH'],
+      ["Error: Cannot find module './todo'", 'WRONG_PATH'],
+      ['Failed to resolve import "./components/TodoItem.jsx" from "src/App.jsx"', 'WRONG_PATH'],
+      ["Error: Cannot find module 'react'", 'MISSING_DEPENDENCY'],
+      ["Error: Cannot find module '@vitejs/plugin-react'", 'MISSING_DEPENDENCY'],
+    ];
+
+    for (const [stderr, expected] of cases) {
+      const { context } = runningContext([{ stderr }]);
+      const result = await runScript({ command: 'node src/main.js' }, context);
+      assert.strictEqual(result.detail.reason, expected, stderr);
+    }
+  });
+
   it('retries a network failure exactly once', async () => {
     const { context, runs } = runningContext([{ stderr: 'npm ERR! code ENOTFOUND' }]);
     const result = await runScript({ command: 'npm install' }, context);
