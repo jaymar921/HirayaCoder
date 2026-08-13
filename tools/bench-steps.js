@@ -24,10 +24,15 @@
  *
  * Usage:
  *
- *   node tools/bench-steps.js <model> [steps|nosteps] [--keep]
+ *   node tools/bench-steps.js <model> [steps|nosteps] --machine <A|B|C> [--keep]
  *
- *   node tools/bench-steps.js qwen3.5:4b steps
- *   node tools/bench-steps.js qwen3.5:4b nosteps      # the v0.4.0 behaviour, to compare
+ *   node tools/bench-steps.js qwen3.5:4b steps   --machine A
+ *   node tools/bench-steps.js qwen3.5:4b nosteps --machine A   # the v0.4.0 behaviour
+ *
+ * `--machine` is required for the reason `bench-build.js` requires it: a timing means
+ * nothing without the machine that produced it, and the three in `doc/MODELS.md` differ
+ * by more than an order of magnitude on this task. It can also come from
+ * `HIRAYA_BENCH_MACHINE`.
  */
 
 const fs = require('fs');
@@ -49,6 +54,18 @@ const importGraph = require(path.join(appRoot, 'core', 'importGraph'));
 const MODEL = process.argv[2] || 'qwen3.5:4b';
 const STEP_SESSIONS = process.argv[3] !== 'nosteps';
 const KEEP = process.argv.includes('--keep');
+
+const machineFlag = process.argv.indexOf('--machine');
+const MACHINE = String(
+  (machineFlag !== -1 ? process.argv[machineFlag + 1] : '') || process.env.HIRAYA_BENCH_MACHINE || ''
+).toUpperCase();
+
+if (!/^[A-Z]$/.test(MACHINE)) {
+  console.error('Usage: node tools/bench-steps.js <model> [steps|nosteps] --machine <A|B|C> [--keep]');
+  console.error('       --machine identifies this device. A timing is meaningless without it —');
+  console.error('       Machine A is CPU-only and takes 20+ minutes on this task where C takes two.');
+  process.exit(1);
+}
 
 /** The Vite React scaffold, as `npm create vite` leaves it. */
 const SCAFFOLD = {
@@ -164,6 +181,7 @@ async function grade(root) {
   );
   const modes = new PermissionModes({ initial: { autoEdit: true, autoApproveScripts: false } });
 
+  console.log(`machine    ${MACHINE}`);
   console.log(`model      ${MODEL} (tier ${capability.tier}, todo lists ${capability.canPlanTodos})`);
   console.log(`steps      ${STEP_SESSIONS ? 'ON' : 'OFF (v0.4.0 behaviour)'}`);
   console.log(`workspace  ${root}\n`);
@@ -202,6 +220,7 @@ async function grade(root) {
   const graded = await grade(root);
 
   console.log(`\n${'='.repeat(72)}`);
+  console.log(`machine ${MACHINE}   model ${MODEL}   steps ${STEP_SESSIONS ? 'on' : 'off'}`);
   console.log(`stopReason      ${result.stopReason}   steps ${result.steps.length}   ${seconds}s`);
   console.log(`files created   ${graded.created.length ? graded.created.join(', ') : '(none)'}`);
   console.log(`App.jsx changed ${graded.appChanged ? 'YES' : 'NO'}`);

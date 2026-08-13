@@ -7,7 +7,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased] — 0.5.0
 
-Everything here comes out of one evaluation: five models — `gemma4:e4b`, `ornith:9b`,
+Everything here comes out of one evaluation **on Machine A** — the CPU-only laptop the
+design is shaped around: five models — `gemma4:e4b`, `ornith:9b`,
 `qwen3.5:4b`, `lfm2:latest`, `gemma2:latest` — given the same prompt to build a TODO app
 with React, Vite and Tailwind, in a workspace that already held the Vite scaffold. None
 of them succeeded, and they all failed the same way: components got written, and
@@ -160,6 +161,20 @@ and that is too weak by exactly the margin that matters — it passed the run wh
 all pointed at nothing, which is how the bug above survived a commit. It now resolves each
 specifier through `importGraph` and prints the import lines verbatim, so "attempted the
 wiring and got the path wrong" reads differently from "did not attempt it".
+
+`--machine` is required, as it is on `bench-build.js`. This task runs 20+ minutes on
+Machine A and a fraction of that on C, so a result filed without its machine cannot be
+compared with anything.
+
+### Note — the default request timeout is too low on Machine A
+
+Not changed, but worth knowing before it bites someone. `hirayacoder.ollama.requestTimeoutMs`
+defaults to 300000, and on the CPU-only laptop generating a single `App.jsx` with four
+imports exceeded it: `Ollama request to /api/chat timed out after 300000ms`. That is an
+ordinary file on the machine this project exists for. Raise it for real work on a laptop —
+the benchmark runs use 900000. The default is left alone because it is also what makes a
+genuinely hung request noticeable on a fast machine, and Machines B and C never approach
+it. See `doc/MODELS.md`.
 
 ## [0.4.0]
 

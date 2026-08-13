@@ -315,6 +315,38 @@ comment-out refusal, the truncation refusal, and the `module.exports` refusal �
 script allow-list blocking `rm`, and the completion judge catching two models that
 claimed a declined delete had succeeded.
 
+### Machine A — wiring an existing project (`bench-steps.js`, 0.5.0)
+
+The React + Vite + Tailwind task, on the machine the design is shaped around. Every run
+below is `qwen3.5:4b` (4.7B, Tier A, native tools) against the Vite scaffold, graded by
+the harness: is `App.jsx` different, and do its imports resolve to real files?
+
+| Run | Steps | Result | Wall clock |
+|---|---|---|---|
+| v0.4.0 behaviour (five models, five sessions) | off | **`App.jsx` never touched** in any of them | — |
+| 1 | on | `App.jsx` rewritten, counter gone; imports not resolved by the grader at the time | 1450s (24.2 min) |
+| 2 | on | `App.jsx` rewritten, counter gone, **imports all broken** (`../hooks/…` from `src/`) | 738s (12.3 min) |
+| 3 | on | `App.jsx` rewritten, counter gone, **all three imports resolve** | 1278s (21.3 min) |
+
+Run 2 is why `write_file` now checks a written file's imports. Run 3 completed only
+because its step 4 timed out and the retry caught it — see below.
+
+**The shipped request timeout is too low for this machine.** `hirayacoder.ollama.requestTimeoutMs`
+defaults to 300000, and on Machine A generating one `App.jsx` with four imports exceeded
+it outright:
+
+    [ERROR] Native tool turn failed: Ollama request to /api/chat timed out after 300000ms.
+
+That is not a pathological prompt — it is a single file of ordinary size, on the machine
+this project exists for. Anyone doing real work on a laptop should raise it; **900000
+(15 minutes) is the value these runs use**. The default is left alone because it is also
+the value at which a genuinely hung request is noticed on a fast machine, and B and C
+never approach it.
+
+It is worth stating what saved run 3: the timeout produced a step that wrote nothing, the
+step guard failed it, and the retry ran it again and succeeded. Under 0.4.0 that item
+would simply have ended empty. A slow machine and a step retry turn out to interact well.
+
 ### Open: the laptop's TODO-path numbers
 
 These rows are now measured on the desktop, but they remain **unmeasured on the
@@ -513,9 +545,9 @@ read the message and resent a valid CommonJS module.
   mechanical blob and therefore **stored nothing, ever**.
 
 **All five of `gemma4:e4b`, `ornith:9b`, `qwen3.5:4b`, `lfm2:latest`, `gemma2:latest`** —
-the React + Vite + Tailwind evaluation, and the only case so far where every model failed
-the *same* way. Each was given the same prompt in a workspace already holding the Vite
-scaffold. Components got written; `src/App.jsx` ended every single run still holding the
+the React + Vite + Tailwind evaluation **on Machine A**, and the only case so far where
+every model failed the *same* way. Each was given the same prompt in a workspace already
+holding the Vite scaffold. Components got written; `src/App.jsx` ended every single run still holding the
 counter demo. Nothing was ever wired to anything.
 
 Almost none of it turned out to be the models:
@@ -559,9 +591,13 @@ ollama pull <model>
 node tools/bench-agent.js <model> agent auto simple   # single-file task
 node tools/bench-agent.js <model> agent auto full     # three-part task
 node tools/bench-agent.js <model> agent auto full B   # force Tier B
-node tools/bench-steps.js <model> steps               # wiring an existing project
-node tools/bench-steps.js <model> nosteps             # the same, without step sessions
+node tools/bench-steps.js <model> steps   --machine A  # wiring an existing project
+node tools/bench-steps.js <model> nosteps --machine A  # the same, without step sessions
 ```
+
+`--machine` is required on the two newer harnesses, and it is not bookkeeping: this task
+takes 20+ minutes on Machine A and would take a small fraction of that on C. A result
+filed without its machine cannot be compared with anything.
 
 Run one at a time with nothing else competing, and let the machine cool between long
 runs. Record `ollama ps` for each run — the CPU/GPU split explains a timing better than
