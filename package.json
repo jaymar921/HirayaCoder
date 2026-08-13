@@ -2,7 +2,7 @@
   "name": "hirayacoder",
   "displayName": "HirayaCoder",
   "description": "A fully offline, privacy-first AI coding agent powered by your local Ollama instance. Agentic on every model — even 1B.",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "publisher": "jaymar921",
   "author": {
     "name": "jaymar921",
@@ -346,6 +346,11 @@
             ".hirayacoder"
           ],
           "markdownDescription": "Workspace-relative paths the agent may never write to or delete. Reads are still permitted. `.hirayacoder` is listed so the agent cannot rewrite its own audit log or memory."
+        },
+        "hirayacoder.experimental.stepSessions": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "**Experimental.** Run each TODO item as its own briefed step. The step is shown only its own item, what the earlier steps actually wrote, and the files it names — instead of the whole request every time. Before a step is allowed to close, what changed on disk is checked against the step's own text; a step that changes nothing, or changes the wrong file, gets **one** retry with the reason stated, and if that fails the run stops with a suggested workaround rather than cascading through steps that depend on it. Costs an extra turn on any step that needs the retry. Toggle it per chat from the *Steps* button in the chat header."
         },
         "hirayacoder.adaptation.enabled": {
           "type": "boolean",

@@ -170,6 +170,36 @@ Non-deliverable items ("Read the file", "Save changes", invented verification st
 filtered out, and a request that turns out to be a single change runs as one pass
 instead of several.
 
+### Step sessions (experimental)
+
+Off by default. Toggle it per chat from **Steps** in the header, or set
+`hirayacoder.experimental.stepSessions`.
+
+With it on, each item is run as a briefed step rather than as the whole request with one
+item highlighted. Three things change:
+
+- **The step is told what the earlier steps produced**, not merely that they finished.
+  "Item 3 is done" is not the fact item 6 needs; "item 3 wrote `src/hooks/useTodos.js`"
+  is. The original request is still included, explicitly as background.
+- **The step is checked against its own text before it may close.** What changed on disk
+  is compared with the files the step named, so an item about `App.jsx` that edited
+  `vite.config.js` is reported as not done rather than as done.
+- **A step that fails gets one retry, and then the run stops.** The retry is given the
+  diagnosis, so it differs from the first attempt. If it fails too, the run stops and
+  prints what went wrong, which steps it did not attempt, and what to try instead —
+  rather than running the rest against a project that does not have what they need.
+
+The cost is one extra turn on any step that needs the retry, which on CPU inference is
+tens of seconds. That is why it is a toggle rather than the default.
+
+### Memory recalled by subject
+
+Session notes are normally recalled by recency. In step mode each step instead recalls
+the notes that bear on *it* — matched on the files and commands they name, path-aware, so
+a step saying `useTodos` finds a note saying `src/hooks/useTodos.js` — and fills whatever
+is left of the window by recency. It is never worse than plain recency, and much better
+for a step whose dependency was established six items ago.
+
 ---
 
 ## When it feels slow, or stops answering
@@ -314,6 +344,7 @@ where bare JSON mode managed **0 out of 6**.
 | `hirayacoder.scripts.allowedBinaries` | `[]` | Extends the built-in allow-list. |
 | `hirayacoder.scripts.timeoutMs` | `120000` | |
 | `hirayacoder.security.protectedPaths` | `[".git", ".hirayacoder"]` | |
+| `hirayacoder.experimental.stepSessions` | `false` | Run each TODO item as a briefed, verified step. See above. |
 | `hirayacoder.inlineCompletion.enabled` | `false` | |
 | `hirayacoder.statusBar.enabled` | `true` | Connection, model, tier. |
 | `hirayacoder.logLevel` | `info` | **Show Logs** opens the channel. Local only. |

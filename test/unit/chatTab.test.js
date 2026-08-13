@@ -109,4 +109,44 @@ describe('ChatTab', () => {
       assert.strictEqual(tab.mode, 'agent', 'an unknown mode must fall back to the default');
     });
   });
+
+  describe('step sessions', () => {
+    const capability = { tier: 'B', label: 'Lite', canPlanTodos: true };
+
+    it('is seeded from the setting', () => {
+      assert.strictEqual(makeTab({ settings: { stepSessions: true } }).tab.stepSessions, true);
+      assert.strictEqual(makeTab().tab.stepSessions, false);
+    });
+
+    it('is owned by the tab, so trying it here does not turn it on everywhere', async () => {
+      // Like mode and thinking capacity: the header toggle changes this conversation,
+      // not the user's global preference.
+      const settings = { stepSessions: false };
+      const { tab } = makeTab({ settings, capability });
+
+      await tab._onMessage({ type: 'step-sessions', enabled: true });
+
+      assert.strictEqual(tab.stepSessions, true);
+      assert.strictEqual(settings.stepSessions, false, 'the global setting was written');
+    });
+
+    it('takes only a real boolean, so a malformed message cannot half-enable it', async () => {
+      const { tab } = makeTab({ settings: { stepSessions: true }, capability });
+
+      await tab._onMessage({ type: 'step-sessions', enabled: 'yes' });
+      assert.strictEqual(tab.stepSessions, false);
+    });
+
+    it('says so in the status line, but only where a list can exist', async () => {
+      const { tab, posted } = makeTab({ settings: { stepSessions: true }, capability });
+      await tab._onMessage({ type: 'step-sessions', enabled: true });
+      assert.match(posted.filter((m) => m.type === 'status').pop().text, /step sessions/);
+
+      // A model that cannot hold a TODO list has no list to run step-wise, and saying
+      // "step sessions" under it would promise something that never happens.
+      const solo = makeTab({ settings: {}, capability: { ...capability, canPlanTodos: false } });
+      await solo.tab._onMessage({ type: 'step-sessions', enabled: true });
+      assert.ok(!solo.posted.filter((m) => m.type === 'status').pop().text.includes('step sessions'));
+    });
+  });
 });

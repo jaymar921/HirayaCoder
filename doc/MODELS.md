@@ -512,6 +512,37 @@ read the message and resent a valid CommonJS module.
 - Its clean sessions also revealed that `translateSession` merged all steps into one
   mechanical blob and therefore **stored nothing, ever**.
 
+**All five of `gemma4:e4b`, `ornith:9b`, `qwen3.5:4b`, `lfm2:latest`, `gemma2:latest`** —
+the React + Vite + Tailwind evaluation, and the only case so far where every model failed
+the *same* way. Each was given the same prompt in a workspace already holding the Vite
+scaffold. Components got written; `src/App.jsx` ended every single run still holding the
+counter demo. Nothing was ever wired to anything.
+
+Almost none of it turned out to be the models:
+- A TODO item that *edits* a file an earlier item created left the change set the same
+  size, so the item was judged to have changed nothing and its `done` was challenged —
+  a step that wrote a real file reported as "it asked for a file and none was written".
+  Scaffold-then-assemble is the shape of every plan worth making, so the item doing the
+  work the user cared about was the one most likely to be scored a failure.
+  → `ChangeSet` counts revisions, not distinct paths.
+- `qwen3.5:4b` planned *"Assemble App.jsx layout…"* and *"Configure exact folder
+  structure…"*. Neither `assemble` nor `configure` was in the verb list that decides
+  whether "done, nothing changed" is legitimate — a list written against messages people
+  type, and being applied to text the planner wrote. Both items passed unchallenged.
+  → `requiresChange(text, { planned: true })`, a separate vocabulary for planner items.
+- `qwen3.5:4b` spent **all 44** of its steps on `read_file` and `list_files` and wrote
+  nothing: one turn per import, at CPU speed, before any work could start.
+  → `read_file` carries the workspace files the read file imports.
+- Challenged on a `done`, both `qwen3.5:4b` and `ornith:9b` replied by asking **the user**
+  what to work on, with the request still in the first message of the same conversation.
+  → the objection restates the ask verbatim and says not to ask what to work on.
+- `gemma2:latest` edited `vite.config.js` and `README.md` while working a list about
+  `useTodos`, `TodoInput` and `App.jsx`; every item scored as having changed something.
+  → step sessions check what changed against the files the step itself names.
+- `ornith:9b` spent four steps on `npm create vite@latest … 2>&1`, refused each time for
+  the shell operator. `lfm2:latest` produced zero steps and errored out.
+  → these are genuinely the model, and the workaround notice now names the cause.
+
 ---
 
 ## Adding a model to this matrix
@@ -521,6 +552,8 @@ ollama pull <model>
 node tools/bench-agent.js <model> agent auto simple   # single-file task
 node tools/bench-agent.js <model> agent auto full     # three-part task
 node tools/bench-agent.js <model> agent auto full B   # force Tier B
+node tools/bench-steps.js <model> steps               # wiring an existing project
+node tools/bench-steps.js <model> nosteps             # the same, without step sessions
 ```
 
 Run one at a time with nothing else competing, and let the machine cool between long

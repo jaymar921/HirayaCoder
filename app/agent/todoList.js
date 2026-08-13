@@ -50,6 +50,11 @@ const MAX_ITEMS = 6;
  * @property {TodoStatus} status
  * @property {string} [outcome]  Why it ended the way it did, in plain language.
  * @property {number} [steps]    Steps the item consumed.
+ * @property {string[]} [changedPaths]
+ *   Files this item created or edited. Recorded because the checklist is the only thing
+ *   that crosses between items, and "item 3 is done" is not the fact item 6 needs —
+ *   "item 3 wrote src/hooks/useTodos.js" is. See `agent/stepBrief`.
+ * @property {number} [attempts] How many times it was run, including the retry.
  */
 
 class TodoList {
@@ -84,15 +89,21 @@ class TodoList {
    * @param {TodoStatus} status
    * @param {string} [outcome]
    * @param {number} [steps]
+   * @param {{changedPaths?: string[], attempts?: number}} [evidence]
+   *   What the item produced, for the items that come after it.
    * @returns {TodoItem | null} The next item, or null when the list is finished.
    */
-  finishCurrent(status, outcome, steps) {
+  finishCurrent(status, outcome, steps, evidence = {}) {
     const active = this.current();
     if (!active) return null;
 
     active.status = status;
     if (outcome) active.outcome = outcome;
     if (typeof steps === 'number') active.steps = steps;
+    if (Array.isArray(evidence.changedPaths) && evidence.changedPaths.length > 0) {
+      active.changedPaths = [...evidence.changedPaths];
+    }
+    if (typeof evidence.attempts === 'number') active.attempts = evidence.attempts;
     logger.info(`TODO item ${this.position()}/${this.items.length} → ${status}: ${active.text}`);
 
     const next = this.items.find((item) => item.status === 'pending');
@@ -101,6 +112,21 @@ class TodoList {
       return next;
     }
     return null;
+  }
+
+  /**
+   * The items that have not been attempted yet, including the active one.
+   *
+   * Read before `skipRemaining` when a run is stopping early, so the notice can name
+   * what will not now happen. Once they are skipped their status no longer says
+   * whether they were ever going to be tried.
+   *
+   * @param {{includeActive?: boolean}} [opts]
+   * @returns {string[]}
+   */
+  remaining(opts = {}) {
+    const wanted = opts.includeActive ? ['pending', 'active'] : ['pending'];
+    return this.items.filter((item) => wanted.includes(item.status)).map((item) => item.text);
   }
 
   /** Mark every remaining item as skipped — used when the session is cut short. */

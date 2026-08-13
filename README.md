@@ -130,6 +130,15 @@ and checking the result by compiling and running the program rather than by beli
 model's summary. It runs on all three machines and the results are collected in
 [benchmarks/](https://github.com/jaymar921/HirayaCoder/blob/main/benchmarks/README.md).
 
+### Wiring a project together, which is harder than either
+
+A third, added in 0.5.0, is the one that exposed the most. Neither benchmark above
+reproduces a project that **already exists** plus a multi-part request whose last item has
+to import what the earlier items wrote — and that is where five models failed identically:
+components written, and `src/App.jsx` left holding Vite's scaffolded counter demo in every
+run. `tools/bench-steps.js` grades one question the harness answers itself — is `App.jsx`
+different, and does it import what the run built?
+
 ---
 
 ## Recommendation

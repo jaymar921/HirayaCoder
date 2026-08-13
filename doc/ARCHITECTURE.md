@@ -102,6 +102,7 @@ identical traffic regardless of tier. Swapping loops changes how an action is
 | `promptRouter.js` | Assembles the system prompt and the tool set for the current mode. Plan and Ask modes **omit** the mutating tools rather than refusing them later, and a conversational message in Agent mode gets the same treatment: no loop, no tools, one reply. |
 | `completionCheck.js` | Consulted when a loop is told the work is finished. Sends the model back **once** if nothing changed on a request that asked for a change, or if a file it just wrote still has an unimplemented function body. |
 | `contextBuilder.js` | Assembles the prompt under a token budget, by priority. Redacts on the way in. |
+| `importGraph.js` | What a source file pulls in from the rest of the workspace, so `read_file` can carry it. Deliberately not a module resolver: a specifier that does not resolve to a real file inside the workspace is dropped rather than guessed at, and depth is one. |
 | `contextFilesManager.js` | Files attached with `+`. Scans and redacts at ingestion, before truncation. |
 | `memoryStore.js` | Plain-text session memory. Treats its own file as untrusted on read; neutralises injection both directions; supersedes by subject. |
 | `factStore.js` | Typed, workspace-scoped facts — what is *true*, as against what happened. Detection is pattern-matching over what a program printed; no model call ever writes one. Same untrusted-file discipline as `memoryStore`, whose `neutralize` it reuses. |
@@ -115,6 +116,12 @@ identical traffic regardless of tier. Swapping loops changes how an action is
 dispatches; `tools/*` act; `plannerAgent.js` plans and splits; `todoList.js` holds the
 checklist **outside** the model, because a small model holding three goals at once drops
 one.
+
+`stepBrief.js` and `stepGuard.js` are the experimental step-session path, and they split
+along the same line as everything else here: the brief decides what a step is *shown* —
+its own item, what the earlier steps actually wrote, the files it names — and the guard
+decides what a step has *demonstrably done*, by comparing the change set against the
+step's own text. Neither consults the model's account of itself.
 
 ### `app/security/` — the part that is allowed to say no
 

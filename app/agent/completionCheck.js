@@ -241,12 +241,32 @@ function inertControls(content) {
   return controls;
 }
 
+/** Longest restatement of the ask carried into an objection. */
+const MAX_RESTATED_TASK_CHARS = 300;
+
+/**
+ * The ask, short enough to sit inside an objection.
+ *
+ * A TODO item is one line and arrives whole. A user's message can be the 5,000-character
+ * spec that produced this benchmark, so it is cut — from the head, where a request states
+ * what it wants before it elaborates.
+ *
+ * @param {string} task
+ * @returns {string}
+ */
+function restate(task) {
+  const text = String(task || '').replace(/\s+/g, ' ').trim();
+  return text.length > MAX_RESTATED_TASK_CHARS ? `${text.slice(0, MAX_RESTATED_TASK_CHARS)}…` : text;
+}
+
 /**
  * @typedef {object} CompletionContext
  * @property {string} task            What was asked, verbatim.
  * @property {boolean} changed        Did the change set grow during this run?
  * @property {Array<{path: string, after: string | null}>} written
  *   Files this run created or edited, with their new contents.
+ * @property {boolean} [planned]      True when `task` is a TODO item rather than a
+ *   message the user typed. See `intentRouter.requiresChange`.
  */
 
 /**
@@ -262,14 +282,23 @@ function objectTo(context) {
     // A request to look at, check, or explain something finishes correctly having
     // written nothing. Objecting there would fire the check on exactly the cases it is
     // most likely to be wrong about.
-    if (!requiresChange(task)) return null;
+    if (!requiresChange(task, { planned: context.planned })) return null;
+
+    // The ask is repeated rather than referred to. By the time this fires the model has
+    // spent a dozen turns with file contents filling its context, and on the benchmark
+    // both `qwen3.5:4b` and `ornith:9b` answered the previous wording of this objection
+    // by asking the *user* what to do — "What would you like me to accomplish?" — with
+    // the request still sitting in the first message of the same conversation. A model
+    // that has lost the ask cannot act on being told it did not do it.
+    const ask = restate(task);
 
     return (
-      'You replied "done", but nothing in the project has actually changed — no file was ' +
-      'written, edited, or deleted in this session. Reading a file is not doing the work. ' +
-      'If the task still needs a file created or changed, do that now with write_file, sending ' +
-      'the COMPLETE contents in "code". If you genuinely believe there is nothing to do, reply ' +
-      '"done" again and say plainly in the summary that you changed nothing and why.'
+      `You replied "done", but nothing in the project has actually changed — no file was ` +
+      'written, edited, or deleted in this session. Reading a file is not doing the work.\n\n' +
+      `What you were asked to do: ${ask}\n\n` +
+      'Do it now with write_file, sending the COMPLETE contents in "code". Do not ask what to ' +
+      'work on — the task is the line above. If you genuinely believe there is nothing to do, ' +
+      'reply "done" again and say plainly in the summary that you changed nothing and why.'
     );
   }
 
@@ -315,10 +344,12 @@ function objectTo(context) {
 
 module.exports = {
   objectTo,
+  restate,
   placeholderBodies,
   placeholderLiterals,
   inertControls,
   PLACEHOLDER_COMMENT,
   PLACEHOLDER_LITERAL,
   MIN_CONTROLS_FOR_INERT_CHECK,
+  MAX_RESTATED_TASK_CHARS,
 };

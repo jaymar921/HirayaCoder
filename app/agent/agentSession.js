@@ -33,6 +33,8 @@ const nativeToolLoop = require('./nativeToolLoop');
 const plannerAgent = require('./plannerAgent');
 const completionCheck = require('./completionCheck');
 const earnedHints = require('./earnedHints');
+const stepBrief = require('./stepBrief');
+const stepGuard = require('./stepGuard');
 const { TodoList } = require('./todoList');
 
 /**
@@ -49,6 +51,7 @@ const { TodoList } = require('./todoList');
  * @property {string | null} after
  * @property {number} added
  * @property {number} removed
+ * @property {number} [revision]  When the change set recorded it. See `ChangeSet.since`.
  */
 
 /**
@@ -64,29 +67,52 @@ class ChangeSet {
     this.files = new Map();
     /** @type {Array<{command: string, exitCode: number | null, ok: boolean}>} */
     this.commands = [];
+    /**
+     * How many records this set has taken, ever.
+     *
+     * A monotonic counter rather than a size, because size cannot answer the question a
+     * TODO step asks: "did *this step* change anything?" A step that edits a file an
+     * earlier step created leaves the map exactly the same size, and `size()` reports
+     * the step as having done nothing — which on the React benchmark is the common case,
+     * since the step that assembles `App.jsx` is editing what the scaffold step made.
+     */
+    this.revision = 0;
   }
 
   /**
    * @param {FileChange} change
    */
   record(change) {
+    this.revision += 1;
     const existing = this.files.get(change.path);
     if (existing) {
       // Preserve the state from before the session began.
       this.files.set(change.path, {
         ...change,
+        revision: this.revision,
         before: existing.before,
         kind: existing.kind === 'create' && change.kind === 'edit' ? 'create' : change.kind,
       });
       return;
     }
-    this.files.set(change.path, change);
+    this.files.set(change.path, { ...change, revision: this.revision });
+  }
+
+  /**
+   * The files recorded since a given revision.
+   *
+   * @param {number} revision  A value read from `this.revision` earlier.
+   * @returns {FileChange[]}
+   */
+  since(revision) {
+    return this.list().filter((change) => (change.revision || 0) > revision);
   }
 
   /**
    * @param {{command: string, exitCode: number | null, ok: boolean}} entry
    */
   recordCommand(entry) {
+    this.revision += 1;
     this.commands.push(entry);
   }
 
@@ -221,13 +247,26 @@ function snapshotTodos(todos) {
  * model's own claim of completion — that is the failure the whole judgement exists to
  * avoid, so a run that changed nothing can never reach this state.
  *
+ * ## Why this counts revisions rather than files
+ *
+ * It used to compare `changeSet.size()` against the size before the item ran, and that
+ * is wrong for the most ordinary shape a TODO list has: an item that *edits* a file an
+ * earlier item created leaves the map exactly the same size. The item is then judged to
+ * have changed nothing, the completion check challenges its `done`, and a step that
+ * wrote a real file is reported as "it asked for a file and none was written".
+ *
+ * On the React benchmark that is not an edge case, it is the plan — scaffold `App.jsx`,
+ * then assemble `App.jsx` — so the item most likely to be scored as a failure was the
+ * one doing the work the user cared about. `ChangeSet.revision` counts records rather
+ * than distinct paths, which is the question actually being asked.
+ *
  * @param {{stopReason: string, steps: AgentStep[], summary: string, doneChallenged?: boolean}} outcome
  * @param {ChangeSet} changeSet
- * @param {number | null} sizeBefore
+ * @param {number | null} revisionBefore  `changeSet.revision` from before the item ran.
  * @returns {{status: 'done' | 'done-with-warning' | 'failed', outcomeText: string}}
  */
-function judgeItem(outcome, changeSet, sizeBefore) {
-  const changed = changeSet.size() > (sizeBefore === null ? 0 : sizeBefore);
+function judgeItem(outcome, changeSet, revisionBefore) {
+  const changed = changeSet.revision > (revisionBefore === null ? 0 : revisionBefore);
   const anySucceeded = outcome.steps.some((step) => step.result && step.result.ok);
   const anyFailed = outcome.steps.some((step) => step.result && step.result.ok === false);
 
@@ -405,6 +444,15 @@ class AgentSession {
      * want the model's word taken at face value should be able to have that.
      */
     this.verifyCompletion = options.verifyCompletion !== false;
+    /**
+     * Run each TODO item as its own briefed step, with a retry and a hard stop.
+     *
+     * Experimental and off by default. It changes three things at once — what a step is
+     * shown, whether a step is checked against its own text, and whether a failure ends
+     * the run — and each of those is a bet that costs turns when it is wrong. The user
+     * chooses; see the "Step sessions" toggle in the chat header.
+     */
+    this.stepSessions = options.stepSessions === true;
 
     /**
      * Earlier turns of this chat, set per `run` call.
@@ -647,6 +695,10 @@ class AgentSession {
     let remainingSteps = perItemSteps * Math.min(todos.items.length, MAX_TODO_ITEMS_WITH_FULL_BUDGET);
     const loop = activeRoute.strategy === 'native' ? nativeToolLoop : reactLoop;
 
+    /** Set when a step failed twice and the run is stopping deliberately. */
+    let stopNotice = '';
+    let cancelled = false;
+
     while (todos.current() && remainingSteps > 0) {
       if (this._controller.signal.aborted) {
         todos.skipRemaining('the session was cancelled');
@@ -666,71 +718,174 @@ class AgentSession {
         items: snapshotTodos(todos),
       });
 
-      // Never below a read-think-modify, or the item cannot succeed even in
-      // principle and the run would only look like it tried.
-      const itemBudget = Math.max(MIN_STEPS_PER_TODO_ITEM, Math.min(perItemSteps, remainingSteps));
+      /** @type {{outcome: any, verdict: any, attempts: number} | null} */
+      let attemptResult = null;
+      /** How many times this item has been run. Never more than two — see `stepGuard`. */
+      const maxAttempts = this.stepSessions ? 2 : 1;
 
-      const itemTask =
-        `${task}\n\n${todos.render()}\n\n` +
-        `Right now, do only item ${position}: ${item.text}\n` +
-        'Ignore the other items — they are handled separately. When this one item is complete, reply with "done".';
+      // Item scope, not attempt scope. A retried item is one item: what it produced is
+      // everything both attempts wrote, and it is judged on all of it. Attempt one
+      // writing the wrong file and attempt two writing the right one is a step that
+      // succeeded, and the file the first attempt touched still has to be recorded for
+      // the steps that come after.
+      const itemRevisionBefore = changeSet.revision;
+      let itemStepCount = 0;
 
-      const itemRoute = { ...activeRoute, budgets: { ...activeRoute.budgets, maxSteps: itemBudget } };
-      const context = await this._buildContext(itemTask, itemRoute, options.editor);
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        if (remainingSteps <= 0 || this._controller.signal.aborted) break;
 
-      const before = changeSet.size();
+        // Never below a read-think-modify, or the item cannot succeed even in
+        // principle and the run would only look like it tried.
+        const itemBudget = Math.max(MIN_STEPS_PER_TODO_ITEM, Math.min(perItemSteps, remainingSteps));
+        // The system prompt carries the memory block on both loop tiers, and it is
+        // built once per message — before the list exists, so every step of a six-item
+        // run would otherwise share one recency-selected recall. In step mode it is
+        // rebuilt per step against that step's own subject, which is the half of
+        // "linked memory" that matters: the note naming the file this step has to
+        // import is, by the time the step runs, the oldest one in the file.
+        const itemRoute = {
+          ...(await this._routeForStep(activeRoute, item.text)),
+          budgets: { ...activeRoute.budgets, maxSteps: itemBudget },
+        };
 
-      // Each item runs a fresh loop, and a loop numbers its steps from its own
-      // `steps.length + 1` — so item 2's first action announces itself as step 1 again.
-      // The trace then shows two rows both labelled "1", above a header reading
-      // "Steps (1)", because the view tracks the highest number it has seen. Observed
-      // on `ornith:9b` answering a two-item request.
-      //
-      // The loops are right to number from their own steps: they cannot know they are
-      // one item of several. Only this driver knows, so it is the one that offsets.
-      const stepOffset = allSteps.length;
-      const emitForItem = (event) => {
-        if ((event.type === 'action' || event.type === 'observation') && typeof event.step === 'number') {
-          emit({ ...event, step: stepOffset + event.step });
-          return;
+        // Attempt scope, and only for the `done` check: an attempt that reports itself
+        // finished having written nothing must be challenged even when the previous
+        // attempt did write something.
+        const attemptRevisionBefore = changeSet.revision;
+
+        const itemTask = this.stepSessions
+          ? stepBrief.build({
+              task,
+              item: item.text,
+              position,
+              total: todos.items.length,
+              items: todos.items,
+              changes: changeSet.list(),
+              attempt,
+              previousFailure: attemptResult ? attemptResult.verdict.detail : '',
+            })
+          : `${task}\n\n${todos.render()}\n\n` +
+            `Right now, do only item ${position}: ${item.text}\n` +
+            'Ignore the other items — they are handled separately. When this one item is complete, reply with "done".';
+
+        // A step's memory is selected by what the step is about, not by what happened
+        // most recently — the note naming the file this step has to import is usually
+        // the oldest one in the file by the time the step runs. See
+        // `memoryStore.readRelevant`.
+        const context = await this._buildContext(itemTask, itemRoute, options.editor, {
+          recallAbout: this.stepSessions ? item.text : '',
+        });
+
+        // Each item runs a fresh loop, and a loop numbers its steps from its own
+        // `steps.length + 1` — so item 2's first action announces itself as step 1 again.
+        // The trace then shows two rows both labelled "1", above a header reading
+        // "Steps (1)", because the view tracks the highest number it has seen. Observed
+        // on `ornith:9b` answering a two-item request.
+        //
+        // The loops are right to number from their own steps: they cannot know they are
+        // one item of several. Only this driver knows, so it is the one that offsets.
+        const stepOffset = allSteps.length;
+        const emitForItem = (event) => {
+          if ((event.type === 'action' || event.type === 'observation') && typeof event.step === 'number') {
+            emit({ ...event, step: stepOffset + event.step });
+            return;
+          }
+          emit(event);
+        };
+
+        const outcome = await loop.run({
+          client: this.client,
+          model: this.model,
+          route: itemRoute,
+          task: itemTask,
+          context,
+          execute: (action) => this._execute(action, itemRoute, changeSet),
+          // Judged against this item's own text and this item's own starting point: the
+          // list runs one loop per item, and an earlier item's file is not evidence that
+          // this one did anything.
+          verifyDone: this._doneVerifier(item.text, changeSet, attemptRevisionBefore, { planned: true }),
+          onEvent: emitForItem,
+          signal: this._controller.signal,
+          // Only the first item sees the image. By item two the work is grounded in
+          // files that have been read, and re-uploading the picture each time would
+          // cost more than it informs.
+          images: position === 1 && attempt === 1 ? this.images : [],
+        });
+
+        allSteps.push(...outcome.steps);
+        itemStepCount += outcome.steps.length;
+        remainingSteps -= Math.max(1, outcome.steps.length);
+        if (outcome.summary) summaries.push(`${position}. ${outcome.summary}`);
+        await this._remember(outcome.steps);
+
+        const verdict = stepGuard.verify({
+          item: item.text,
+          stopReason: outcome.stopReason,
+          changed: changeSet.since(itemRevisionBefore),
+          steps: outcome.steps,
+        });
+
+        attemptResult = { outcome, verdict, attempts: attempt };
+
+        if (outcome.stopReason === 'cancelled') {
+          cancelled = true;
+          break;
         }
-        emit(event);
-      };
+        if (verdict.ok || attempt === maxAttempts) break;
 
-      const outcome = await loop.run({
-        client: this.client,
-        model: this.model,
-        route: itemRoute,
-        task: itemTask,
-        context,
-        execute: (action) => this._execute(action, itemRoute, changeSet),
-        // Judged against this item's own text and this item's own starting point: the
-        // list runs one loop per item, and an earlier item's file is not evidence that
-        // this one did anything.
-        verifyDone: this._doneVerifier(item.text, changeSet, before),
-        onEvent: emitForItem,
-        signal: this._controller.signal,
-        // Only the first item sees the image. By item two the work is grounded in
-        // files that have been read, and re-uploading the picture each time would
-        // cost more than it informs.
-        images: position === 1 ? this.images : [],
-      });
+        // About to be written off, so it gets one more run with the diagnosis stated —
+        // never a second, for the reason in `stepGuard`'s header.
+        logger.info(`Step ${position} did not land (${verdict.reason}); reconsidering once before failing it.`);
+        emit({ type: 'todo-item-retry', index: position, text: item.text, reason: verdict.detail });
+      }
 
-      allSteps.push(...outcome.steps);
-      remainingSteps -= Math.max(1, outcome.steps.length);
-      if (outcome.summary) summaries.push(`${position}. ${outcome.summary}`);
+      // The item was never run at all — cancelled between the checklist event and the
+      // first attempt. It stays active, so the skip below records it honestly.
+      if (!attemptResult) {
+        todos.skipRemaining('the session was cancelled');
+        break;
+      }
+
+      const { outcome, verdict, attempts } = attemptResult;
+      const produced = changeSet.since(itemRevisionBefore);
 
       // Completion is judged from what the run produced, never from the model saying
       // so — the same models that report a declined delete as successful would tick
-      // off an item they never touched.
-      const { status, outcomeText } = judgeItem(outcome, changeSet, before);
-      todos.finishCurrent(status, outcomeText, outcome.steps.length);
+      // off an item they never touched. In step mode the guard's verdict narrows it
+      // further: changing *a* file is not the same as changing *this step's* file.
+      let { status, outcomeText } = judgeItem(outcome, changeSet, itemRevisionBefore);
+      if (this.stepSessions && !verdict.ok) {
+        // The guard's reason wins even when `judgeItem` had already failed the item.
+        // Both are true, and only one of them tells the user which file is missing:
+        // "it asked for a file and none was written" against "this step is about
+        // src/App.jsx, but what changed was vite.config.js".
+        status = 'failed';
+        outcomeText = verdict.detail;
+      }
+
+      const changedPaths = produced.map((change) => change.path);
+      todos.finishCurrent(status, outcomeText, itemStepCount, { changedPaths, attempts });
       emit({ type: 'todo-item-done', index: position, status, text: item.text, items: snapshotTodos(todos) });
 
-      await this._remember(outcome.steps);
-
-      if (outcome.stopReason === 'cancelled') {
+      if (cancelled) {
         todos.skipRemaining('the session was cancelled');
+        break;
+      }
+
+      // One failed step means every step after it is working against a project that
+      // does not have what it was promised. Carrying on produced the missing-path
+      // cascade the benchmark runs are full of, so the run stops and says so.
+      if (this.stepSessions && status === 'failed') {
+        const skipped = todos.remaining();
+        stopNotice = stepGuard.workaround({
+          item: item.text,
+          position,
+          verdict,
+          remaining: skipped,
+          steps: outcome.steps,
+        });
+        logger.warn(`Step ${position} failed twice; stopping the run rather than cascading.`);
+        todos.skipRemaining('an earlier step failed, so this was not attempted');
         break;
       }
     }
@@ -744,6 +899,7 @@ class AgentSession {
         : '';
     const summary =
       `${progress.done} of ${progress.total} item(s) completed.${caveat}\n\n${todos.describe()}` +
+      (stopNotice ? `\n\n${stopNotice}` : '') +
       (summaries.length > 0 ? `\n\nDetail:\n${summaries.join('\n')}` : '');
 
     return {
@@ -757,6 +913,37 @@ class AgentSession {
   }
 
   /**
+   * The route for one step, with its memory block recalled against that step.
+   *
+   * Returns the session's own route untouched unless step sessions are on, so the
+   * ordinary TODO path keeps the single system prompt it has always had and pays for
+   * nothing it does not use.
+   *
+   * @param {import('../core/promptRouter').Route} activeRoute
+   * @param {string} about    The step's text.
+   * @returns {Promise<import('../core/promptRouter').Route>}
+   * @private
+   */
+  async _routeForStep(activeRoute, about) {
+    if (!this.stepSessions || !this.memory) return activeRoute;
+
+    try {
+      return promptRouter.route({
+        mode: activeRoute.mode,
+        capability: this.capability,
+        thinkingCapacity: this.thinkingCapacity,
+        memory: await this._renderMemory({ about }),
+        earnedHints: await this._earnedHints(activeRoute.mode),
+        intent: 'task',
+      });
+    } catch (err) {
+      // A step must never fail to start because its recall could not be assembled.
+      logger.warn(`Could not build a step-scoped prompt: ${/** @type {Error} */ (err).message}`);
+      return activeRoute;
+    }
+  }
+
+  /**
    * The check a loop runs before accepting the model's word that it has finished.
    *
    * Bound to a starting size rather than to emptiness, so within a TODO list each item
@@ -765,18 +952,21 @@ class AgentSession {
    *
    * @param {string} task What this loop was asked to do.
    * @param {ChangeSet} changeSet
-   * @param {number} sizeBefore
+   * @param {number} revisionBefore  See `judgeItem` for why this is not a size.
+   * @param {{planned?: boolean}} [opts]  True when `task` is a TODO item rather than a
+   *   message the user typed — see `intentRouter.requiresChange`.
    * @returns {((summary: string) => string | null) | undefined}
    * @private
    */
-  _doneVerifier(task, changeSet, sizeBefore) {
+  _doneVerifier(task, changeSet, revisionBefore, opts = {}) {
     if (this.verifyCompletion === false) return undefined;
 
     return () =>
       completionCheck.objectTo({
         task,
-        changed: changeSet.size() > sizeBefore,
+        changed: changeSet.revision > revisionBefore,
         written: changeSet.list().filter((change) => change.kind !== 'delete'),
+        planned: Boolean(opts.planned),
       });
   }
 
@@ -1005,10 +1195,12 @@ class AgentSession {
    * — `[This machine]`, `[Decided]` — so the distinction survives without a second
    * placeholder in every template.
    *
+   * @param {{about?: string}} [opts]  Select session notes by relevance to this text
+   *   rather than by recency alone. See `memoryStore.readRelevant`.
    * @returns {Promise<string>}
    * @private
    */
-  async _renderMemory() {
+  async _renderMemory(opts = {}) {
     const blocks = [];
 
     if (this.facts) {
@@ -1035,7 +1227,7 @@ class AgentSession {
       }
     }
 
-    if (this.memory) blocks.push(await this.memory.renderForPrompt(this._recallDepth()));
+    if (this.memory) blocks.push(await this.memory.renderForPrompt(this._recallDepth(), { about: opts.about }));
 
     return blocks.filter(Boolean).join('\n');
   }
@@ -1058,10 +1250,13 @@ class AgentSession {
    * @param {string} task
    * @param {import('../core/promptRouter').Route} activeRoute
    * @param {object} [editor]
+   * @param {{recallAbout?: string}} [opts]  What this turn is about, for targeted
+   *   memory recall. Empty means recency, which is the behaviour everywhere but a
+   *   briefed step.
    * @returns {Promise<string>}
    * @private
    */
-  async _buildContext(task, activeRoute, editor) {
+  async _buildContext(task, activeRoute, editor, opts = {}) {
     if (this.contextFiles) await this.contextFiles.refresh();
 
     // Both of the loopless strategies put memory in the user turn rather than the
@@ -1077,7 +1272,7 @@ class AgentSession {
       // no system-prompt memory block, so it arrives here instead — facts included,
       // since "Java is not installed here" is exactly the kind of thing a user asks
       // about conversationally.
-      memory: loopless ? (await this._renderMemory()).split('\n').filter(Boolean) : [],
+      memory: loopless ? (await this._renderMemory({ about: opts.recallAbout })).split('\n').filter(Boolean) : [],
       // Carried on every strategy, not only the conversational one. "Do it the way we
       // discussed" and "the file I mentioned earlier" are ordinary things to say to an
       // agent mid-task, and until 0.4.0 nothing in the prompt could answer either.

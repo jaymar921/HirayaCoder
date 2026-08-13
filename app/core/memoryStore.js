@@ -172,6 +172,44 @@ function similarity(a, b) {
 const DUPLICATE_THRESHOLD = 0.8;
 
 /**
+ * The words a note can be *found* by, which is more than the words it contains.
+ *
+ * `significantWords` keeps a path as one token, which is right for the similarity
+ * comparison it was written for — `src/greet.js` and `src/greet.js` are the same
+ * subject, and splitting them would make every file in `src/` look related. It is wrong
+ * for recall: a TODO item says "Assemble App.jsx using the useTodos hook" where the note
+ * says "Created src/hooks/useTodos.js", and on whole-token matching those two share
+ * nothing at all — which is precisely the pairing the recall exists to make.
+ *
+ * So a path additionally contributes its segments and its extension-stripped stem.
+ * `src/hooks/useTodos.js` is findable as `src`, `hooks`, `usetodos.js`, and `usetodos`,
+ * and the note it names is reachable from whichever of those the item happened to write.
+ *
+ * @param {string} text
+ * @returns {Set<string>}
+ */
+function recallTokens(text) {
+  const tokens = new Set();
+
+  for (const word of significantWords(text)) {
+    tokens.add(word);
+    if (!word.includes('/') && !word.includes('.')) continue;
+
+    for (const segment of word.split('/')) {
+      if (segment.length < 2) continue;
+      tokens.add(segment);
+      const stem = segment.replace(/\.[a-z0-9]{1,6}$/i, '');
+      // A stem is only a useful key when it is the *name* — dropping the extension from
+      // `index.js` yields `index`, which every project has one of per folder, but that
+      // costs a weak match rather than a wrong one.
+      if (stem.length > 1) tokens.add(stem);
+    }
+  }
+
+  return tokens;
+}
+
+/**
  * What a note is *about* — a file path, or a command in backticks.
  *
  * Notes are composed by `contextTranslator.composeNote`, so their shape is known
@@ -501,16 +539,81 @@ class MemoryStore {
   }
 
   /**
+   * The entries that bear on a particular piece of work, newest first among equals.
+   *
+   * ## Why recency is the wrong selector for a step
+   *
+   * `readRecent` answers "what just happened", which is right for a conversation and
+   * wrong for an item of work. On the React benchmark the item that had to assemble
+   * `App.jsx` ran sixth, by which point the notes about `useTodos.js` and
+   * `TodoInput.jsx` — the two files it needed to import — were the oldest in the file
+   * and the first to fall outside a five-entry window. The note that survived was about
+   * the README. The model wired nothing to anything.
+   *
+   * So an item's recall is selected by *subject* first: notes that name a file, command,
+   * or identifier the item also names, however long ago they were written. That is the
+   * "linked memory" case — the older note is the one most worth having, precisely
+   * because the model has forgotten it. Recent entries then fill whatever is left, so
+   * this is never worse than `readRecent`: an item with no matches gets exactly the
+   * recency window it would have had.
+   *
+   * Output stays in stored order, oldest first, matching `readRecent` — the notes
+   * describe a sequence of work and reading them out of order invents a false one.
+   *
+   * @param {string} subject  What the recall is for: a TODO item, or the task.
+   * @param {number} n        How many entries to return.
+   * @returns {Promise<string[]>}
+   */
+  async readRelevant(subject, n) {
+    await this.load();
+    if (!Number.isFinite(n)) return [...this.entries];
+    const limit = Math.floor(n);
+    if (limit <= 0) return [];
+    if (this.entries.length <= limit) return [...this.entries];
+
+    const wanted = recallTokens(subject);
+    if (wanted.size === 0) return this.readRecent(limit);
+
+    /** @type {Set<number>} */
+    const picked = new Set();
+
+    // Related first, newest of them first, so a long history does not fill the window
+    // with the earliest thing it ever matched.
+    for (let index = this.entries.length - 1; index >= 0 && picked.size < limit; index -= 1) {
+      // eslint-disable-next-line security/detect-object-injection -- numeric loop index.
+      const words = recallTokens(this.entries[index]);
+      for (const word of words) {
+        if (wanted.has(word)) {
+          picked.add(index);
+          break;
+        }
+      }
+    }
+
+    // Then recency, for the remainder.
+    for (let index = this.entries.length - 1; index >= 0 && picked.size < limit; index -= 1) {
+      picked.add(index);
+    }
+
+    // Indices come from the loops above, which only ever range over this array.
+    // eslint-disable-next-line security/detect-object-injection
+    return [...picked].sort((a, b) => a - b).map((index) => this.entries[index]);
+  }
+
+  /**
    * Render recalled entries as the `Session Memory:` block for a prompt.
    *
    * Entries are neutralized again on the way out, so a file hand-edited between
    * sessions cannot smuggle a delimiter past the cache.
    *
    * @param {number} n
+   * @param {object} [opts]
+   * @param {string} [opts.about]  Select by relevance to this text rather than by
+   *   recency alone. See `readRelevant`.
    * @returns {Promise<string>} Empty string when there is nothing to recall.
    */
-  async renderForPrompt(n) {
-    const recalled = await this.readRecent(n);
+  async renderForPrompt(n, opts = {}) {
+    const recalled = opts.about ? await this.readRelevant(opts.about, n) : await this.readRecent(n);
     if (recalled.length === 0) return '';
     return recalled.map((entry) => normalizeEntry(entry)).filter(Boolean).join('\n');
   }
@@ -545,6 +648,7 @@ module.exports = {
   normalizeEntry,
   similarity,
   significantWords,
+  recallTokens,
   subjectOf,
   supersededBy,
   nextSessionId,

@@ -11,7 +11,7 @@
 
 const assert = require('assert');
 
-const { classify } = require('../../app/core/intentRouter');
+const { classify, requiresChange } = require('../../app/core/intentRouter');
 
 /** @param {string} text */
 const intentOf = (text) => classify(text).intent;
@@ -156,5 +156,59 @@ describe('intentRouter.classify', () => {
     assert.match(classify('hello').reason, /pleasantries/);
     assert.match(classify('fix it').reason, /asks for a change/);
     assert.match(classify('read src/app.js').reason, /instruction|file/);
+  });
+
+  describe('requiresChange', () => {
+    it('holds a plain instruction to a change on disk', () => {
+      for (const text of ['add a dark mode toggle', 'fix the bug in app.js', 'delete src/old.js']) {
+        assert.strictEqual(requiresChange(text), true, `"${text}" was treated as finishable without a change`);
+      }
+    });
+
+    it('lets a request to look, check, or explain finish having written nothing', () => {
+      for (const text of ['explain the auth flow', 'check whether the tests pass', 'review src/app.js']) {
+        assert.strictEqual(requiresChange(text), false, `"${text}" was required to change a file`);
+      }
+    });
+
+    describe('a TODO item the planner wrote', () => {
+      it('counts the vocabulary a planner uses to describe producing a file', () => {
+        // qwen3.5:4b's own items on the React benchmark. Neither verb was recognised, so
+        // both were reported `done (no files changed)` — including the one whose entire
+        // job was App.jsx, which ended the run holding Vite's counter demo.
+        const items = [
+          'Assemble App.jsx layout with glassmorphism styling, floating circles, and responsive design',
+          'Configure exact folder structure including components, hooks, assets, and config files',
+          'Wire up TodoList to the useTodos hook',
+          'Style the glass panel with Tailwind utilities',
+          'Persist todos to localStorage',
+        ];
+        for (const item of items) {
+          assert.strictEqual(requiresChange(item), false, `"${item}" already matched without the planned flag`);
+          assert.strictEqual(requiresChange(item, { planned: true }), true, `"${item}" is still unrecognised`);
+        }
+      });
+
+      it('does not widen the vocabulary for a message the user typed', () => {
+        // Every one of these is an ordinary question that finishes correctly having
+        // written nothing, and half of them contain a planner verb.
+        for (const text of [
+          'explain how the router handles a request',
+          'what does this component render',
+          'does it support YAML',
+          'where do we define the routes',
+        ]) {
+          assert.strictEqual(requiresChange(text), false, `"${text}" was required to change a file`);
+        }
+      });
+
+      it('still lets a verification item finish without writing anything', () => {
+        // `dropNonDeliverables` keeps these when the request asked for testing, and they
+        // legitimately change nothing.
+        for (const item of ['Verify the app builds cleanly', 'Confirm the tests pass']) {
+          assert.strictEqual(requiresChange(item, { planned: true }), false, `"${item}" was required to write a file`);
+        }
+      });
+    });
   });
 });

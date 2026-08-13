@@ -352,4 +352,77 @@ describe('superseding stale entries', () => {
       fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
   });
+
+  describe('readRelevant', () => {
+    /** @type {string} */
+    let root;
+    /** @type {MemoryStore} */
+    let store;
+
+    beforeEach(async () => {
+      root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'hiraya-recall-')));
+      store = new MemoryStore(root, 1);
+      await store.appendMany([
+        'Created src/hooks/useTodos.js: a hook returning todos, addTodo and removeTodo',
+        'Ran `npm install`: dependencies installed',
+        'Edited vite.config.js: added the tailwind plugin',
+        'Edited README.md: described the glassy blue theme',
+        'Ran `npm run build`: the build succeeded',
+      ]);
+      await store.flush();
+    });
+
+    afterEach(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }));
+
+    it('recalls the oldest note when it is the one the step needs', async () => {
+      // On the React benchmark the step that had to assemble App.jsx ran sixth, by which
+      // point the note about useTodos.js was the first to fall out of a recency window —
+      // and it was the one the step could not do its job without.
+      const recalled = await store.readRelevant('Assemble App.jsx to use the useTodos hook', 2);
+
+      assert.strictEqual(recalled.length, 2);
+      assert.ok(
+        recalled.some((entry) => entry.includes('useTodos.js')),
+        'the note naming the file the step had to import was not recalled'
+      );
+    });
+
+    it('falls back to recency when nothing matches', async () => {
+      const recalled = await store.readRelevant('Set up the CI pipeline', 2);
+      assert.deepStrictEqual(recalled, await store.readRecent(2));
+    });
+
+    it('fills the remainder of the window with recent notes', async () => {
+      const recalled = await store.readRelevant('Update README.md', 3);
+      assert.strictEqual(recalled.length, 3);
+      assert.ok(recalled.some((entry) => entry.includes('README.md')));
+      assert.ok(recalled.some((entry) => entry.includes('npm run build')), 'the window was not filled by recency');
+    });
+
+    it('keeps stored order, so the notes still read as a sequence', async () => {
+      const recalled = await store.readRelevant('useTodos and README', 5);
+      const all = await store.readAll();
+      assert.deepStrictEqual(recalled, all);
+    });
+
+    it('returns everything when the window is larger than the file', async () => {
+      assert.deepStrictEqual(await store.readRelevant('anything', 50), await store.readAll());
+    });
+
+    it('returns nothing for an empty window', async () => {
+      assert.deepStrictEqual(await store.readRelevant('useTodos', 0), []);
+    });
+
+    it('links a bare identifier in the item to the path in the note', async () => {
+      // The item says "useTodos"; the note says "src/hooks/useTodos.js". On whole-token
+      // matching those share nothing, which is exactly the pairing recall exists for.
+      const recalled = await store.readRelevant('Assemble App.jsx using useTodos', 2);
+      assert.ok(recalled.some((entry) => entry.includes('useTodos.js')));
+    });
+
+    it('is reachable from renderForPrompt', async () => {
+      const rendered = await store.renderForPrompt(2, { about: 'Assemble App.jsx using useTodos' });
+      assert.match(rendered, /useTodos\.js/);
+    });
+  });
 });
