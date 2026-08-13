@@ -140,7 +140,11 @@ async function grade(root) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'hiraya-steps-bench-')));
   writeScaffold(root);
 
-  const client = createClient({ endpoint: 'http://127.0.0.1:11434', requestTimeoutMs: 600000 });
+  // `timeoutMs`, not `requestTimeoutMs` — the latter is the *setting* name, and passing
+  // it here is silently ignored, leaving the 300s default. Rewriting App.jsx with four
+  // imports is a long single generation on CPU: it timed out at 300s on `qwen3.5:4b`
+  // mid-run, and the step only survived because the retry caught it.
+  const client = createClient({ endpoint: 'http://127.0.0.1:11434', timeoutMs: 900000 });
 
   const discovered = await new ModelDiscovery(client).get(MODEL, { force: true });
   if (!discovered) {
