@@ -117,6 +117,35 @@ Matching is path-aware: an item saying `useTodos` finds a note saying
 mode the system prompt is rebuilt per step so each one gets its own recall, rather than
 six steps sharing the single block built before the list existed.
 
+### Added — a written file whose imports point at nothing
+
+Found by the first benchmark run that got far enough to expose it. With step sessions on,
+`qwen3.5:4b` rewrote `App.jsx` for the first time — the thing five models had never
+done — and wrote, from inside `src/App.jsx`:
+
+    import { useTodos } from '../hooks/useTodos.js';
+    import { TodoInput } from '../components/TodoInput.jsx';
+
+Both climb one level too many. The right files, the wrong route. Every guard in the
+project passed it: the file is large, its brackets balance, it exports, no body is a
+placeholder, the change set grew, and the file the step named is the file that changed.
+The app does not build, and the run was reported as four of four items complete.
+
+`importGraph.brokenImports` resolves a written file's *relative* specifiers — bare
+packages are a question about `node_modules`, not about what the model wrote — and
+`write_file` appends the failure to its own observation, with the corrected path where
+exactly one file in the workspace has that name:
+
+    WARNING: src/App.jsx imports 2 file(s) that are not there, so it cannot run:
+    - "../hooks/useTodos.js" does not exist. From src/App.jsx the correct path is "./hooks/useTodos.js".
+
+Appended, not refused. The content is otherwise fine, and throwing away a whole file over
+a path is how a small model ends up producing a truncated one on the rewrite. `stepGuard`
+then reads the recorded result — no second trip to disk, and no disagreement with what the
+model was told — and fails the step, so the retry fires with an instruction to fix the
+paths rather than start over. A step that wrote a broken file and then corrected it counts
+as corrected: only the newest write per path is considered.
+
 ### Added — `tools/bench-steps.js`
 
 The live benchmark for this failure. `bench-agent.js` asks whether a model can edit a
@@ -125,6 +154,12 @@ already exists plus a multi-item request whose last item must import what the ea
 wrote. The fixture is the Vite scaffold, and the grade is one question the harness answers
 itself: is `App.jsx` different, and does it import what the run built? The model's summary
 is printed and counts for nothing.
+
+Its first version asked only whether `App.jsx` *named* those imports on an import line,
+and that is too weak by exactly the margin that matters — it passed the run whose paths
+all pointed at nothing, which is how the bug above survived a commit. It now resolves each
+specifier through `importGraph` and prints the import lines verbatim, so "attempted the
+wiring and got the path wrong" reads differently from "did not attempt it".
 
 ## [0.4.0]
 

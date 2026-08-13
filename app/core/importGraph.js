@@ -229,10 +229,156 @@ async function resolveImports(options) {
   return [...resolved].slice(0, Number.isFinite(max) ? max : undefined);
 }
 
+/** Directories a search for a misplaced file should never descend into. */
+const SKIP_DIRECTORIES = new Set([
+  'node_modules', '.git', '.hirayacoder', 'dist', 'out', 'build', 'coverage',
+  '.next', '.nuxt', '.cache', '.venv', 'venv', '__pycache__', 'target', 'vendor',
+]);
+
+/** Depth and breadth caps, so a suggestion never costs more than the write it follows. */
+const SEARCH_MAX_DEPTH = 5;
+const SEARCH_MAX_ENTRIES = 2000;
+
+/**
+ * Workspace files whose name matches a specifier's, wherever they actually live.
+ *
+ * Used only to turn "this import is broken" into "this import is broken, and here is
+ * the path that works". The search is by basename stem, because the model almost always
+ * has the *name* right and the *route* wrong.
+ *
+ * @param {string} workspaceRoot
+ * @param {string} stem  Basename without extension, lower-cased.
+ * @returns {Promise<string[]>} Workspace-relative paths.
+ */
+async function findByStem(workspaceRoot, stem) {
+  /** @type {string[]} */
+  const found = [];
+  let seen = 0;
+
+  /**
+   * @param {string} absolute
+   * @param {string} relative
+   * @param {number} depth
+   */
+  async function walk(absolute, relative, depth) {
+    if (seen >= SEARCH_MAX_ENTRIES || found.length >= 5) return;
+
+    /** @type {import('fs').Dirent[]} */
+    let dirents;
+    try {
+      // eslint-disable-next-line security/detect-non-literal-fs-filename
+      dirents = await fs.promises.readdir(absolute, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const dirent of dirents) {
+      if (seen >= SEARCH_MAX_ENTRIES || found.length >= 5) return;
+      seen += 1;
+      const childRelative = relative ? `${relative}/${dirent.name}` : dirent.name;
+
+      if (dirent.isDirectory()) {
+        if (SKIP_DIRECTORIES.has(dirent.name) || depth >= SEARCH_MAX_DEPTH) continue;
+        await walk(path.join(absolute, dirent.name), childRelative, depth + 1);
+      } else if (dirent.isFile()) {
+        const base = dirent.name.replace(/\.[a-z0-9]{1,6}$/i, '').toLowerCase();
+        if (base === stem) found.push(childRelative);
+      }
+    }
+  }
+
+  await walk(workspaceRoot, '', 0);
+  return found;
+}
+
+/**
+ * The relative specifier that would actually reach `target` from `from`.
+ *
+ * @param {string} from    Workspace-relative path of the importing file.
+ * @param {string} target  Workspace-relative path of the file it wants.
+ * @returns {string}
+ */
+function specifierFrom(from, target) {
+  const dir = path.posix.dirname(toPosixPath(from));
+  const relative = toPosixPath(path.posix.relative(dir === '.' ? '' : dir, toPosixPath(target)));
+  return relative.startsWith('.') ? relative : `./${relative}`;
+}
+
+/**
+ * Relative imports in a file that point at nothing.
+ *
+ * ## Why a written file needs this and a read one does not
+ *
+ * `resolveImports` answers "what else should the model see", and silently dropping a
+ * specifier that resolves to nothing is the right answer there. When the model has just
+ * *written* the file, the same fact means something entirely different: the file cannot
+ * run, and nothing else in the system can tell.
+ *
+ * Measured on the React benchmark, after step sessions had got `qwen3.5:4b` as far as
+ * rewriting `App.jsx` for the first time — it wrote, from inside `src/App.jsx`:
+ *
+ *     import { useTodos } from '../hooks/useTodos.js';
+ *     import { TodoInput } from '../components/TodoInput.jsx';
+ *
+ * Both climb one level too many. Every guard passed: the file is large, its brackets
+ * balance, it exports, it has no placeholder bodies, and the change set grew. The app
+ * does not build, and the run was reported as four of four items complete.
+ *
+ * Bare package specifiers are ignored, because whether `react` is installed is a
+ * question about `node_modules` and not about what the model wrote.
+ *
+ * @param {object} options
+ * @param {string} options.content
+ * @param {string} options.path            Workspace-relative path of the written file.
+ * @param {string} options.workspaceRoot
+ * @returns {Promise<Array<{specifier: string, suggestion: string | null}>>}
+ */
+async function brokenImports(options) {
+  const workspaceRoot = String(options.workspaceRoot || '');
+  if (!workspaceRoot) return [];
+
+  const from = toPosixPath(options.path || '');
+  /** @type {Array<{specifier: string, suggestion: string | null}>} */
+  const broken = [];
+
+  for (const specifier of parseSpecifiers(options.content)) {
+    // Only the model's own routing is in scope. A bare specifier is a dependency.
+    if (!RELATIVE.test(specifier)) continue;
+
+    let resolves = false;
+    for (const candidate of candidatesFor(specifier, from)) {
+      try {
+        // eslint-disable-next-line security/detect-non-literal-fs-filename
+        const stats = await fs.promises.stat(path.join(workspaceRoot, candidate));
+        if (stats.isFile()) {
+          resolves = true;
+          break;
+        }
+      } catch {
+        /* try the next candidate */
+      }
+    }
+    if (resolves) continue;
+
+    const stem = path.posix.basename(specifier).replace(/\.[a-z0-9]{1,6}$/i, '').toLowerCase();
+    const matches = stem ? await findByStem(workspaceRoot, stem) : [];
+    // Only suggest when there is one obvious answer. Offering three candidate paths to
+    // a model that already picked the wrong one is not help.
+    broken.push({ specifier, suggestion: matches.length === 1 ? specifierFrom(from, matches[0]) : null });
+
+    if (broken.length >= 5) break;
+  }
+
+  return broken;
+}
+
 module.exports = {
   parseSpecifiers,
   candidatesFor,
   resolveImports,
+  brokenImports,
+  findByStem,
+  specifierFrom,
   SPECIFIER_PATTERNS,
   RESOLUTION_EXTENSIONS,
   INDEX_BASENAMES,

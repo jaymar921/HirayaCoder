@@ -189,6 +189,12 @@ item highlighted. Three things change:
   prints what went wrong, which steps it did not attempt, and what to try instead —
   rather than running the rest against a project that does not have what they need.
 
+A step also counts as failed when the file it wrote imports something that is not there.
+That check runs on every write regardless of the toggle: `write_file` resolves the
+relative imports of what it just wrote and, when one reaches nothing, says so and gives
+the path that would work. The file is still written — the content is usually right and
+only the route is wrong, and discarding it would cost more than it saves.
+
 The cost is one extra turn on any step that needs the retry, which on CPU inference is
 tens of seconds. That is why it is a toggle rather than the default.
 

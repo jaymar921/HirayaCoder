@@ -542,6 +542,13 @@ Almost none of it turned out to be the models:
 - `ornith:9b` spent four steps on `npm create vite@latest … 2>&1`, refused each time for
   the shell operator. `lfm2:latest` produced zero steps and errored out.
   → these are genuinely the model, and the workaround notice now names the cause.
+- Once the above was fixed and `qwen3.5:4b` rewrote `App.jsx` for the first time, it wrote
+  `import { useTodos } from '../hooks/useTodos.js'` from inside `src/App.jsx` — the right
+  file, one level too high, and the same for `TodoInput`. Every guard passed it and the
+  app does not build. This is the deepest the benchmark has ever reached, and it is worth
+  recording that each fix only exposes the next failure.
+  → `write_file` now resolves a written file's relative imports and reports the ones that
+  reach nothing, with the corrected path.
 
 ---
 

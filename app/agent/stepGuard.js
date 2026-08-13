@@ -51,9 +51,36 @@ const { namedFiles } = require('./stepBrief');
 /**
  * @typedef {object} Verdict
  * @property {boolean} ok
- * @property {'changed' | 'no-change' | 'off-target' | 'stopped'} [reason]
+ * @property {'changed' | 'no-change' | 'off-target' | 'broken-imports' | 'stopped'} [reason]
  * @property {string} detail  One sentence, for the model and for the user.
  */
+
+/**
+ * Imports the written files still do not have, as `writeFile` last reported them.
+ *
+ * Read from the step record rather than from disk, so this stays synchronous and cannot
+ * disagree with what the model was told at the time. Only the newest write per path
+ * counts: a step that wrote a broken file and then corrected it has corrected it.
+ *
+ * @param {import('./agentSession').AgentStep[]} steps
+ * @returns {Array<{path: string, specifier: string, suggestion: string | null}>}
+ */
+function unresolvedImports(steps) {
+  /** @type {Map<string, Array<{specifier: string, suggestion: string | null}>>} */
+  const latest = new Map();
+
+  for (const step of steps || []) {
+    const detail = step && step.result && step.result.ok ? step.result.detail : null;
+    if (!detail || !detail.path || !Array.isArray(detail.brokenImports)) continue;
+    latest.set(detail.path, detail.brokenImports);
+  }
+
+  const found = [];
+  for (const [file, broken] of latest) {
+    for (const entry of broken) found.push({ path: file, ...entry });
+  }
+  return found;
+}
 
 /**
  * Does a path plausibly answer a name the step used?
@@ -115,6 +142,23 @@ function verify(evidence) {
     }
   }
 
+  // Wrote the right file, and wrote it so it cannot run. Every other guard passes this:
+  // the file is large, its brackets balance, it exports, no body is a placeholder, and
+  // the change set grew. Observed on `qwen3.5:4b` the first time step sessions got it as
+  // far as rewriting `App.jsx` at all — `../hooks/useTodos.js` from inside `src/App.jsx`,
+  // the right file one level too high, reported as four of four items complete.
+  const unresolved = unresolvedImports(evidence.steps);
+  if (unresolved.length > 0) {
+    const shown = unresolved.slice(0, 3).map((entry) => `"${entry.specifier}" in ${entry.path}`);
+    return {
+      ok: false,
+      reason: 'broken-imports',
+      detail:
+        `the file was written, but ${unresolved.length} import(s) point at nothing — ` +
+        `${shown.join(', ')} — so it cannot run`,
+    };
+  }
+
   // Changed the right thing but never closed the loop. Reported rather than failed:
   // the work landed, and `judgeItem` has a state for exactly this.
   if (evidence.stopReason !== 'done') {
@@ -154,6 +198,21 @@ function rethink(options) {
 
   if (written.length > 0) {
     lines.push(`Files this session has written so far: ${written.join(', ')}.`);
+  }
+
+  // A broken import needs a different instruction from a missing file: the content is
+  // already right and only the path is wrong, so telling the model to write the file
+  // "as this step needs" invites it to start over and lose the work.
+  if (verdict.reason === 'broken-imports') {
+    lines.push(
+      'The content is fine; the import paths are not. Paths are relative to the file ' +
+        'doing the importing, not to the project root — from src/App.jsx, a file at ' +
+        'src/hooks/useTodos.js is "./hooks/useTodos.js", not "../hooks/useTodos.js". ' +
+        'Send write_file again for the same file with only the paths corrected, complete ' +
+        'contents in "code".'
+    );
+    lines.push('Do not start over and do not ask what to work on — fix the paths and reply "done".');
+    return lines.join('\n');
   }
 
   if (named.length > 0) {
@@ -253,6 +312,13 @@ function suggestionsFor(options) {
     );
   }
 
+  if (verdict.reason === 'broken-imports') {
+    lines.push(
+      'The files are written and only the import paths are wrong — fixing them by hand is ' +
+        'usually faster than another run. Paths are relative to the importing file.'
+    );
+  }
+
   if (verdict.reason === 'off-target') {
     lines.push(
       `Ask for this one file on its own: "${named[0] || 'the file'} — write the complete file". ` +
@@ -271,4 +337,4 @@ function suggestionsFor(options) {
   return lines;
 }
 
-module.exports = { verify, rethink, workaround, pathAnswers, suggestionsFor };
+module.exports = { verify, rethink, workaround, pathAnswers, suggestionsFor, unresolvedImports };
