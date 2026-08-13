@@ -28,6 +28,7 @@ const promptRouter = require('../core/promptRouter');
 const intentRouter = require('../core/intentRouter');
 const toolRegistry = require('./toolRegistry');
 const contextBuilder = require('../core/contextBuilder');
+const projectOverview = require('../core/projectOverview');
 const reactLoop = require('./reactLoop');
 const nativeToolLoop = require('./nativeToolLoop');
 const plannerAgent = require('./plannerAgent');
@@ -35,6 +36,7 @@ const completionCheck = require('./completionCheck');
 const earnedHints = require('./earnedHints');
 const stepBrief = require('./stepBrief');
 const stepGuard = require('./stepGuard');
+const answerCheck = require('./answerCheck');
 const { TodoList } = require('./todoList');
 
 /**
@@ -515,7 +517,14 @@ class AgentSession {
         memory: await this._renderMemory(),
         earnedHints: await this._earnedHints(mode),
         intent: intent.intent,
+        // "Read the README" should not be able to reach `run_script`, whatever the
+        // planner decides in between. See `intentRouter.isReadOnlyRequest`.
+        readOnlyTurn: intentRouter.isReadOnlyRequest(task, this.conversation),
       });
+
+      if (activeRoute.readOnlyTurn) {
+        logger.info('This message asks to look, not to change; the mutating tools are not offered this turn.');
+      }
 
       emit({
         type: 'start',
@@ -595,10 +604,16 @@ class AgentSession {
 
       await this._remember(outcome.steps);
 
+      // Before the honest system notes are appended, not after: those notes are the one
+      // part of a summary the model did not write, and they must not be redrafted.
+      const checkedSummary = await this._rethink(task, outcome.summary, {
+        changedFiles: !changeSet.isEmpty(),
+      });
+
       /** @type {SessionResult} */
       const result = {
         summary: appendUnverifiedNote(
-          appendUnfinishedNote(outcome.summary, outcome.steps),
+          appendUnfinishedNote(checkedSummary, outcome.steps),
           outcome,
           changeSet
         ),
@@ -1260,7 +1275,7 @@ class AgentSession {
     if (this.contextFiles) await this.contextFiles.refresh();
 
     // Both of the loopless strategies put memory in the user turn rather than the
-    // system prompt, and neither wants a file listing it has no way to act on.
+    // system prompt.
     const loopless = activeRoute.strategy === 'none' || activeRoute.strategy === 'chat';
 
     const built = contextBuilder.build({
@@ -1278,10 +1293,21 @@ class AgentSession {
       // agent mid-task, and until 0.4.0 nothing in the prompt could answer either.
       conversation: this.conversation,
       contextFiles: this.contextFiles ? this.contextFiles.renderForPrompt() : '',
+      // What the project says it is. Carried on every strategy: "what is this about?"
+      // is asked at least as often in Ask mode as in Agent mode, and Ask has no way to
+      // go and find out.
+      projectOverview: projectOverview.build(this.workspaceRoot),
       // A model that has to discover the file tree spends steps on it and, worse,
       // invents paths when it guesses. Seeding the listing costs a fraction of the
       // budget and removes the most common failure on Tier B outright.
-      workspaceFiles: loopless ? [] : await this._workspaceFiles(activeRoute),
+      //
+      // Carried on the loopless strategies too, which it was not originally. The
+      // reasoning then was that a mode with no tools has "no way to act on" a listing,
+      // and that conflated acting with knowing. Ask mode cannot open a file, but it is
+      // routinely asked what is *in* the project, and with an empty listing it answered
+      // "There are no files listed in your workspace" — in a workspace of several
+      // hundred files. Naming what exists is not an action; it is the answer.
+      workspaceFiles: await this._workspaceFiles(activeRoute),
     });
 
     return built.text;
@@ -1293,12 +1319,28 @@ class AgentSession {
    * Uses the real `list_files` tool so the paths shown are exactly the paths the
    * tools will accept — a listing built any other way could disagree with the guard.
    *
+   * ## Why the mode is substituted for the loopless strategies
+   *
+   * Ask mode offers zero tools, by design and by test: `route.tools` is empty and
+   * `toolRegistry.get('list_files', 'ask')` returns null. That guarantee is about what
+   * the *model* may invoke, and it is not weakened here — the route is untouched, the
+   * model is still offered nothing, and it cannot request a listing or any other read.
+   *
+   * What happens instead is that the extension reads the directory itself and puts the
+   * result in the prompt, exactly as it does for the open editor file, which Ask mode
+   * has always received without anyone calling it a tool. Looking up the handler under
+   * a read-only mode is how that read is performed; it is not a grant.
+   *
    * @param {import('../core/promptRouter').Route} activeRoute
    * @returns {Promise<string[]>}
    * @private
    */
   async _workspaceFiles(activeRoute) {
-    const listing = toolRegistry.get('list_files', activeRoute.mode);
+    const loopless = activeRoute.strategy === 'none' || activeRoute.strategy === 'chat';
+    // 'plan' is the read-only mode. Substituted only to resolve the handler; the gate
+    // below still audits the read under the mode the user is actually in.
+    const lookupMode = loopless ? 'plan' : activeRoute.mode;
+    const listing = toolRegistry.get('list_files', lookupMode);
     if (!listing) return [];
 
     try {
@@ -1308,7 +1350,7 @@ class AgentSession {
           workspaceRoot: this.workspaceRoot,
           gate: this.gate,
           sessionId: this.sessionId,
-          mode: activeRoute.mode,
+          mode: lookupMode,
           maxObservationTokens: 400,
         }
       );
@@ -1318,6 +1360,100 @@ class AgentSession {
     } catch (err) {
       logger.warn(`Could not seed the workspace listing: ${/** @type {Error} */ (err).message}`);
       return [];
+    }
+  }
+
+  /**
+   * Re-read the question against the drafted answer, and correct it if they disagree.
+   *
+   * ## Why this is a gate and not a step
+   *
+   * The obvious design is a second pass on every turn. On local hardware that is a
+   * second full generation for every reply, most of which were fine — the measured
+   * failures were concentrated in one shape (a summary of file changes offered as the
+   * answer to a question) that `answerCheck` recognises for free.
+   *
+   * So the structural check runs always and the model runs only when it fires. A turn
+   * that was already correct costs nothing; a turn that was wrong costs one extra call
+   * and usually stops being wrong.
+   *
+   * ## Why a failed redraft keeps the draft
+   *
+   * Every failure path here returns the original. A redraft that times out, comes back
+   * empty, or comes back still mismatched leaves the user with the answer they would
+   * have had anyway — worse than a good answer, better than an error, and never worse
+   * than the behaviour before this existed. The check is allowed to be wrong; it is not
+   * allowed to lose the reply.
+   *
+   * @param {string} task
+   * @param {string} draft
+   * @param {object} [opts]
+   * @param {boolean} [opts.changedFiles]  Did the turn actually modify the workspace?
+   * @param {string} [opts.systemPrompt]   Reused for the redraft, so the corrected answer
+   *   is bound by the same mode rules as the draft. Falls back to a minimal instruction.
+   * @param {string} [opts.context]        The context the draft was written from.
+   * @returns {Promise<string>}
+   * @private
+   */
+  async _rethink(task, draft, opts = {}) {
+    const verdict = answerCheck.check({
+      task,
+      answer: draft,
+      changedFiles: Boolean(opts.changedFiles),
+      conversation: this.conversation,
+    });
+    if (!verdict.mismatched) return draft;
+
+    logger.info(`Answer did not match the question (${verdict.reason}); asking for one redraft.`);
+
+    try {
+      const response = await this.client.chat(
+        {
+          model: this.model,
+          messages: [
+            {
+              role: 'system',
+              content:
+                opts.systemPrompt ||
+                'You are HirayaCoder. Answer the user\'s question directly and concisely, in prose.',
+            },
+            ...(opts.context ? [{ role: 'user', content: opts.context }] : []),
+            {
+              role: 'user',
+              content:
+                `The user asked:\n${task}\n\n` +
+                `You drafted this reply:\n${draft}\n\n` +
+                `${verdict.instruction}\n\n` +
+                'Write the corrected reply now. Output only the reply itself — no preamble, ' +
+                'no explanation of what you changed.',
+            },
+          ],
+          options: { temperature: 0.3 },
+        },
+        { signal: this._controller ? this._controller.signal : undefined }
+      );
+
+      const redraft = String((response && response.message && response.message.content) || '').trim();
+      if (!redraft) return draft;
+
+      // One attempt only. A model that reproduces the same shape twice is not going to
+      // be argued out of it, and a loop here would be unbounded on exactly the small
+      // models least able to escape it.
+      const recheck = answerCheck.check({
+        task,
+        answer: redraft,
+        changedFiles: Boolean(opts.changedFiles),
+        conversation: this.conversation,
+      });
+      if (recheck.mismatched) {
+        logger.debug('The redraft did not match either; keeping the original answer.');
+        return draft;
+      }
+
+      return redraft;
+    } catch (err) {
+      logger.warn(`Could not redraft the answer: ${/** @type {Error} */ (err).message}`);
+      return draft;
     }
   }
 
@@ -1344,7 +1480,10 @@ class AgentSession {
         },
         { signal: this._controller ? this._controller.signal : undefined }
       );
-      return String((response && response.message && response.message.content) || '').trim() || 'No answer was produced.';
+      const draft =
+        String((response && response.message && response.message.content) || '').trim() || 'No answer was produced.';
+      // Nothing this path does can change a file, so a changelog here is always wrong.
+      return this._rethink(task, draft, { changedFiles: false, systemPrompt: activeRoute.systemPrompt, context });
     } catch (err) {
       return `The model could not be reached: ${/** @type {Error} */ (err).message}`;
     }
@@ -1364,13 +1503,19 @@ class AgentSession {
    * @private
    */
   async _execute(action, activeRoute, changeSet) {
-    const tool = toolRegistry.get(action.action, activeRoute.mode);
+    // Two gates, as before, plus the per-turn one. `allowedActions` is what the route
+    // actually offered — on a read-only turn that is the non-mutating set even though
+    // the mode is still 'agent', so consulting the mode alone would let a write through
+    // that the model was never shown.
+    const offered = activeRoute.allowedActions.has(action.action);
+    const tool = offered ? toolRegistry.get(action.action, activeRoute.mode) : null;
     if (!tool) {
       logger.warn(`Refused action "${action.action}" in ${activeRoute.mode} mode.`);
       const unavailable = {
         ok: false,
-        observation:
-          activeRoute.mode === 'plan'
+        observation: activeRoute.readOnlyTurn
+          ? `"${action.action}" is not available for this request. You were asked to look and explain, not to change anything or run commands. Read what you need and finish with "done".`
+          : activeRoute.mode === 'plan'
             ? `"${action.action}" is not available in Plan mode. You can only look at the project. Finish with "done" and describe the plan.`
             : `"${action.action}" is not an available action.`,
         error: 'TOOL_UNAVAILABLE',

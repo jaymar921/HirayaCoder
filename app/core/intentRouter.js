@@ -112,6 +112,82 @@ function requiresChange(text, opts = {}) {
   return Boolean(opts.planned) && PLANNED_DELIVERABLE_VERB.test(subject);
 }
 
+/**
+ * Verbs that ask to be told something, with nothing done about it.
+ *
+ * Narrower than the read-ish subset of `WORK_VERB`, which is answering a different
+ * question — whether the agent runs at all. These are the messages where the agent
+ * should run, with tools, and where every one of those tools should be read-only.
+ */
+const COMPREHENSION_VERB =
+  /\b(?:read|explain|describe|summari[sz]e|review|tell me about|show me|walk me through|analy[sz]e|understand|look at|go through|what(?:'s| is| are| does| do)\b)/i;
+
+/**
+ * Verbs that ask for something to be executed.
+ *
+ * Separate from `MUTATING_VERB` because running a program is not editing a file and the
+ * two need distinguishing here: "run the tests and tell me what breaks" changes nothing
+ * on disk and is emphatically not a read-only request.
+ */
+const EXECUTION_VERB =
+  /\b(?:run|execute|start|launch|serve|boot|compile|install|deploy|npm|npx|yarn|pnpm|node|python|java|mvn|gradle|docker)\b/i;
+
+/**
+ * Is this message asking to be told about the project, and nothing more?
+ *
+ * ## The failure this exists for
+ *
+ * Asked "can you read the README.md file?", the agent proposed reading six files, was
+ * told "proceed", and ran `start_development_windows.bat` followed by `node
+ * api/server.js`. The batch file was refused by the program allowlist. `node` is on that
+ * allowlist — correctly, it is how you run a project's tests — so the agent started the
+ * user's API server, which bound a port, failed to reach MongoDB, and hung the session
+ * until the step limit. The user's reply: "I asked you to read it not run it."
+ *
+ * The allowlist was never the right place to catch this. `node` has to be allowed, and a
+ * gate that inspects only the command cannot know that the request was to read. What was
+ * missing is upstream: nothing connected "read this file" to "therefore do not execute
+ * anything", so a planner that drifted from reading to running met no resistance until
+ * the command itself was already being approved.
+ *
+ * ## Why assent inherits
+ *
+ * "proceed" carries no verb of its own and cannot be classified alone. In the session
+ * above it is the word that authorised the escalation — the user was agreeing to the
+ * reads that had just been listed, and got a server boot. So a bare assent takes the
+ * restriction of the request it is agreeing to, which is the only reading of "proceed"
+ * that matches what the user thought they were saying.
+ *
+ * @param {string} text
+ * @param {Array<{role: string, text: string}>} [conversation]
+ *   Earlier turns, oldest first, excluding this one. Only consulted for bare assent.
+ * @returns {boolean}
+ */
+function isReadOnlyRequest(text, conversation) {
+  const subject = String(text || '').trim();
+  if (!subject) return false;
+
+  const words = subject
+    .toLowerCase()
+    .split(/[^a-z']+/)
+    .filter(Boolean);
+
+  // Bare assent inherits from the request it is agreeing to.
+  if (words.length > 0 && words.every((word) => ASSENT_WORDS.has(word) || SOCIAL_WORDS.has(word))) {
+    const turns = Array.isArray(conversation) ? conversation : [];
+    for (let i = turns.length - 1; i >= 0; i -= 1) {
+      const turn = turns[i];
+      if (!turn || turn.role !== 'user') continue;
+      return isReadOnlyRequest(turn.text);
+    }
+    return false;
+  }
+
+  if (!COMPREHENSION_VERB.test(subject)) return false;
+  if (EXECUTION_VERB.test(subject)) return false;
+  return !MUTATING_VERB.test(subject);
+}
+
 /** A filename, an extension, or a path — a message about the project's contents. */
 const NAMES_A_FILE = /(?:[\w-]+\.[a-z0-9]{1,6}\b|\b[\w-]+\/[\w./-]+)/i;
 
@@ -347,6 +423,9 @@ function classify(text) {
 module.exports = {
   classify,
   requiresChange,
+  isReadOnlyRequest,
+  COMPREHENSION_VERB,
+  EXECUTION_VERB,
   isPurelySocial,
   isGreetingWithName,
   WORK_VERB,

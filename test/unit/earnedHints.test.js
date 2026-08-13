@@ -164,7 +164,11 @@ describe('earnedHints — what can reach a prompt', () => {
       earnedHints: [earnedHints.CATALOGUE.get('MISSING_CONTENT')],
     }).systemPrompt;
 
-    assert.strictEqual(prompt, promptRouter.ASK_SYSTEM);
+    // Compared against the identity-substituted prompt rather than the raw constant:
+    // every mode now carries the product's name and version, and what this test
+    // is about is that no *hint* was appended on top of it.
+    assert.strictEqual(prompt, promptRouter.withIdentity(promptRouter.ASK_SYSTEM));
+    assert.doesNotMatch(prompt, /mistakes you have made more than once/i);
   });
 
   it('reaches both tiers in the modes that act', () => {

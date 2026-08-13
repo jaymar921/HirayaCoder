@@ -115,6 +115,161 @@ describe('AgentSession', () => {
       await makeSession({ client, capability: TIER_A, thinkingCapacity: 'low' }).run('Explain this', { mode: 'ask' });
       assert.strictEqual(client.bodies[0].tools, undefined);
     });
+
+    it('can see what is in the workspace, having no way to go and look', async () => {
+      // The failure: asked "can you list the files available on this workspace?", Ask
+      // mode replied "There are no files listed in your workspace" — because the
+      // context genuinely had none. Having no tools is not the same as having no
+      // knowledge, and the listing is assembled by the extension, not requested by the
+      // model, so this costs Ask mode none of its guarantees.
+      const client = scriptedClient(['Here are the files.']);
+      const session = makeSession({ client });
+
+      await session.run('can you list the files available on this workspace?', { mode: 'ask' });
+
+      const prompt = client.prompts[0];
+      assert.match(prompt, /src\/app\.js/, 'the file listing never reached the prompt');
+      assert.match(prompt, /README\.md/);
+    });
+
+    it('is told what the project is, in the project own words', async () => {
+      fs.writeFileSync(
+        path.join(root, 'README.md'),
+        '# LocoMenu\n\nFind the best food prices near you before you buy.\n'
+      );
+      const client = scriptedClient(['It is a food price app.']);
+
+      await makeSession({ client }).run('what is this project all about?', { mode: 'ask' });
+
+      assert.match(client.prompts[0], /Find the best food prices near you/);
+    });
+
+    it('still offers zero tools once it can see the project', async () => {
+      // The guarantee that must survive everything above.
+      const client = scriptedClient(['An answer.']);
+      const session = makeSession({ client, capability: TIER_A });
+
+      const result = await session.run('what is this project about?', { mode: 'ask' });
+
+      assert.strictEqual(client.bodies[0].tools, undefined);
+      assert.strictEqual(result.steps.length, 0);
+      assert.strictEqual(client.calls, 1);
+    });
+  });
+
+  describe('rethinking an answer that does not match the question', () => {
+    it('redrafts a changelog offered as the answer to a question', async () => {
+      const client = scriptedClient([
+        'Here are 2-4 bullet points summarizing the changes:\n* package.json was updated.',
+        'HirayaCoder version 0.5.0.',
+      ]);
+
+      const result = await makeSession({ client }).run('what version are you?', { mode: 'ask' });
+
+      assert.strictEqual(client.calls, 2, 'the redraft was not attempted');
+      assert.strictEqual(result.summary, 'HirayaCoder version 0.5.0.');
+    });
+
+    it('tells the redraft what was wrong with the first attempt', async () => {
+      const client = scriptedClient([
+        'Here are 2-4 bullet points summarizing the changes:\n* package.json was updated.',
+        'HirayaCoder version 0.5.0.',
+      ]);
+
+      await makeSession({ client }).run('what version are you?', { mode: 'ask' });
+
+      const retry = JSON.stringify(client.bodies[1].messages);
+      assert.match(retry, /Your draft reported changes to files/);
+      assert.match(retry, /what version are you/);
+    });
+
+    it('spends no extra call when the answer already fits', async () => {
+      const client = scriptedClient(['HirayaCoder version 0.5.0.']);
+
+      await makeSession({ client }).run('what version are you?', { mode: 'ask' });
+
+      assert.strictEqual(client.calls, 1, 'a redraft was attempted for an answer that was fine');
+    });
+
+    it('keeps the original when the redraft is no better', async () => {
+      // One attempt only. A model that produces the same shape twice will not be argued
+      // out of it, and the user is better served by a poor answer than by a loop.
+      const changelog = 'Here are 2-4 bullet points summarizing the changes:\n* package.json was updated.';
+      const client = scriptedClient([changelog, changelog]);
+
+      const result = await makeSession({ client }).run('what version are you?', { mode: 'ask' });
+
+      assert.strictEqual(client.calls, 2, 'it should stop after one redraft');
+      assert.strictEqual(result.summary, changelog);
+    });
+
+    it('keeps the original when the redraft comes back empty', async () => {
+      const changelog = 'Here are 2-4 bullet points summarizing the changes:\n* package.json was updated.';
+      const client = scriptedClient([changelog, '']);
+
+      const result = await makeSession({ client }).run('what version are you?', { mode: 'ask' });
+
+      assert.strictEqual(result.summary, changelog);
+    });
+  });
+
+  describe('a message that asks to look, not to change', () => {
+    /**
+     * The action list the model was actually shown, read off the system prompt rather
+     * than off the serialized transcript — in the latter every quote is escaped, so a
+     * regex written with bare quotes matches nothing and the assertion passes for the
+     * wrong reason.
+     *
+     * @param {any} client
+     * @returns {string}
+     */
+    const systemPromptOf = (client) => client.bodies[0].messages[0].content;
+
+    it('does not offer run_script when the user asked to read a file', async () => {
+      // "I asked you to read it not run it." The agent had booted the project's API
+      // server, which bound a port and hung until the step budget ran out.
+      const client = scriptedClient([
+        json({ thought: 'Read it.', action: 'read_file', path: 'README.md' }),
+        json({ thought: 'Done.', action: 'done', summary: 'The README describes the project.' }),
+      ]);
+
+      await makeSession({ client }).run('can you read the README.md file?', { mode: 'agent' });
+
+      const offered = systemPromptOf(client);
+      assert.doesNotMatch(offered, /"run_script"/);
+      assert.doesNotMatch(offered, /"write_file"/);
+      assert.doesNotMatch(offered, /"delete_file"/);
+      assert.match(offered, /"read_file"/);
+    });
+
+    it('never runs the command even if the model asks for one', async () => {
+      // Two gates stand between the model and the command here: the action is absent
+      // from the constrained grammar, and `_execute` checks `allowedActions` again. The
+      // assertion is about the outcome both of them exist to produce.
+      const client = scriptedClient([
+        json({ thought: 'Start the server.', action: 'run_script', command: 'node api/server.js' }),
+        json({ thought: 'Give up.', action: 'done', summary: 'The README describes the project.' }),
+      ]);
+
+      const result = await makeSession({ client, autoApproveScripts: true }).run('explain what this project does', {
+        mode: 'agent',
+      });
+
+      const ran = result.steps.filter((step) => step.action === 'run_script' && step.ok);
+      assert.strictEqual(ran.length, 0, 'a command was executed for a request that only asked for an explanation');
+    });
+
+    it('gives the mutating tools back on the next message', async () => {
+      const client = scriptedClient([
+        json({ thought: 'Write it.', action: 'write_file', path: 'notes.md', code: '# Notes\n' }),
+        json({ thought: 'Done.', action: 'done', summary: 'Added notes.md.' }),
+      ]);
+
+      await makeSession({ client }).run('create notes.md with a heading', { mode: 'agent' });
+
+      assert.match(systemPromptOf(client), /"write_file"/);
+      assert.match(systemPromptOf(client), /"run_script"/);
+    });
   });
 
   describe('conversation in Agent mode', () => {

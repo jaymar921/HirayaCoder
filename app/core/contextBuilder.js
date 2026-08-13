@@ -49,6 +49,13 @@ const PRIORITY = {
   // when only one survives the budget it should be the primary source.
   conversation: 85,
   memory: 80,
+  // Above the selection and everything below it. This block is ~100 tokens that say
+  // what the project is in its author's own words, and without it the model answers
+  // "what is this project about?" by inferring from folder names — which produces a
+  // fluent, confident, generic description of the wrong thing. See `projectOverview`
+  // for the four sessions that motivated it. Per token it is the highest-value
+  // orientation available, which is why it outranks the file body it was read from.
+  projectOverview: 75,
   selection: 70,
   contextFiles: 60,
   // Above the open file: during a loop, knowing which paths exist prevents invented
@@ -71,6 +78,7 @@ const PRIORITY = {
  * @property {number} budget                     Total token budget for the turn.
  * @property {EditorContext} [editor]
  * @property {string[]} [memory]                 Recalled entries, already neutralized.
+ * @property {string} [projectOverview]          Rendered block from core/projectOverview.
  * @property {string} [contextFiles]             Rendered block from contextFilesManager.
  * @property {string} [observation]              Result of the previous agent step.
  * @property {string[]} [workspaceFiles]         Nearby paths, for orientation.
@@ -169,6 +177,18 @@ function build(request) {
         keep: 'tail',
       });
     }
+  }
+
+  if (request.projectOverview) {
+    sections.push({
+      name: 'Project',
+      content: request.projectOverview,
+      priority: PRIORITY.projectOverview,
+      // Truncating this below a sentence or two leaves a name and half a description,
+      // which invites exactly the confident guessing it was added to stop.
+      minTokens: 40,
+      keep: 'head',
+    });
   }
 
   if (request.contextFiles) {
