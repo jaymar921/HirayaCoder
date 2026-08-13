@@ -331,6 +331,12 @@ the harness: is `App.jsx` different, and do its imports resolve to real files?
 Run 2 is why `write_file` now checks a written file's imports. Run 3 completed only
 because its step 4 timed out and the retry caught it — see below.
 
+**The control is missing, and Machine B is meant to supply it.** The comparison above is
+0.4.0 code against 0.5.0 code, and those differ by three bug fixes as well as by step
+sessions — so it supports "0.5.0 wires the app where 0.4.0 never did" and *not* "step
+sessions are what did it". At 20+ minutes a run, the paired `steps`/`nosteps` control was
+unaffordable here. Handoff instructions: `setup/FOLLOWUP-PROMPT-MACHINE-B.md`.
+
 **The shipped request timeout is too low for this machine.** `hirayacoder.ollama.requestTimeoutMs`
 defaults to 300000, and on Machine A generating one `App.jsx` with four imports exceeded
 it outright:
