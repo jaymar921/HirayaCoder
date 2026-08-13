@@ -129,6 +129,138 @@ describe('runScript refusals', () => {
   });
 });
 
+/**
+ * A gate that approves everything and returns canned results, one per attempt.
+ *
+ * @param {Array<object>} results
+ */
+function runningContext(results) {
+  const runs = [];
+  const attempts = [];
+  return {
+    runs,
+    attempts,
+    context: {
+      sessionId: '1',
+      mode: 'agent',
+      scriptTimeoutMs: 120000,
+      gate: {
+        async requestScript(request) {
+          runs.push(request);
+          return { allowed: true, decision: 'auto-approved' };
+        },
+        async runScript(request) {
+          attempts.push(request);
+          const canned = results[Math.min(attempts.length - 1, results.length - 1)];
+          return {
+            ok: false,
+            code: 1,
+            stdout: '',
+            stderr: '',
+            timedOut: false,
+            truncated: false,
+            durationMs: 5,
+            argv: [],
+            ...canned,
+          };
+        },
+      },
+    },
+  };
+}
+
+describe('failure reasons and the one retry', () => {
+  it('names the reason and the fix, not just the exit code', async () => {
+    const { context } = runningContext([{ stderr: "Error: Cannot find module 'react'" }]);
+    const result = await runScript({ command: 'npm run build' }, context);
+
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.detail.reason, 'MISSING_DEPENDENCY');
+    assert.match(result.observation, /npm install/);
+  });
+
+  it('retries a network failure exactly once', async () => {
+    const { context, runs } = runningContext([{ stderr: 'npm ERR! code ENOTFOUND' }]);
+    const result = await runScript({ command: 'npm install' }, context);
+
+    assert.strictEqual(result.detail.attempts, 2, 'should have tried twice');
+    assert.strictEqual(runs.length, 1, 'the second attempt reuses the first approval');
+    assert.match(result.observation, /run twice/i);
+  });
+
+  it('succeeds on the retry when the blip clears', async () => {
+    const { context } = runningContext([{ stderr: 'npm ERR! code EAI_AGAIN' }, { ok: true, code: 0, stdout: 'added 42 packages' }]);
+    const result = await runScript({ command: 'npm install' }, context);
+
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.detail.attempts, 2);
+  });
+
+  it('never retries a failure the same command cannot survive', async () => {
+    // The damage in the v0.5.3 round came from retries, not from their absence.
+    for (const stderr of ['SyntaxError: Unexpected token }', 'npm ERR! missing script: buld', 'EACCES: permission denied']) {
+      const { context } = runningContext([{ stderr }]);
+      const result = await runScript({ command: 'npm run build' }, context);
+      assert.strictEqual(result.detail.attempts, 1, `retried ${stderr}`);
+    }
+  });
+});
+
+describe('telling a command that finishes from one that does not', () => {
+  const { isServerCommand } = require('../../app/agent/scriptDiagnosis');
+
+  it('knows the commands that stay up', () => {
+    for (const command of ['npm run dev', 'npm start', 'npm run preview', 'vite', 'nodemon server.js', 'npm test -- --watch']) {
+      assert.ok(isServerCommand(command), `${command} should be treated as long-running`);
+    }
+  });
+
+  it('leaves ordinary one-shot commands alone', () => {
+    for (const command of ['npm run build', 'npm install', 'npm test', 'node index.js', 'git status', 'javac Main.java']) {
+      assert.ok(!isServerCommand(command), `${command} should not be treated as long-running`);
+    }
+  });
+});
+
+describe('a command that never exits', () => {
+  it('calls a dev server that stayed up a success', async () => {
+    // Every model in the v0.5.3 round burned its full two-minute script budget here and
+    // then read the kill as a failed step.
+    const { context } = runningContext([
+      { timedOut: true, code: null, stdout: 'VITE v5.0.0 ready in 300 ms' },
+    ]);
+    const result = await runScript({ command: 'npm run dev' }, context);
+
+    assert.strictEqual(result.ok, true);
+    assert.match(result.observation, /still running.*no startup errors/is);
+    assert.match(result.observation, /do not run it again/i);
+  });
+
+  it('probes it briefly instead of spending the whole script budget', async () => {
+    const { context, runs } = runningContext([{ timedOut: true, code: null }]);
+    await runScript({ command: 'npm run dev' }, context);
+
+    assert.strictEqual(runs[0].timeoutMs, runScript.PROBE_MS);
+  });
+
+  it('still fails a server that fell over on startup', async () => {
+    const { context } = runningContext([
+      { timedOut: true, code: null, stderr: 'Error: listen EADDRINUSE: address already in use :::5173' },
+    ]);
+    const result = await runScript({ command: 'npm run dev' }, context);
+
+    assert.strictEqual(result.ok, false);
+    assert.match(result.observation, /already listening on that port/i);
+  });
+
+  it('gives a build the full budget, since it is meant to finish', async () => {
+    const { context, runs } = runningContext([{ ok: true, code: 0 }]);
+    await runScript({ command: 'npm run build' }, context);
+
+    assert.strictEqual(runs[0].timeoutMs, 120000);
+  });
+});
+
 describe('what the model is told about a run', () => {
   const { describeRun } = runScript;
   const ok = { ok: true, code: 0, stdout: 'built in 1.2s', stderr: '', timedOut: false, durationMs: 12, argv: [] };
