@@ -794,6 +794,15 @@ class AgentSession {
             `Right now, do only item ${position}: ${item.text}\n` +
             'Ignore the other items — they are handled separately. When this one item is complete, reply with "done".';
 
+        // The transition itself, at info, because the experimental step mode is the
+        // feature most often being evaluated when someone reads this log — and "was it
+        // even on?" was previously answerable only from a line written when the tab
+        // toggled it, hours earlier in a different session.
+        logger.info(
+          `Step ${position}/${todos.items.length}, attempt ${attempt} of ${maxAttempts}: ` +
+            `${itemBudget} step(s) budgeted, ${this.stepSessions ? 'step-scoped brief' : 'full request'}.`
+        );
+
         // A step's memory is selected by what the step is about, not by what happened
         // most recently — the note naming the file this step has to import is usually
         // the oldest one in the file by the time the step runs. See
@@ -1653,6 +1662,16 @@ class AgentSession {
     // Recorded here rather than in the loops, because this is the one place every
     // action passes through regardless of which tier produced it.
     this._recordStep(action, result, activeRoute, Boolean(tool.mutating), ms);
+
+    // The one line that reconstructs a session afterwards: what was asked for, what
+    // happened, and how long it took. Debug rather than info, because a run is dozens
+    // of these — but when a user reports "it said it edited the file and it did not",
+    // this is the record that settles it, and it costs nothing until they turn it on.
+    const target = action.path || action.command || action.query || '';
+    logger.debug(
+      `Step: ${action.action}${target ? ` ${target}` : ''}${action.cwd ? ` (in ${action.cwd})` : ''} → ` +
+        `${result.ok ? 'ok' : `failed${result.error ? ` [${result.error}]` : ''}`} in ${ms}ms`
+    );
     return result;
   }
 

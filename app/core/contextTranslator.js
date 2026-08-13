@@ -597,7 +597,12 @@ class ContextTranslator {
 
     // append() returns false for exact and near-duplicates alike.
     const stored = await this.memoryStore.append(note);
-    if (!stored) logger.debug(`Skipped duplicate note: ${note}`);
+    // What was kept, not only what was thrown away. Everything this module decides is
+    // logged except its actual output, which is the half that comes back as trusted
+    // context on every later turn — so when a session goes strange three steps in, the
+    // note that sent it there was the one thing not written down.
+    if (stored) logger.debug(`Remembered: ${note}`);
+    else logger.debug(`Skipped duplicate note: ${note}`);
 
     return { notes: stored ? [note] : [], skipped: !stored, error };
   }

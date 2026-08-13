@@ -5,6 +5,135 @@ All notable changes to HirayaCoder are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] — unreleased
+
+Machine B, a full model round on the 0.5.3 build: every model was given the same
+eleven-file React TODO spec and asked to build it, verify it, and report back. File
+writes and folder navigation were solid throughout. Almost nothing ran a script
+successfully, including the models that got everything else right — `gemma4:e4b` spent
+about thirty minutes and never ran one. That turned out to have very little to do with
+model size.
+
+### Fixed — a command could only ever run at the workspace root
+
+The spec scaffolds into `todo-glass-app/` and then builds inside it. Commands started at
+the workspace root and nowhere else, and `run_script` said so: *"Commands already run at
+the workspace root, and it cannot be changed."* The only phrasing a model has for the
+other case is `cd todo-glass-app && npm run build`, which is refused as shell chaining —
+correctly, since there is no shell — and the refusal named no alternative. So every model
+either resent it until the repeat guard ended the step, or gave up on building at all.
+This is the single largest cause of "failed to run scripts" in the round, and a 70B model
+would have failed the same way.
+
+`run_script` now takes an optional `cwd`:
+
+- Resolved through the same `pathGuard` confinement reads and writes use, so `../..` is
+  refused for the same reason `read_file` refuses it.
+- Taken from the **approved decision** rather than from the request, so a folder cannot
+  be swapped in between the confirmation click and the spawn.
+- Declared as an optional field in the action schema. Without that, constrained decoding
+  leaves Tier B models unable to emit it at all — the trap `recursive` was in before
+  0.4.0.
+- Part of the repeat-guard key, the step trace, and the memory notes, so `npm install` at
+  the root and `npm install` in the app are two different actions and a later step builds
+  where the earlier one did.
+- A folder that does not exist is refused with that reason, and pointed at `list_files`,
+  rather than surfacing as a bare `ENOENT` from `spawn`.
+
+The `cd` refusal now names `cwd` instead of describing a wall.
+
+### Fixed — a scaffolder's question looked exactly like a hung build
+
+`npm create vite@latest` asks *"Ok to proceed? (y)"*. Nothing types an answer, and stdin
+was left open, so the process waited on a pipe that would never produce a byte until the
+timeout killed it two minutes later with no output to explain itself. Stdin is now closed
+immediately — the prompt gets an EOF, which every one of these tools treats as "take the
+defaults" — and `CI=1`, `npm_config_yes`, and friends are set on every spawn.
+
+### Added — every failed command says why, and what to do about it
+
+A non-zero exit code is not a diagnosis. Handed `exit code 1` and 400 tokens of npm
+output, small models resent the identical command, announced the build had succeeded, or
+abandoned a task they were two steps from finishing — all three were observed.
+
+`agent/scriptDiagnosis` classifies each failure into one named reason — missing
+dependency, wrong path, missing script, syntax error, permission, environment, network,
+port in use — and each reason carries the one sentence the model can act on, placed last
+in the observation so it is the final thing read before deciding. The reason also travels
+as the step's error code, so the ledger counts *why* runs fail rather than only how often.
+
+**Exactly two of them are retried, once:** a network blip and a file lock, where the
+command was right and the world was briefly wrong. Nothing else is. The damage in the
+testing round came from retries, not from their absence — a refused `javac` resent three
+times, a `mkdir` three times — so a missing dependency is told to install it rather than
+quietly run again. The retry reuses the approval already given and says in the
+observation that it happened.
+
+### Added — a dev server is probed, not waited on
+
+`npm run dev` succeeding looks identical to `npm run dev` hanging: the process is alive
+and printing nothing new. Asked to *"confirm `npm run dev` starts without errors"*, every
+model spent the full two-minute script budget there and read the kill as a failure.
+
+Commands that are meant never to exit now get a 20-second probe. Still up and quiet means
+it started, and the model is told so and told not to run it again. A server that printed
+`EADDRINUSE` or could not resolve a module still fails, and says which.
+
+### Added — pre-flight checks, before anyone is asked to approve anything
+
+Three cases are now answered from the filesystem instead of by running the command: no
+`package.json` in that folder, no such script — with the list of scripts that do exist —
+and dependencies that were never installed. Each costs a `stat` rather than a
+confirmation click, a subprocess, and a page of output for a 3B model to interpret. The
+bar for adding one is that being wrong must be impossible: a project that declares no
+dependencies is never told to install any.
+
+### Fixed — closing a chat tab killed the run inside it
+
+Closing a tab called `session.cancel()`. That is right for a turn still queued and wrong
+for a turn in flight: on CPU inference a turn is minutes long, so the agent is regularly
+mid-build when someone closes the wrong tab.
+
+A running turn now detaches instead. The run continues — permission prompts are VS Code
+modals, not webview panels, so it can still ask — and the transcript records the outcome
+either way. A notification offers **Reopen** or **Stop**, and reopening the session says
+the turn is still going instead of showing an idle composer over a session that is still
+writing files. A queued turn still gives up its lane, since it has done nothing worth
+saving and holding the lane starves every other session. Closing the window still stops
+everything.
+
+### Added — the goal, restated where the decision happens
+
+`contextBuilder` has always put the task at the top of a context block rebuilt every
+turn. That is the right place for it and it is not enough: by the time a 1B model has
+read a project overview, a file listing, session memory, a step trace, and 400 tokens of
+npm output, the sentence saying what it is *for* is thousands of tokens behind it, and
+recency wins. The goal is now repeated last, immediately before the instruction to act,
+with the step count beside it — "you are on step 6 of 8" is what turns "keep exploring"
+into "write the file now". About sixty tokens a turn.
+
+### Added — a `done` is challenged when named files do not exist
+
+The benchmark shape: eleven files specified, four written, *"done"*. When a task names
+three or more files — a structure being specified, rather than a sentence that happens to
+mention one — and some of them do not exist, the model is sent back once with the missing
+paths named. Existence is checked against the workspace and not only against what the run
+wrote, so files `npm create vite` produced count as produced.
+
+### Added — the numbers behind a slow session
+
+The ledger has recorded per-turn and per-step timings since 0.5.0 and `timings()` was
+called from nowhere, so "about thirty minutes" was a thing you could only learn with a
+stopwatch. **Show Learned Adaptation** now reports, per model, the average and slowest
+turn, the time per action, and what share of it went to waiting on the model — ordered
+smallest model first, because where a model stops coping is the question the report
+exists to answer. Parameter count is recorded alongside, and kept fractional: truncating
+it would have logged every model this project is for as 0B.
+
+Step transitions, translator decisions, and per-action outcomes with durations are logged
+too — the last at `debug`, since a run is dozens of them, and it is what settles "it said
+it edited the file and it did not".
+
 ## [0.5.3] — unreleased
 
 Machine B, sessions 8–12, testing the 0.5.1 build. Project comprehension is fixed —

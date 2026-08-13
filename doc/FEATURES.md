@@ -237,6 +237,16 @@ whether the model was thinking or a script was hanging, and 96% says which. Indi
 steps are timed too, including any wait on a confirmation dialog — a session that looks
 slow because a prompt sat unanswered is not a slow model.
 
+**Show Learned Adaptation** aggregates it per model, smallest first, so two models can be
+compared on the same workspace: parameter count, average and slowest turn, time per
+action, and the share spent waiting.
+
+**Nothing is lost if you close the tab.** A turn already running keeps going, with a
+notification offering Reopen or Stop; reopening the session shows the conversation and
+says the turn is still in flight. A turn still queued behind another session gives up its
+place, since it has done nothing yet and holding the lane would stall everyone else.
+Closing the window stops everything.
+
 **Up, down, or wedged.** Three states, because two of them need opposite actions from
 you:
 
@@ -280,7 +290,10 @@ The parts that decide what the agent is *allowed* to do.
   symlinks and the parent directory of a file being created. `.git` and `.hirayacoder`
   are write-protected so the agent cannot rewrite its own audit log or memory.
 - **Allow-listed commands only**, run with argument arrays and no shell. Shell operators
-  are refused outright rather than passed through as literal text.
+  are refused outright rather than passed through as literal text. A command may name a
+  folder to run in — the project the agent just scaffolded usually is not the workspace
+  root — and that folder is confined exactly like a path a file is written to, and taken
+  from the approved decision so it cannot change between the click and the spawn.
 - **Secret redaction** on everything sent to the model: file reads, search results,
   command output, your selection, and attached files.
 - **Write guards.** Seven of them, each named after a real failure a real model
@@ -321,6 +334,11 @@ Three properties hold it in place:
 - **It is visible and disposable.** **Show Learned Adaptation** prints every model's
   record and the hints currently in force; **Reset Learned Adaptation** discards all of
   it. `hirayacoder.adaptation.enabled` turns off recording and hinting together.
+
+The same report doubles as the performance comparison, ordered smallest model first:
+parameter count, average and slowest turn, time per action, and what share of it went to
+waiting on the model. Near 100% says the model is the cost and a smaller one would help;
+well under it says a script or a very large file is where the time went.
 
 ---
 

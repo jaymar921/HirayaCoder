@@ -109,6 +109,10 @@ class TodoList {
     const next = this.items.find((item) => item.status === 'pending');
     if (next) {
       next.status = 'active';
+      // Both ends of every item, and not just the closing one. A long run reads in the
+      // output channel as a wall of tool calls with no boundaries in it, and the first
+      // question about any of them is which item was being worked on at the time.
+      logger.info(`TODO item ${this.position()}/${this.items.length} starting: ${next.text}`);
       return next;
     }
     return null;
