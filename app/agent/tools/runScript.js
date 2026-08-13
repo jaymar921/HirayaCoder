@@ -390,6 +390,10 @@ module.exports = async function runScript(args, context) {
       durationMs: result.durationMs,
       attempts,
       reason: diagnosis ? diagnosis.reason : undefined,
+      // Read by the loop, which otherwise answers every failure with "try something
+      // else, or finish" — the one thing that must not be said about a build broken by
+      // a file the model just wrote.
+      fixFirst: diagnosis ? Boolean(diagnosis.fixFirst) : undefined,
     },
   };
 };

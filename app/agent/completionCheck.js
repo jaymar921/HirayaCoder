@@ -267,6 +267,9 @@ function restate(task) {
  *   Files this run created or edited, with their new contents.
  * @property {boolean} [planned]      True when `task` is a TODO item rather than a
  *   message the user typed. See `intentRouter.requiresChange`.
+ * @property {Array<{command: string, ok?: boolean}>} [commands]
+ *   Commands this run executed, in order. Only the tail matters — see
+ *   `lastFailedCommand`.
  * @property {(relativePath: string) => boolean} [exists]
  *   Does this workspace-relative path exist now? Supplied by the caller because this
  *   module does not touch the filesystem; without it the named-files check is skipped.
@@ -342,6 +345,21 @@ function objectTo(context) {
     );
   }
 
+  // Before the file checks, because a red build outranks a missing file: the model has
+  // evidence in hand that something it built does not work, and walking away from that
+  // is the failure this whole check exists to prevent. Observed on `gemma4:e4b`, which
+  // installed, scaffolded and wrote every component correctly, watched `npm run dev`
+  // die on a two-line config error, and reported the app finished.
+  const broken = lastFailedCommand(context.commands || []);
+  if (broken) {
+    return (
+      `You replied "done", but the last command you ran — \`${broken.command}\` — failed, and nothing has run ` +
+      'successfully since. A project whose build does not run is not finished. Read the error it gave you, fix ' +
+      'the file it named, and run that command again. If you genuinely cannot fix it, reply "done" again and say ' +
+      'plainly in the summary that the build fails and why, so the user is not told it works.'
+    );
+  }
+
   const missing = missingNamedFiles(task, context.written || [], context.exists);
   if (missing.length > 0) {
     return (
@@ -358,6 +376,24 @@ function objectTo(context) {
 
 /** How many missing paths to name before the objection becomes a wall of text. */
 const MAX_NAMED_IN_OBJECTION = 6;
+
+/**
+ * The failed command a run walked away from, or null.
+ *
+ * Only the *last* command matters, and only if nothing succeeded after it. A build that
+ * failed and was then fixed is a run that went well — objecting to it would punish
+ * exactly the behaviour this is trying to produce. Deliberately blind to which command
+ * it was: `npm run build` failing and `npm test` failing are the same statement, which
+ * is that the model has evidence its own work does not run.
+ *
+ * @param {Array<{command: string, ok?: boolean}>} commands
+ * @returns {{command: string} | null}
+ */
+function lastFailedCommand(commands) {
+  const last = [...commands].reverse().find((entry) => entry && typeof entry.command === 'string');
+  if (!last || last.ok) return null;
+  return { command: last.command.length > 120 ? `${last.command.slice(0, 120)}…` : last.command };
+}
 
 /**
  * How many files a task must name before their absence counts as evidence.
@@ -433,6 +469,7 @@ module.exports = {
   objectTo,
   restate,
   missingNamedFiles,
+  lastFailedCommand,
   MIN_NAMED_FILES,
   placeholderBodies,
   placeholderLiterals,

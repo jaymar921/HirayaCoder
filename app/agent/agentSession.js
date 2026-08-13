@@ -1001,6 +1001,11 @@ class AgentSession {
         task,
         changed: changeSet.revision > revisionBefore,
         written: changeSet.list().filter((change) => change.kind !== 'delete'),
+        // Every command this run executed, so a `done` cannot be accepted on top of a
+        // build the model watched fail. Not scoped to `revisionBefore` like the file
+        // checks: a TODO item that leaves the build broken has broken it for every item
+        // after it, and the run should not reach the end still red.
+        commands: changeSet.commands,
         planned: Boolean(opts.planned),
         exists: (relativePath) => this._existsInWorkspace(relativePath),
       });

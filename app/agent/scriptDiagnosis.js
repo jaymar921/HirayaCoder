@@ -37,6 +37,10 @@
  * @property {string} summary    What went wrong, one clause, for logs and the ledger.
  * @property {string} fix        What to do next, addressed to the model.
  * @property {boolean} retryable Whether re-running the identical command could help.
+ * @property {boolean} [fixFirst]
+ *   The failure is in the model's own work and can be repaired by editing a file it
+ *   wrote. The loop must not offer "try something else, or finish" for these — the only
+ *   correct next move is to fix the file and run the same command again.
  */
 
 /**
@@ -90,7 +94,10 @@ const RULES = [
   {
     reason: 'MISSING_DEPENDENCY',
     // A bare specifier: no slash, no backslash, no leading dot. `@scope/name` is the one
-    // package form with a separator, so it is admitted explicitly.
+    // package form with a separator, so it is admitted explicitly. The optional scope
+    // and the name cannot claim the same characters — only the scope may contain `/`,
+    // and it must — so there is one way to split any match.
+    // eslint-disable-next-line security/detect-unsafe-regex -- unambiguous by construction
     pattern: /Cannot find module '(?:@[\w.-]+\/)?[\w.-]+'|Cannot find package|ERR_MODULE_NOT_FOUND|ModuleNotFoundError|is not recognized as an internal or external command.*\bnpx\b/i,
     summary: 'a package the code imports is not installed',
     fix: 'A package is imported but not installed. Run the install command for this project first (npm install), then run this again — do not resend it before installing.',
@@ -101,11 +108,29 @@ const RULES = [
     summary: 'a path in the command or the code does not exist',
     fix: 'Something the command referred to is not there. Use list_files to see what actually exists before naming that path again — do not guess a second path.',
   },
+  // The single most common way a Vite + Tailwind scaffold fails, and it defeated
+  // `gemma4:e4b` on a run where everything else had gone right: `npm create vite` writes
+  // `"type": "module"` into package.json, the model writes `postcss.config.js` with
+  // `module.exports`, and Node refuses to load it. Before this rule the output matched
+  // nothing — a ReferenceError is not a SyntaxError — so the model was handed forty
+  // lines of Vite stack trace with no sentence saying what to do, and it moved on and
+  // reported the app finished.
+  {
+    reason: 'MODULE_SYSTEM',
+    pattern: /(?:module|require|exports) is not defined in ES module scope|Cannot use import statement outside a module|Failed to load PostCSS config|failed to load config from/i,
+    summary: 'a config file uses the wrong module system for this project',
+    fix:
+      'This project is ESM ("type": "module" in package.json), so a config file cannot use `module.exports` or `require`. ' +
+      'Fix the file named in the error: either rewrite it with `export default { … }`, or write the same content to the ' +
+      'same name ending in `.cjs` and delete the `.js` one. Then run the command again.',
+    fixFirst: true,
+  },
   {
     reason: 'SYNTAX_ERROR',
     pattern: /SyntaxError|Unexpected token|Parse failure|error TS\d+|\berror: expected\b|Unterminated|Transform failed/i,
     summary: 'the code does not parse',
     fix: 'The code you wrote does not parse. Read the file at the line named in the error and write the whole file back corrected — do not run the command again first.',
+    fixFirst: true,
   },
   {
     reason: 'PERMISSION',
@@ -165,7 +190,13 @@ function matchRules(result) {
 
   for (const rule of RULES) {
     if (rule.pattern.test(text)) {
-      return { reason: rule.reason, summary: rule.summary, fix: rule.fix, retryable: Boolean(rule.retryable) };
+      return {
+        reason: rule.reason,
+        summary: rule.summary,
+        fix: rule.fix,
+        retryable: Boolean(rule.retryable),
+        fixFirst: Boolean(rule.fixFirst),
+      };
     }
   }
   return null;
@@ -211,7 +242,29 @@ function diagnose(result, opts = {}) {
         };
   }
 
-  return matchRules(result);
+  const matched = matchRules(result);
+  if (matched) return matched;
+
+  // A server that exits is a server that failed, whatever it printed on the way out.
+  // Vite announces "VITE v5.4.21 ready in 2912 ms" and *then* dies on a bad config, so
+  // the most recent line in the output says it worked — which is exactly what a model
+  // reads and believes. Observed on `gemma4:e4b`: it had installed, scaffolded and
+  // written every component correctly, ran `npm run dev`, got an exit code and forty
+  // lines of stack trace matching no rule, and reported the app finished.
+  if (isServerCommand(opts.command || '')) {
+    return {
+      reason: 'SERVER_EXITED',
+      summary: 'the server quit instead of staying up',
+      fix:
+        'That command starts a server, so exiting at all means it failed to start — anything it printed before ' +
+        'dying does not count. Read the error above, open the file it names, fix that file, and run the command ' +
+        'again. Do not move on to anything else until it stays up.',
+      retryable: false,
+      fixFirst: true,
+    };
+  }
+
+  return null;
 }
 
 module.exports = { diagnose, isServerCommand, RULES, SERVER_COMMAND };

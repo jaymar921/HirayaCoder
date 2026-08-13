@@ -403,3 +403,49 @@ describe('completionCheck.missingNamedFiles', () => {
     assert.match(objection, /README\.md/);
   });
 });
+
+describe('completionCheck — a build the model watched fail', () => {
+  const { lastFailedCommand } = require('../../app/agent/completionCheck');
+
+  it('objects to "done" while the last command is still failing', () => {
+    // `gemma4:e4b`, live: install, scaffold and every component correct, `npm run dev`
+    // dead on a two-line config error, and the run reported the app finished.
+    const objection = objectTo({
+      task: 'Build a TODO app with Vite and Tailwind',
+      changed: true,
+      written: [{ path: 'src/App.jsx', after: 'export default function App() { return <div>hi</div>; }' }],
+      commands: [
+        { command: 'npm install', ok: true },
+        { command: 'npm run dev', ok: false },
+      ],
+    });
+
+    assert.match(objection, /npm run dev.*failed/s);
+    assert.match(objection, /run that command again/);
+  });
+
+  it('accepts a run that broke the build and then fixed it', () => {
+    // Objecting here would punish the exact behaviour the check exists to produce.
+    assert.strictEqual(
+      objectTo({
+        task: 'Build a TODO app',
+        changed: true,
+        written: [{ path: 'src/App.jsx', after: 'export default function App() { return <div>hi</div>; }' }],
+        commands: [
+          { command: 'npm run dev', ok: false },
+          { command: 'npm run dev', ok: true },
+        ],
+      }),
+      null
+    );
+  });
+
+  it('says nothing about a run that executed no commands at all', () => {
+    assert.strictEqual(lastFailedCommand([]), null);
+  });
+
+  it('reports only the last command, not the first failure it can find', () => {
+    assert.strictEqual(lastFailedCommand([{ command: 'a', ok: false }, { command: 'b', ok: true }]), null);
+    assert.deepStrictEqual(lastFailedCommand([{ command: 'a', ok: true }, { command: 'b', ok: false }]), { command: 'b' });
+  });
+});

@@ -191,6 +191,19 @@ function nextStepHint(action, result, repeats, activeRoute) {
     );
   }
 
+  // A command that failed because of a file the model itself wrote is the one failure
+  // where "try something else, or finish" is precisely wrong: the observation has
+  // already named the file and the repair, and this hint would talk over it. Seen on
+  // `gemma4:e4b` — a correct build, one bad postcss.config.js, and a run that ended
+  // with the app declared finished rather than with the two-line fix.
+  if (!result.ok && result.detail && result.detail.fixFirst) {
+    return (
+      'That failure is in a file you wrote, and the result above says which file and what is wrong with it. ' +
+      'Open it, write it back corrected, and then run the same command again. Do not start anything else, ' +
+      'and do not finish while it is still failing.'
+    );
+  }
+
   // Every other failure with no alternative offered gets retried verbatim until the
   // budget is gone, so correct it immediately rather than waiting for a repeat.
   if (!result.ok) {

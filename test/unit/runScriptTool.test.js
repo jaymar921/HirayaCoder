@@ -242,6 +242,55 @@ describe('telling a command that finishes from one that does not', () => {
   });
 });
 
+describe('a build broken by the model\'s own config', () => {
+  // Verbatim from a live `gemma4:e4b` run: `npm install` worked, every component was
+  // written correctly, and then `npm run dev` died in 1.3s on a postcss.config.js that
+  // used `module.exports` in a project `npm create vite` had marked "type": "module".
+  const VITE_ESM_FAILURE =
+    'VITE v5.4.21  ready in 2912 ms\n' +
+    '[Failed to load PostCSS config: Failed to load PostCSS config (searchPath: F:/app): ' +
+    '[ReferenceError] module is not defined in ES module scope\n' +
+    "This file is being treated as an ES module because it has a '.js' file extension and " +
+    'package.json contains "type": "module".\n' +
+    '    at file:///F:/app/postcss.config.js:1:1]';
+
+  it('names the module system, which matched no rule before', async () => {
+    const { context } = runningContext([{ stderr: VITE_ESM_FAILURE, code: 1 }]);
+    const result = await runScript({ command: 'npm run dev' }, context);
+
+    assert.strictEqual(result.detail.reason, 'MODULE_SYSTEM');
+    assert.match(result.observation, /export default|\.cjs/);
+  });
+
+  it('tells the loop this is the model\'s to fix, not to walk away from', async () => {
+    const { context } = runningContext([{ stderr: VITE_ESM_FAILURE, code: 1 }]);
+    const result = await runScript({ command: 'npm run dev' }, context);
+
+    assert.strictEqual(result.detail.fixFirst, true);
+    assert.match(result.observation, /run the command again/i);
+  });
+
+  it('calls a server that exited a failure, whatever it printed on the way out', async () => {
+    // Vite says "ready in 2912 ms" and then dies, so the most recent line in the output
+    // is the one that says it worked.
+    const { context } = runningContext([{ stdout: 'VITE v5.4.21  ready in 2912 ms', stderr: 'something unrecognised', code: 1 }]);
+    const result = await runScript({ command: 'npm run dev' }, context);
+
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.detail.reason, 'SERVER_EXITED');
+    assert.match(result.observation, /exiting at all means it failed to start/i);
+  });
+
+  it('leaves an ordinary command with no recognisable error undiagnosed', async () => {
+    // The fallback is about servers specifically. A build that fails in a way nothing
+    // here understands must not be given an invented explanation.
+    const { context } = runningContext([{ stderr: 'something unrecognised', code: 1 }]);
+    const result = await runScript({ command: 'npm run build' }, context);
+
+    assert.strictEqual(result.detail.reason, undefined);
+  });
+});
+
 describe('a command that never exits', () => {
   it('calls a dev server that stayed up a success', async () => {
     // Every model in the v0.5.3 round burned its full two-minute script budget here and
