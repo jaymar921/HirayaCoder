@@ -128,6 +128,17 @@ pre {
   cursor: default;
 }
 
+/*
+  A `.control` that is a toggle rather than a menu. Its caption already carries the
+  state in words ("Steps: On"), so this is reinforcement, not the only signal — which
+  is what keeps it readable when the theme's button colour is low-contrast.
+*/
+.control[aria-pressed='true'] {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  border-color: var(--vscode-button-background);
+}
+
 select.control {
   max-width: 220px;
 }

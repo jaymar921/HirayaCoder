@@ -50,6 +50,21 @@
         <button type="button" data-capacity="high" aria-pressed="false">High</button>
       </div>
 
+      <!--
+        Experimental, and labelled as such in its tooltip rather than its caption: the
+        header is already dense, and a caption long enough to explain the feature would
+        crowd out the mode selector on a narrow panel.
+      -->
+      <button
+        class="control"
+        id="step-sessions"
+        type="button"
+        aria-pressed="false"
+        title="Experimental: run each TODO item as its own briefed step"
+      >
+        Steps: Off
+      </button>
+
       <button class="control" id="permissions" type="button" aria-haspopup="true">
         <span id="perm-summary">Edits: Approve · Scripts: Approve</span>
       </button>

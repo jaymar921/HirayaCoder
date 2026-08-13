@@ -67,13 +67,49 @@ const MUTATING_VERB =
   /\b(?:add|create|write|implement|update|edit|change|fix|refactor|delete|remove|rename|move|install|generate|build|compile|convert|migrate|rewrite|replace|scaffold|make)\b/i;
 
 /**
+ * The verbs a *planner* reaches for, on top of the ones a user types.
+ *
+ * `MUTATING_VERB` was written against messages people send, and it is also applied to
+ * text no person wrote: `judgeItem` passes each TODO item through `requiresChange` to
+ * decide whether "done, nothing changed" is a legitimate answer for that item. Those
+ * two vocabularies are not the same, and the gap had teeth.
+ *
+ * Measured on the React + Vite + Tailwind benchmark, `qwen3.5:4b` planned six items,
+ * two of which were "Configure exact folder structure including components, hooks,
+ * assets, and config files" and "Assemble App.jsx layout with glassmorphism styling,
+ * floating circles, and responsive design". Neither `configure` nor `assemble` was in
+ * the list, so neither item was ever challenged, and both were reported to the user as
+ * `done (no files changed)` — including the one item whose entire job was App.jsx,
+ * which ended the run still holding Vite's scaffolded counter demo.
+ *
+ * ## Why this is a separate set rather than a wider one
+ *
+ * Half of these are ordinary words in a question. "Explain how the router **handles**
+ * a request", "what does this component **render**", "does it **support** YAML" are
+ * all things people ask, and every one of them finishes correctly having written
+ * nothing. Folding these into `MUTATING_VERB` would fire the completion check on the
+ * cases it is most likely to be wrong about — the exact mistake the note above warns
+ * against — so they only count where the text is known not to be a question: an item
+ * that `dropNonDeliverables` has already passed as a piece of work to deliver.
+ */
+const PLANNED_DELIVERABLE_VERB =
+  /\b(?:configure|assemble|compose|construct|wire(?:\s+up)?|hook\s+up|set[\s-]?up|extract|split|extend|introduce|enforce|apply|style|persist|initiali[sz]e|populate|render|support|handle|integrate|connect|expose|export|import|declare|define)\b/i;
+
+/**
  * Does this request only count as finished if something on disk changed?
  *
  * @param {string} text
+ * @param {object} [opts]
+ * @param {boolean} [opts.planned]  True when `text` is a TODO item the planner wrote
+ *   and `dropNonDeliverables` kept — never a message the user typed. Widens the
+ *   vocabulary to the words a model uses to describe producing a file, which are
+ *   ambiguous in a question and unambiguous in a deliverable.
  * @returns {boolean}
  */
-function requiresChange(text) {
-  return MUTATING_VERB.test(String(text || ''));
+function requiresChange(text, opts = {}) {
+  const subject = String(text || '');
+  if (MUTATING_VERB.test(subject)) return true;
+  return Boolean(opts.planned) && PLANNED_DELIVERABLE_VERB.test(subject);
 }
 
 /** A filename, an extension, or a path — a message about the project's contents. */
@@ -315,6 +351,7 @@ module.exports = {
   isGreetingWithName,
   WORK_VERB,
   MUTATING_VERB,
+  PLANNED_DELIVERABLE_VERB,
   NAMES_A_FILE,
   SOCIAL_WORDS,
   ASSENT_WORDS,

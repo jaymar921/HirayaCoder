@@ -81,6 +81,15 @@ class ChatTab {
     this.pendingImages = [];
     this.mode = this.app.settings.mode || 'agent';
     this.thinkingCapacity = this.app.settings.thinkingCapacity || 'medium';
+    /**
+     * Experimental step sessions, per tab.
+     *
+     * Seeded from the setting and then owned by the tab, like `mode` and
+     * `thinkingCapacity`: the header toggle changes this conversation, not the user's
+     * global preference. Someone trying the feature on one task should not find it on
+     * in every other window.
+     */
+    this.stepSessions = this.app.settings.stepSessions === true;
   }
 
   /** Create or reveal the panel. */
@@ -167,6 +176,10 @@ class ChatTab {
           ? message.capacity
           : 'medium';
         return this._postStatus();
+      case 'step-sessions':
+        this.stepSessions = message.enabled === true;
+        logger.info(`Step sessions ${this.stepSessions ? 'on' : 'off'} for session ${this.sessionId}.`);
+        return this._postStatus();
       case 'model':
         return this._switchModel(String(message.model || ''));
       case 'permissions':
@@ -202,6 +215,7 @@ class ChatTab {
       sessionId: this.sessionId,
       mode: this.mode,
       thinkingCapacity: this.thinkingCapacity,
+      stepSessions: this.stepSessions,
       permissions: this.app.modes.snapshot(),
       models,
       activeModel: this.app.activeModel,
@@ -233,9 +247,14 @@ class ChatTab {
         ? `~${Math.round(budgets.promptTokenTarget / 100) / 10}k ctx`
         : `~${budgets.promptTokenTarget} ctx`;
 
+    // The step-session note only appears where it can actually apply. On a model that
+    // cannot hold a TODO list there is no list to run step-wise, and saying "step
+    // sessions" under a model that will never use them is worse than saying nothing.
+    const steps = this.stepSessions && capability.canPlanTodos ? ' · step sessions' : '';
+
     this._post({
       type: 'status',
-      text: `${budgets.maxSteps} steps · ${context}${capability.canPlanTodos ? ' · TODO lists' : ''}`,
+      text: `${budgets.maxSteps} steps · ${context}${capability.canPlanTodos ? ' · TODO lists' : ''}${steps}`,
     });
   }
 
@@ -461,6 +480,7 @@ class ChatTab {
       // about this conversation.
       ledger: this.app.ledger,
       adaptation: this.app.settings.adaptation,
+      stepSessions: this.stepSessions,
       images: images.map((image) => image.base64),
     });
 
@@ -491,6 +511,10 @@ class ChatTab {
       this._post({ type: 'error', message });
     } finally {
       this.session = null;
+      // The status line is used for in-flight notes as well as the budget summary — a
+      // step retry writes into it — so it is put back once the turn is over. Otherwise
+      // "Retrying step 1…" sits under the composer for the rest of the conversation.
+      this._postStatus();
     }
   }
 
@@ -516,6 +540,14 @@ class ChatTab {
       case 'todo-item':
       case 'todo-item-done':
         return event.items ? this._post({ type: 'todo-progress', items: event.items }) : undefined;
+      // A step being run a second time looks identical to one running slowly — same
+      // spinner, same trace, minutes apart on CPU inference. Saying why turns an
+      // apparent hang into visible progress.
+      case 'todo-item-retry':
+        return this._post({
+          type: 'status',
+          text: `Retrying step ${event.index}: ${String(event.reason || 'it did not land').slice(0, 120)}`,
+        });
       default:
         return undefined;
     }

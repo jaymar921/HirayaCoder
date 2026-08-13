@@ -5,7 +5,231 @@ All notable changes to HirayaCoder are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — 0.4.0
+## [0.5.0] — 2026-08-13
+
+Everything here comes out of one evaluation **on Machine A** — the CPU-only laptop the
+design is shaped around: five models — `gemma4:e4b`, `ornith:9b`,
+`qwen3.5:4b`, `lfm2:latest`, `gemma2:latest` — given the same prompt to build a TODO app
+with React, Vite and Tailwind, in a workspace that already held the Vite scaffold. None
+of them succeeded, and they all failed the same way: components got written, and
+`src/App.jsx` ended every single run still holding the scaffolded counter demo. Nothing
+was ever wired to anything.
+
+The transcripts explain why, and it is mostly not the models.
+
+### Fixed — an item that edits a file an earlier item created was scored as doing nothing
+
+`judgeItem` compared `changeSet.size()` before and after each TODO item. A `ChangeSet` is
+keyed by path, so an item that *edits* a file an earlier item created leaves the map
+exactly the same size. The item was therefore judged to have changed nothing, its `done`
+was challenged, and a step that wrote a real file was reported as **"it asked for a file
+and none was written"**.
+
+That is not an edge case, it is the shape of every plan worth making: scaffold `App.jsx`,
+then assemble `App.jsx`. The item most likely to be scored as a failure was the one doing
+the work the user cared about. `ChangeSet` now carries a monotonic `revision` and the
+comparison counts records rather than distinct paths.
+
+### Fixed — "Assemble App.jsx" was never checked, because `assemble` was not a verb
+
+The completion check only challenges a `done` that changed nothing when the request
+"requires a change", which was decided by a list of verbs written against **messages
+people type**. It was also being applied to text no person wrote: the TODO items the
+planner produces.
+
+`qwen3.5:4b` planned six items, two of which were *"Configure exact folder structure…"*
+and *"Assemble App.jsx layout with glassmorphism styling…"*. Neither `configure` nor
+`assemble` was in the list, so neither item was ever challenged, and both were reported
+to the user as `done (no files changed)` — including the one item whose entire job was
+`App.jsx`.
+
+The planner's vocabulary now counts, but only for planner-written items:
+`requiresChange(text, { planned: true })`. Folding these into the main list would have
+been wrong in the other direction — "explain how the router **handles** a request" and
+"what does this component **render**" are ordinary questions that finish correctly having
+written nothing, and firing the check on them is the exact mistake the narrow list exists
+to avoid.
+
+### Fixed — the objection told the model it had failed without telling it what to do
+
+When a `done` is challenged, the model has typically spent a dozen turns with file
+contents filling its context. Told only that "nothing has changed", both `qwen3.5:4b` and
+`ornith:9b` replied by asking **the user** what to work on — with the request still
+sitting in the first message of the same conversation. The objection now restates the ask
+verbatim (head-truncated for a long spec, since a request says what it wants first) and
+says outright not to ask what to work on.
+
+### Added — a read carries what the file imports
+
+Reading `App.jsx` told a model that a hook was imported and nothing about what it
+returned, so the next thing it had to do was spend a turn reading it — then another, and
+another, once per import. On CPU inference that is minutes of orientation before any work
+starts, and the models never finished paying it: `qwen3.5:4b` spent **all 44** of its
+steps on `read_file` and `list_files` and wrote nothing at all.
+
+`read_file` now resolves the file's local imports and includes them, up to five files and
+40% of the observation budget, behind the same permission gate as any other read.
+`core/importGraph` handles ES imports, `require`, dynamic `import()`, and CSS `@import`,
+plus the conventional `@/` and `~/` source aliases.
+
+It is deliberately not a module resolver: a specifier that does not resolve to a real
+file inside the workspace is dropped rather than guessed at, and depth is one, because
+two hops from `App.jsx` reaches every leaf of a small React app and spends the whole
+budget on files nobody asked about.
+
+### Added — step sessions (experimental, off by default)
+
+A toggle in the chat header, and `hirayacoder.experimental.stepSessions`. It changes what
+a TODO item is run as, in three ways:
+
+**Each step gets a brief instead of the whole request.** `agent/stepBrief` composes the
+step's own item, what the earlier steps *actually wrote*, and the files the step names.
+Until now the only thing crossing between items was the checklist, and "item 3 is done"
+is not the fact item 6 needs — "item 3 wrote `src/hooks/useTodos.js`" is. The original
+request is still there, explicitly demoted to background, because a model handed a
+5,000-character spec and one item does the spec.
+
+**Each step is checked against its own text before it may close.** `agent/stepGuard`
+compares what changed on disk against the files the step named. `gemma2:latest` edited
+`vite.config.js` and `README.md` while working a list about `useTodos`, `TodoInput` and
+`App.jsx`, and every one of those items was scored as having changed something. Changing
+*a* file is not the same as changing *this step's* file.
+
+**A step that fails gets one retry, and then the run stops.** The retry is given the
+diagnosis — what was asked, what actually happened, which file to write — because a retry
+that repeats the first attempt is a wasted budget. One retry and no more: a model that
+cannot produce the work will not be argued into it. If the retry fails too, the run stops
+and prints a workaround naming the cause, the steps it did not attempt, and what to try
+instead. Continuing is the worse option and session 5 shows it — the scaffold step failed,
+the remaining five ran anyway against a project that had never been created, and the
+report was a wall of missing-path errors with no statement of which one mattered.
+
+### Added — memory recalled by subject, not only by recency
+
+`MemoryStore.readRelevant` selects the notes that bear on a particular piece of work,
+then fills the remainder of the window by recency — so it is never worse than the old
+behaviour, and much better in the case that matters. The step that had to assemble
+`App.jsx` ran sixth, by which point the notes about `useTodos.js` and `TodoInput.jsx`
+were the oldest in the file and the first to fall outside a five-entry window. The note
+that survived was about the README.
+
+Matching is path-aware: an item saying `useTodos` finds a note saying
+`src/hooks/useTodos.js`, which on whole-token comparison share nothing at all. In step
+mode the system prompt is rebuilt per step so each one gets its own recall, rather than
+six steps sharing the single block built before the list existed.
+
+### Added — a written file whose imports point at nothing
+
+Found by the first benchmark run that got far enough to expose it. With step sessions on,
+`qwen3.5:4b` rewrote `App.jsx` for the first time — the thing five models had never
+done — and wrote, from inside `src/App.jsx`:
+
+    import { useTodos } from '../hooks/useTodos.js';
+    import { TodoInput } from '../components/TodoInput.jsx';
+
+Both climb one level too many. The right files, the wrong route. Every guard in the
+project passed it: the file is large, its brackets balance, it exports, no body is a
+placeholder, the change set grew, and the file the step named is the file that changed.
+The app does not build, and the run was reported as four of four items complete.
+
+`importGraph.brokenImports` resolves a written file's *relative* specifiers — bare
+packages are a question about `node_modules`, not about what the model wrote — and
+`write_file` appends the failure to its own observation, with the corrected path where
+exactly one file in the workspace has that name:
+
+    WARNING: src/App.jsx imports 2 file(s) that are not there, so it cannot run:
+    - "../hooks/useTodos.js" does not exist. From src/App.jsx the correct path is "./hooks/useTodos.js".
+
+Resolution is by `existsExactly`, not `fs.stat`, and that distinction is a bug in its own
+right. Windows and macOS both resolve `./hooks/usetodos.js` to `useTodos.js` and report
+success — so a case-wrong import builds locally and fails on Linux CI or a Linux deploy,
+and the guard would have been quietly wrong in the one direction that ships a broken
+build. Every path segment is now compared byte-for-byte against what `readdir` reports,
+since that returns the real spelling however the lookup was cased. A wrong-cased directory
+counts too: `./Hooks/useTodos.js` is just as broken on Linux as `./hooks/usetodos.js`.
+
+Appended, not refused. The content is otherwise fine, and throwing away a whole file over
+a path is how a small model ends up producing a truncated one on the rewrite. `stepGuard`
+then reads the recorded result — no second trip to disk, and no disagreement with what the
+model was told — and fails the step, so the retry fires with an instruction to fix the
+paths rather than start over. A step that wrote a broken file and then corrected it counts
+as corrected: only the newest write per path is considered.
+
+### Added — `tools/bench-steps.js`
+
+The live benchmark for this failure. `bench-agent.js` asks whether a model can edit a
+project and `bench-build.js` whether it can create one; neither reproduces a project that
+already exists plus a multi-item request whose last item must import what the earlier ones
+wrote. The fixture is the Vite scaffold, and the grade is one question the harness answers
+itself: is `App.jsx` different, and does it import what the run built? The model's summary
+is printed and counts for nothing.
+
+Its first version asked only whether `App.jsx` *named* those imports on an import line,
+and that is too weak by exactly the margin that matters — it passed the run whose paths
+all pointed at nothing, which is how the bug above survived a commit. It now resolves each
+specifier through `importGraph` and prints the import lines verbatim, so "attempted the
+wiring and got the path wrong" reads differently from "did not attempt it".
+
+`--machine` is required, as it is on `bench-build.js`. This task runs 20+ minutes on
+Machine A and a fraction of that on C, so a result filed without its machine cannot be
+compared with anything.
+
+### Note — the default request timeout is too low on Machine A
+
+Not changed, but worth knowing before it bites someone. `hirayacoder.ollama.requestTimeoutMs`
+defaults to 300000, and on the CPU-only laptop generating a single `App.jsx` with four
+imports exceeded it: `Ollama request to /api/chat timed out after 300000ms`. That is an
+ordinary file on the machine this project exists for. Raise it for real work on a laptop —
+the benchmark runs use 900000. The default is left alone because it is also what makes a
+genuinely hung request noticeable on a fast machine, and Machines B and C never approach
+it. Three machines have now answered this and they agree. See `doc/MODELS.md`.
+
+### Measured afterwards — step sessions do not improve correctness, and cost 17%
+
+Recorded here rather than quietly left out, because it is a result about the largest
+feature in this release and it did not go the way its design predicted.
+
+33 runs of the wiring benchmark across two machines, paired on the same commit with the
+toggle on and off:
+
+| | Fully wired | |
+|---|---|---|
+| Machine C, `qwen3.5:4b`, n=10 each | **8/10** with · **7/10** without | Fisher's exact p ≈ 1.0 |
+| Machine B, Tier A models, n=6 each | **3/6** with · **5/6** without | Fisher's exact p ≈ 0.55 |
+
+Two machines, disagreeing in *direction*, neither significantly. That is what no effect
+looks like, and no winner should be read into either. What is significant is the cost:
+Machine B's `nosteps` arm was faster in **all eight pairs**, mean 255.0s against 297.6s
+(sign test p ≈ 0.008) — about **17% more wall clock**, which is exactly what an extra
+planning call plus one loop per item should cost.
+
+**So the three bug fixes above are what fixed the original failure, not step sessions.**
+The v0.4.0 behaviour left `App.jsx` untouched in five sessions out of five; the *control*
+arm of these runs — step sessions off, same release — wires it in 7 of 10 on C and 5 of 6
+on B, and Machine A's motivating failure did not reproduce on B at all.
+
+The feature stays, off by default and labelled experimental, because it buys something the
+control arm does not: a step checked against its own text, and a run that stops and
+explains itself rather than cascading through steps that depend on a failed one. Machine C
+watched that happen — the import guard fired on a genuinely wrong path, the retry failed to
+fix it, and the run ended `3 of 4 completed` with the reason attached, where the same model
+in an unguarded run reported `4 of 4` for an app that still had the counter demo in it. It
+is honesty, not capability, and it is priced at 17%.
+
+### Fixed after the fact — the benchmark collator scored one import out of three as success
+
+Found by Machine C hand-counting 25 runs. `bench-steps-summary.js` used
+`wired.length > 0` while its own comment claimed "two out of three is a broken app", so a
+run that imported the components but never the hook — state written and unused — passed.
+It inflated the *control* arm specifically, which is the arm that makes the feature under
+test look bad, and the reading it produced was "step sessions made things worse" from data
+that says no such thing. The bar now requires all three of the task's imports and travels
+in each record as `graded.expected`; `benchStepsSummary.test.js` pins it.
+
+Re-grading cost nothing because the per-run JSON is the source of truth — the corrected
+numbers above come from re-scoring files written before anyone knew the bar was wrong.
+
+## [0.4.0]
 
 Everything here comes out of one evaluation session: six conversations across two
 workspaces on a MacBook, building the same small TODO app in Java, then Python, then

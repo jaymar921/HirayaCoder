@@ -27,6 +27,7 @@ const fs = require('fs');
 const path = require('path');
 
 const { detectEol, applyEol, toLf } = require('../../utils/platform');
+const importGraph = require('../../core/importGraph');
 
 /** Below this fraction of the original size, a replacement is treated as truncated. */
 const SUSPICIOUS_SHRINK_RATIO = 0.2;
@@ -584,14 +585,77 @@ module.exports = async function writeFile(args, context) {
     });
   }
 
+  const written = isNew
+    ? `Created ${target.relative} (${toLf(args.code).split('\n').length} lines).`
+    : `Updated ${target.relative} (+${change.added} / -${change.removed} lines).`;
+
+  const broken = await checkImports(nextContent, target.relative, context);
+
   return {
     ok: true,
-    observation: isNew
-      ? `Created ${target.relative} (${toLf(args.code).split('\n').length} lines).`
-      : `Updated ${target.relative} (+${change.added} / -${change.removed} lines).`,
-    detail: { path: target.relative, isNew, ...change },
+    observation: written + describeBrokenImports(broken, target.relative),
+    // Carried so `stepGuard` can fail a step on it without needing the filesystem —
+    // a file whose imports point at nothing is not the work the step was asked for.
+    detail: { path: target.relative, isNew, brokenImports: broken, ...change },
   };
 };
+
+/**
+ * Relative imports in the file just written that reach nothing.
+ *
+ * Best-effort and never fatal: the file is already on disk, and a failure to analyse it
+ * must not turn a successful write into an error.
+ *
+ * @param {string} content
+ * @param {string} relative
+ * @param {import('../toolRegistry').ToolContext} context
+ * @returns {Promise<Array<{specifier: string, suggestion: string | null}>>}
+ */
+async function checkImports(content, relative, context) {
+  if (!context.workspaceRoot) return [];
+  try {
+    return await importGraph.brokenImports({ content, path: relative, workspaceRoot: context.workspaceRoot });
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The warning to append to a successful write whose imports do not resolve.
+ *
+ * Appended rather than made a refusal, deliberately. The content is otherwise fine and
+ * throwing it away would cost the model the whole file over a path — and on a small
+ * model a rewrite is where truncation and placeholder bodies come from. Telling it
+ * plainly, at the moment it can still act, is both cheaper and more likely to work.
+ *
+ * The corrected path is given outright where there is exactly one candidate. The models
+ * that get this wrong get it wrong by *routing*, not by naming: measured on the React
+ * benchmark, `qwen3.5:4b` wrote `../hooks/useTodos.js` from inside `src/App.jsx` — the
+ * right file, one level too high.
+ *
+ * @param {Array<{specifier: string, suggestion: string | null}>} broken
+ * @param {string} relative
+ * @returns {string}
+ */
+function describeBrokenImports(broken, relative) {
+  if (!broken || broken.length === 0) return '';
+
+  const lines = broken.map((entry) =>
+    entry.suggestion
+      ? `- "${entry.specifier}" does not exist. From ${relative} the correct path is "${entry.suggestion}".`
+      : `- "${entry.specifier}" does not exist, and no file with that name was found.`
+  );
+
+  return (
+    `\n\nWARNING: ${relative} imports ${broken.length} file(s) that are not there, so it cannot run:\n` +
+    `${lines.join('\n')}\n` +
+    'Paths are relative to the file doing the importing, not to the project root. ' +
+    `Send write_file for ${relative} again with the corrected import path(s) — the complete file, every line.`
+  );
+}
+
+module.exports.checkImports = checkImports;
+module.exports.describeBrokenImports = describeBrokenImports;
 
 module.exports.summarizeChange = summarizeChange;
 module.exports.countCodeLines = countCodeLines;

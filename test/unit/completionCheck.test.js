@@ -288,4 +288,39 @@ describe('completionCheck.inertControls', () => {
       null
     );
   });
+
+  describe('restating the ask', () => {
+    it('repeats what was asked, rather than referring to it', () => {
+      // Both qwen3.5:4b and ornith:9b answered the previous wording by asking the *user*
+      // what to work on, with the request still in the first message of the same
+      // conversation. A model that has lost the ask cannot act on being told it did not
+      // do it.
+      const objection = objectTo({ task: 'Write src/App.jsx with the todo layout', changed: false, written: [] });
+
+      assert.match(objection, /What you were asked to do: Write src\/App\.jsx with the todo layout/);
+      assert.match(objection, /Do not ask what to work on/);
+    });
+
+    it('cuts a long request from the head, where the ask is', () => {
+      const spec = `Build a TODO app. ${'Every requirement restated at length. '.repeat(50)}`;
+      const objection = objectTo({ task: spec, changed: false, written: [] });
+
+      assert.match(objection, /What you were asked to do: Build a TODO app\./);
+      assert.ok(objection.length < 1200, 'the whole spec was pasted into the objection');
+      assert.match(objection, /…/);
+    });
+
+    it('says nothing for a request that legitimately changes nothing', () => {
+      assert.strictEqual(objectTo({ task: 'explain the auth flow', changed: false, written: [] }), null);
+    });
+
+    it('challenges a planner-written item that a typed message would not have been', () => {
+      const item = 'Assemble App.jsx layout with glassmorphism styling';
+      assert.strictEqual(objectTo({ task: item, changed: false, written: [] }), null);
+      assert.match(
+        objectTo({ task: item, changed: false, written: [], planned: true }),
+        /nothing in the project has actually changed/
+      );
+    });
+  });
 });

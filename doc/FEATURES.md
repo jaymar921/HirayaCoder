@@ -170,6 +170,52 @@ Non-deliverable items ("Read the file", "Save changes", invented verification st
 filtered out, and a request that turns out to be a single change runs as one pass
 instead of several.
 
+### Step sessions (experimental)
+
+Off by default. Toggle it per chat from **Steps** in the header, or set
+`hirayacoder.experimental.stepSessions`.
+
+With it on, each item is run as a briefed step rather than as the whole request with one
+item highlighted. Three things change:
+
+- **The step is told what the earlier steps produced**, not merely that they finished.
+  "Item 3 is done" is not the fact item 6 needs; "item 3 wrote `src/hooks/useTodos.js`"
+  is. The original request is still included, explicitly as background.
+- **The step is checked against its own text before it may close.** What changed on disk
+  is compared with the files the step named, so an item about `App.jsx` that edited
+  `vite.config.js` is reported as not done rather than as done.
+- **A step that fails gets one retry, and then the run stops.** The retry is given the
+  diagnosis, so it differs from the first attempt. If it fails too, the run stops and
+  prints what went wrong, which steps it did not attempt, and what to try instead —
+  rather than running the rest against a project that does not have what they need.
+
+A step also counts as failed when the file it wrote imports something that is not there.
+That check runs on every write regardless of the toggle: `write_file` resolves the
+relative imports of what it just wrote and, when one reaches nothing, says so and gives
+the path that would work. The file is still written — the content is usually right and
+only the route is wrong, and discarding it would cost more than it saves.
+
+**Leave it off unless you have a reason.** It was measured on three machines after it
+shipped, and the result did not go the way the feature's author expected: across 33 runs
+of the wiring benchmark, step sessions made **no measurable difference to correctness** —
+Machine C saw 8/10 against 7/10 without, Machine B saw the two arms disagree in the
+opposite direction, and neither gap is significant. What *is* significant is the cost:
+Machine B's `nosteps` arm was faster in **all eight pairs**, about **17% less wall clock**,
+which is exactly what an extra planning call plus one loop per item should cost.
+
+The three bug fixes shipped alongside it in 0.5.0 are what fixed the original failure. Step
+sessions are worth turning on when you want the stricter reporting — a step checked against
+its own text, and a run that stops and explains itself instead of cascading — not because
+they make the model more likely to succeed.
+
+### Memory recalled by subject
+
+Session notes are normally recalled by recency. In step mode each step instead recalls
+the notes that bear on *it* — matched on the files and commands they name, path-aware, so
+a step saying `useTodos` finds a note saying `src/hooks/useTodos.js` — and fills whatever
+is left of the window by recency. It is never worse than plain recency, and much better
+for a step whose dependency was established six items ago.
+
 ---
 
 ## When it feels slow, or stops answering
@@ -314,6 +360,7 @@ where bare JSON mode managed **0 out of 6**.
 | `hirayacoder.scripts.allowedBinaries` | `[]` | Extends the built-in allow-list. |
 | `hirayacoder.scripts.timeoutMs` | `120000` | |
 | `hirayacoder.security.protectedPaths` | `[".git", ".hirayacoder"]` | |
+| `hirayacoder.experimental.stepSessions` | `false` | Run each TODO item as a briefed, verified step. See above. |
 | `hirayacoder.inlineCompletion.enabled` | `false` | |
 | `hirayacoder.statusBar.enabled` | `true` | Connection, model, tier. |
 | `hirayacoder.logLevel` | `info` | **Show Logs** opens the channel. Local only. |

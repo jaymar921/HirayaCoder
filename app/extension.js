@@ -78,6 +78,7 @@ let lastActiveSessionId = null;
  * @property {{autoEdit: boolean, autoApproveScripts: boolean}} permissions
  * @property {boolean} statusBarEnabled
  * @property {{enabled: boolean, hintThreshold: number}} adaptation
+ * @property {boolean} stepSessions   Experimental; see `agent/stepBrief`.
  * @property {import('./utils/logger').LogLevel} logLevel
  */
 
@@ -111,6 +112,7 @@ function readSettings() {
       enabled: cfg.get('adaptation.enabled', true),
       hintThreshold: cfg.get('adaptation.hintThreshold', earnedHints.DEFAULT_THRESHOLD),
     },
+    stepSessions: cfg.get('experimental.stepSessions', false),
     logLevel: cfg.get('logLevel', 'info'),
   };
 }

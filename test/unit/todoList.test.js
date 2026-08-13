@@ -25,6 +25,33 @@ describe('TodoList', () => {
     assert.strictEqual(todos.position(), 2);
   });
 
+  it('records which files an item wrote, for the items that come after it', () => {
+    // The checklist is the only thing that crosses between items, and "item 1 is done"
+    // is not the fact item 6 needs — "item 1 wrote src/hooks/useTodos.js" is.
+    const todos = new TodoList(['Create the hook', 'Assemble App.jsx']);
+    todos.finishCurrent('done', '', 2, { changedPaths: ['src/hooks/useTodos.js'], attempts: 2 });
+
+    assert.deepStrictEqual(todos.items[0].changedPaths, ['src/hooks/useTodos.js']);
+    assert.strictEqual(todos.items[0].attempts, 2);
+  });
+
+  it('leaves changedPaths unset for an item that wrote nothing', () => {
+    const todos = new TodoList(['One', 'Two']);
+    todos.finishCurrent('failed', 'nothing was written', 1, { changedPaths: [] });
+    assert.strictEqual(todos.items[0].changedPaths, undefined);
+  });
+
+  it('lists what has not been attempted, before it is skipped', () => {
+    const todos = new TodoList(['One', 'Two', 'Three']);
+    todos.finishCurrent('done');
+
+    assert.deepStrictEqual(todos.remaining(), ['Three'], 'the active item was counted as unattempted');
+    assert.deepStrictEqual(todos.remaining({ includeActive: true }), ['Two', 'Three']);
+
+    todos.skipRemaining('an earlier step failed');
+    assert.deepStrictEqual(todos.remaining(), [], 'skipped items still read as pending');
+  });
+
   it('keeps going after an item fails', () => {
     // A failed item must not abandon the rest of the user's request.
     const todos = new TodoList(['One', 'Two']);

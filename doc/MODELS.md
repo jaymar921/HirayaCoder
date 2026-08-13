@@ -315,6 +315,282 @@ comment-out refusal, the truncation refusal, and the `module.exports` refusal �
 script allow-list blocking `rm`, and the completion judge catching two models that
 claimed a declined delete had succeeded.
 
+### Machine A — wiring an existing project (`bench-steps.js`, 0.5.0)
+
+The React + Vite + Tailwind task, on the machine the design is shaped around. Every run
+below is `qwen3.5:4b` (4.7B, Tier A, native tools) against the Vite scaffold, graded by
+the harness: is `App.jsx` different, and do its imports resolve to real files?
+
+| Run | Steps | Result | Wall clock |
+|---|---|---|---|
+| v0.4.0 behaviour (five models, five sessions) | off | **`App.jsx` never touched** in any of them | — |
+| 1 | on | `App.jsx` rewritten, counter gone; imports not resolved by the grader at the time | 1450s (24.2 min) |
+| 2 | on | `App.jsx` rewritten, counter gone, **imports all broken** (`../hooks/…` from `src/`) | 738s (12.3 min) |
+| 3 | on | `App.jsx` rewritten, counter gone, **all three imports resolve** | 1278s (21.3 min) |
+| 4 | on | `App.jsx` rewritten, counter gone, **all three imports resolve** | 781s (13.0 min) |
+
+Run 2 is why `write_file` now checks a written file's imports. Run 3 completed only
+because its step 4 timed out and the retry caught it — see below.
+
+**What four runs do and do not establish.** Three of four produced a wired app and one did
+not, on the same fixture and the same model. That is a rate estimated from four samples,
+which is barely an estimate — and the one broken run came *before* the import guard
+existed, so it cannot be used to argue the guard fixed anything. The guard is covered by
+sixteen unit tests built from run 2's verbatim output and **has not yet been observed
+firing in a live run**. Machine C is asked to supply the repeat count that would settle
+both; see `setup/FOLLOWUP-PROMPT-MACHINE-C.md`.
+
+**The control is missing, and Machine B is meant to supply it.** The comparison above is
+0.4.0 code against 0.5.0 code, and those differ by three bug fixes as well as by step
+sessions — so it supports "0.5.0 wires the app where 0.4.0 never did" and *not* "step
+sessions are what did it". At 20+ minutes a run, the paired `steps`/`nosteps` control was
+unaffordable here. Handoff instructions: `setup/FOLLOWUP-PROMPT-MACHINE-B.md`.
+
+**The shipped request timeout is too low for this machine.** `hirayacoder.ollama.requestTimeoutMs`
+defaults to 300000, and on Machine A generating one `App.jsx` with four imports exceeded
+it outright:
+
+    [ERROR] Native tool turn failed: Ollama request to /api/chat timed out after 300000ms.
+
+That is not a pathological prompt — it is a single file of ordinary size, on the machine
+this project exists for. Anyone doing real work on a laptop should raise it; **900000
+(15 minutes) is the value these runs use**. The default is left alone because it is also
+the value at which a genuinely hung request is noticed on a fast machine, and B and C
+never approach it.
+
+It is worth stating what saved run 3: the timeout produced a step that wrote nothing, the
+step guard failed it, and the retry ran it again and succeeded. Under 0.4.0 that item
+would simply have ended empty. A slow machine and a step retry turn out to interact well.
+
+### Machine C — the same task, repeated (`bench-steps.js`, 0.5.0)
+
+Machine A could afford four runs and got three outcomes. This machine runs the wiring task
+in **30–65 seconds**, so it was asked for the thing four samples cannot give: a rate. 25
+runs, all `--machine C`, one at a time with nothing else running, every result file written
+by the harness. Every run on the same commit (`a9a5869`), APFS, M4 Pro / 24 GB.
+
+| Model | Steps | Runs | `App.jsx` wired | Imports resolving | Median | CPU/GPU |
+|---|---|---|---|---|---|---|
+| `qwen3.5:4b` | on | 10 | 10/10 | **8/10 (80%)** | 42.0s (0.7 min) | 100% GPU |
+| `qwen3.5:4b` | off | 10 | 10/10 | **7/10 (70%)** | 36.0s (0.6 min) | 100% GPU |
+| `gemma4:e4b` | on | 5 | 5/5 | **5/5 (100%)** | 44.7s (0.7 min) | 100% GPU |
+
+**Read the "imports resolving" column, not `bench-steps-summary.js`.** The collator reports
+`nosteps` as 100%, and that is wrong. Its own comment says *"Two out of three is a broken
+app that reports itself as finished"*, but the predicate is `(g.wired || []).length > 0` —
+**one** resolving import out of three passes. Three `nosteps` runs wired only part of the
+app: two imported `TodoInput` and `TodoList` but never `useTodos`, so the hook holding all
+the state is written and unused, and one imported only `useTodos`, so neither component is
+rendered. Those are not broken paths — they are *missing* ones, which is why `broken` is
+empty and the check passes. The table above requires all three to resolve. Left unpatched
+deliberately: Machine B is collating with the same tool right now, and changing a grading
+bar after seeing results is the one thing §5 of both handoffs forbids.
+
+> **Since fixed, and the caution above was right but did not need to cost anything.**
+> The predicate now requires every one of the task's three imports to resolve, and the
+> collator reproduces the hand count in the table exactly: 8/10 with step sessions, 7/10
+> without. It also reports partially-wired runs in their own column rather than hiding
+> them among the passes, and `benchStepsSummary.test.js` pins all of it, including the
+> two shapes that used to slip through.
+>
+> Re-grading after the fact is safe **because the per-run JSON is the source of truth**:
+> the collator recomputes from files that were written before anyone knew the bar was
+> wrong, so nothing needs re-running and no result changes retroactively except the one
+> that was miscounted. What §5 forbids is moving the bar to flatter a result; restoring
+> the bar the comment always claimed, and re-scoring every arm with it, is the opposite.
+> The bar now travels in each record as `graded.expected`, so a future collator cannot
+> quietly disagree with the task it is grading.
+
+**1. What is the success rate?** With step sessions, **8 in 10**. The two failures were
+different from each other — one wired all three imports correctly but left the counter demo
+in `App.jsx` alongside the todo app and reported `4 of 4 done`; one wrote every import a
+level too high. Not a bimodal split, just two distinct ways to be wrong at roughly 10% each.
+
+**2. Does `nosteps` differ from `steps`? No, and that is the finding.** 80% against 70% at
+n=10 each is indistinguishable (Fisher's exact p ≈ 1.0); the honest reading is that this
+experiment cannot separate them, not that steps won. What it does separate is 0.5.0 from
+0.4.0: on Machine A the v0.4.0 behaviour left `App.jsx` untouched in **five sessions out of
+five**, and here the same `nosteps` path wires it in 7 of 10. **The three bug fixes did the
+work, and step sessions are close to optional on a fast machine.** They still pay for
+themselves through the retry — see 4.
+
+**3. Does the broken-import guard fire? Yes — for the first time in a live run.** It
+reproduced Machine A's run 2 exactly, and the whole sequence is worth reading, because the
+retry did *not* rescue it:
+
+    --- step 4/4: Update src/App.jsx to import useTodos, TodoInput, and TodoList while removing counter logic.
+        13. write_file src/App.jsx
+        RETRY: the file was written, but 3 import(s) point at nothing — "../hooks/useTodos.js" in src/App.jsx, "../components/TodoInput.jsx" in src/App.jsx, "../components/TodoList.jsx" in src/App.jsx — so it cannot run
+        14. read_file src/App.jsx
+        15. read_file src/hooks/useTodos.js
+        16. read_file src/components/TodoInput.jsx
+        17. read_file src/components/TodoList.jsx
+        18. write_file src/App.jsx
+        => failed
+
+The model re-read all four files and wrote the same wrong paths again. It ended `partial`,
+and its own summary said **"3 of 4 item(s) completed"** with the reason attached — the same
+model that, in the still-counter run above, cheerfully reported `4 of 4`. The guard did not
+save the run; it stopped the run from lying about it, and told the user the files were fine
+and only the paths were wrong. That is the design working as intended.
+
+**4. Does the retry earn its place at speed? Yes.** It fired 3 times in 20 `qwen3.5:4b`
+runs, **none of them from a timeout** — the mechanism that saved Machine A's run 3 never
+occurred here. Twice it caught *"this step is about `src/App.jsx`, but what changed was
+`src/hooks/useTodos.js`"* — the model writing the wrong file — and both retries recovered
+to a fully wired app. It is not a slow-machine feature.
+
+**5. Is `gemma4:e4b` more reliable? On this evidence yes, and it costs nothing.** 5 of 5
+with all imports resolving, no retries, no guard firings, median 44.7s against 42.0s — a
+9.6 GB model that is fully GPU-resident only on this machine, matching a 3.4 GB model's
+speed while not missing. n=5 against n=10 is too small to call significant on its own
+(p ≈ 0.5), so this is a direction, not a proof; but combined with it being the correctness
+ceiling in the sweep above, **`gemma4:e4b` is the model to reach for on this machine when
+the task involves wiring one file to another.**
+
+**The 300s default is not a laptop problem — it is Machine A's problem.** The slowest of
+all 25 runs was **65s**, roughly one fifth of `hirayacoder.ollama.requestTimeoutMs`'s
+300000 default, and the fastest was 30s. Three machines have now answered this and they
+disagree by more than an order of magnitude: A exceeded 300s generating a single `App.jsx`,
+while nothing here came close. The default is right for this machine and wrong for that one,
+which is the argument for leaving it alone and documenting the override.
+
+**`ollama ps` reported `100% GPU` on all 25 runs**, including every `gemma4:e4b` run at
+9.6 GB. The earlier sweep's prediction holds under a long single generation, which is a
+different memory profile from the short ones that established it.
+
+**The macOS half, which had only ever run on Windows.** All four case tests in
+`test/unit/brokenImports.test.js` pass on APFS, so `existsExactly` — reading the parent
+directory and comparing segments byte-for-byte — behaves the same on a case-insensitive
+filesystem that is not Windows. The workspace boundary was checked separately against the
+paths macOS makes interesting: a workspace containing a space (`My Projects/thing`) reads
+and writes normally, and traversal out of it is refused as `OUTSIDE_WORKSPACE` whether the
+escape is plain, absolute, or spelled with differently-cased components. `isInside` folds
+case on darwin, so a case-variant of the workspace root is correctly treated as inside
+while a sibling sharing its prefix is not. `scriptRunner`'s POSIX `/bin/sh -c` branch is
+exercised by its own suite spawning real processes here, including the timeout kill and
+the metacharacter refusal — that is unit-level coverage, not a live `npm test` driven
+through an agent session, which remains unexercised on macOS.
+
+**The full suite is 932 passing, 0 failing on this machine.** The four Machine A failures
+(`transcriptStore`, `scriptRunner`, timing out) do not reproduce, which supports the
+reading that they are Machine A's OneDrive-synced working directory rather than the code.
+
+### Machine B — the paired control (`bench-steps.js`, 0.5.0)
+
+Machine B exists in this investigation to run the one thing Machine A could not afford: the
+same commit, the same model, the same fixture, with `steps` on and off. It is also the only
+machine where **partial GPU offload** happens at all — A is CPU-only and every one of C's 25
+runs reported `100% GPU`, so the split column below is measured nowhere else.
+
+Two sweeps of four paired models, 16 runs, one at a time with nothing else running and each
+model unloaded before the next. The table is the second sweep, on the tree of `c38c424`
+(`grade()` and `importGraph` identical to `fc6b47a`; the later commit only adds
+`graded.expected` to the record). The first sweep ran on `7c8ab04` — before the
+case-sensitivity fix — and is kept below as a repeat, not merged into the rate.
+
+| Model | Steps | `App.jsx` wired | Imports resolving | Still counter | Wall clock | CPU/GPU | Resident |
+|---|---|---|---|---|---|---|---|
+| `qwen3.5:4b` | on | yes | **3/3** | no | 252.4s (4.2 min) | 54%/46% | 3.9 GB |
+| `qwen3.5:4b` | off | yes | **3/3** | no | 211.3s (3.5 min) | 54%/46% | 3.9 GB |
+| `qwen3.5:2b` | on | yes | 0/3 | no | 348.4s (5.8 min) | 39%/61% | 3.0 GB |
+| `qwen3.5:2b` | off | yes | 0/3 | no | 310.5s (5.2 min) | 39%/61% | 3.0 GB |
+| `gemma4:e4b` | on | yes | **3/3** | no | 266.3s (4.4 min) | 85%/15% | 9.5 GB |
+| `gemma4:e4b` | off | yes | **3/3** | no | 216.2s (3.6 min) | 85%/15% | 9.5 GB |
+| `ornith:9b` | on | yes | 2/3 — no `useTodos` | no | 288.2s (4.8 min) | 63%/37% | 6.1 GB |
+| `ornith:9b` | off | yes | **3/3** | no | 225.3s (3.8 min) | 63%/37% | 6.1 GB |
+
+Runs that did not produce a working app (3/8), from `bench-steps-summary.js --machine B`:
+
+    B ornith:9b steps=on — only imported TodoInput, TodoList — never imported useTodos
+    B qwen3.5:2b steps=off — nothing it built was imported
+    B qwen3.5:2b steps=on — nothing it built was imported
+
+**1. Does `nosteps` fail where `steps` succeeds? No — and on this machine it never failed
+at all.** Every one of the 12 Tier A runs across both sweeps rewrote `App.jsx` and removed
+the counter demo, `steps` and `nosteps` alike. Machine A's motivating failure — components
+written and `App.jsx` never touched, in five sessions out of five under v0.4.0 — **did not
+reproduce once here**. That is the same conclusion Machine C reached from a distribution,
+arrived at independently on different hardware: **the three bug fixes in 0.5.0 did the
+work.**
+
+The pairs cannot separate the two arms, and the second sweep is what proves it rather than
+suggests it. Four cells changed answer between sweeps with nothing altered but the run:
+
+| Model | Steps | Sweep 1 (`7c8ab04`) | Sweep 2 (`c38c424`) |
+|---|---|---|---|
+| `qwen3.5:4b` | on | 3/3 · 267.3s | 3/3 · 252.4s |
+| `qwen3.5:4b` | off | **2/3** · 242.7s | **3/3** · 211.3s |
+| `gemma4:e4b` | on | **2/3** · 365.1s | **3/3** · 266.3s |
+| `gemma4:e4b` | off | 3/3 · 302.7s | 3/3 · 216.2s |
+| `ornith:9b` | on | 2/3 · 284.5s | 2/3 · 288.2s |
+| `ornith:9b` | off | 3/3 · 245.9s | 3/3 · 225.3s |
+
+Counting all 12 Tier A runs, `nosteps` is fully wired 5 times in 6 and `steps` 3 times in 6
+— which points the *opposite* way to Machine C's 8/10 against 7/10 and is equally
+insignificant (Fisher's exact p ≈ 0.55). Two machines disagreeing in direction at n≈6–10,
+neither significantly, is what no effect looks like. **Do not read a winner into either.**
+
+**What the pairs do separate is cost.** `nosteps` was faster in **all eight pairs**, mean
+255.0s against 297.6s — step sessions cost about **17% more wall clock** on this machine.
+Eight out of eight in the same direction is a real signal (sign test p ≈ 0.008) where the
+correctness difference is not, and it is exactly what the design predicts: an extra planning
+call up front, then one loop per item.
+
+**2. Does the broken-import guard fire? Not once in 16 runs — and the reason is
+informative.** Machine B produced **zero broken import paths**. Every miss was a *missing*
+import, not a wrong one: `ornith:9b` and three sweep-1 runs wrote `useTodos.js` and then
+imported `useState` from React instead, leaving the hook holding all the state written and
+unused. The guard needs a path pointing at nothing, and this machine kept producing paths
+that were simply absent. Machine C saw the guard fire live on a genuine wrong path; the two
+results are consistent, and together they say the failure has **two distinct modes** and
+only one of them is guardable.
+
+Two *other* guards did fire here on real model output:
+
+    Refused: the content you sent for src/hooks/useTodos.js has unclosed brackets — it
+    stops part-way through the file. Send the COMPLETE file from the first line to the
+    last, including every closing brace and any exports at the end.
+
+    Refused: src/components/TodoList.jsx currently publishes its API with export, and the
+    content you sent has no exports at all. Every file that imports it would break.
+
+**3. Does the retry fire at speed? It never fired on Machine B at all** — 0 times in 16
+runs. Machine A's run 3 was rescued by a timeout-induced retry and Machine C saw 3 retries
+in 20 runs from wrong-file writes; neither mechanism triggered here. On B the retry is
+carried, not used. Its value rests on C's evidence, not this machine's.
+
+**4. How much faster than Machine A?** On `qwen3.5:4b`, Machine A's four runs span 738–1450s
+(12.3–24.2 min, median ≈ 1030s) against Machine B's 211.3–267.3s (median 247.6s) — roughly
+**4.2× faster**. Machine C is a further ~6× beyond B. The three machines now span more than
+an order of magnitude on the same task, which is the reason `--machine` is mandatory.
+
+**5. Does `gemma4:e4b` change the answer? It is the most interesting row on this machine.**
+It is fully wired in 3 of its 4 runs, indistinguishable from `qwen3.5:4b`'s 3 of 4 on
+correctness — but it achieves that at **85% CPU / 15% GPU**, 9.5 GB resident against a 4 GB
+card, with only about a seventh of the model on the GPU. Despite that, it costs almost
+nothing: mean 241.3s against `qwen3.5:4b`'s 231.9s, a **4% penalty for a model 2.8× the
+size**. The intuition that a badly-split model is unusable is wrong on this task, because a
+long single generation is bottlenecked on the CPU-resident layers either way. `gemma4:e4b`
+is a reasonable default here, matching Machine C's recommendation for a different reason.
+
+**The 300s default is Machine A's problem, confirmed from a third machine.** No individual
+request timed out in any of the 16 runs. Whole-session times ran 211–348s, and a session is
+many requests, so per-request latency sits far below
+`hirayacoder.ollama.requestTimeoutMs`'s 300000 default. A exceeded it generating a single
+`App.jsx`; B and C never approach it. **Leave the default alone and document the override
+for slow machines** — that is now the position of all three machines.
+
+**Suite status: 947 passing, 1 failing.** The 4 `transcriptStore`/`scriptRunner` timeouts
+predicted from Machine A **do not reproduce here**, which with Machine C's identical result
+confirms them as Machine A's OneDrive-synced working directory rather than the code. The one
+real failure is unrelated to benchmarking and arrived with the README rewrite in `c38c424`:
+`the allow-list is documented in full, so the README cannot drift out of date` — the
+rewritten Requirements section says the agent runs "(`node`, `npm`, `python`, `git`, and
+similar)", which drops `gradle`, `make`, `java` and `javac` from
+`DEFAULT_ALLOWED_BINARIES`. Left unfixed deliberately: §5 forbids code changes inside a
+benchmark run, and Machine C's sweep at `a9a5869` predates the rewrite and was clean.
+
 ### Open: the laptop's TODO-path numbers
 
 These rows are now measured on the desktop, but they remain **unmeasured on the
@@ -512,6 +788,44 @@ read the message and resent a valid CommonJS module.
 - Its clean sessions also revealed that `translateSession` merged all steps into one
   mechanical blob and therefore **stored nothing, ever**.
 
+**All five of `gemma4:e4b`, `ornith:9b`, `qwen3.5:4b`, `lfm2:latest`, `gemma2:latest`** —
+the React + Vite + Tailwind evaluation **on Machine A**, and the only case so far where
+every model failed the *same* way. Each was given the same prompt in a workspace already
+holding the Vite scaffold. Components got written; `src/App.jsx` ended every single run still holding the
+counter demo. Nothing was ever wired to anything.
+
+Almost none of it turned out to be the models:
+- A TODO item that *edits* a file an earlier item created left the change set the same
+  size, so the item was judged to have changed nothing and its `done` was challenged —
+  a step that wrote a real file reported as "it asked for a file and none was written".
+  Scaffold-then-assemble is the shape of every plan worth making, so the item doing the
+  work the user cared about was the one most likely to be scored a failure.
+  → `ChangeSet` counts revisions, not distinct paths.
+- `qwen3.5:4b` planned *"Assemble App.jsx layout…"* and *"Configure exact folder
+  structure…"*. Neither `assemble` nor `configure` was in the verb list that decides
+  whether "done, nothing changed" is legitimate — a list written against messages people
+  type, and being applied to text the planner wrote. Both items passed unchallenged.
+  → `requiresChange(text, { planned: true })`, a separate vocabulary for planner items.
+- `qwen3.5:4b` spent **all 44** of its steps on `read_file` and `list_files` and wrote
+  nothing: one turn per import, at CPU speed, before any work could start.
+  → `read_file` carries the workspace files the read file imports.
+- Challenged on a `done`, both `qwen3.5:4b` and `ornith:9b` replied by asking **the user**
+  what to work on, with the request still in the first message of the same conversation.
+  → the objection restates the ask verbatim and says not to ask what to work on.
+- `gemma2:latest` edited `vite.config.js` and `README.md` while working a list about
+  `useTodos`, `TodoInput` and `App.jsx`; every item scored as having changed something.
+  → step sessions check what changed against the files the step itself names.
+- `ornith:9b` spent four steps on `npm create vite@latest … 2>&1`, refused each time for
+  the shell operator. `lfm2:latest` produced zero steps and errored out.
+  → these are genuinely the model, and the workaround notice now names the cause.
+- Once the above was fixed and `qwen3.5:4b` rewrote `App.jsx` for the first time, it wrote
+  `import { useTodos } from '../hooks/useTodos.js'` from inside `src/App.jsx` — the right
+  file, one level too high, and the same for `TodoInput`. Every guard passed it and the
+  app does not build. This is the deepest the benchmark has ever reached, and it is worth
+  recording that each fix only exposes the next failure.
+  → `write_file` now resolves a written file's relative imports and reports the ones that
+  reach nothing, with the corrected path.
+
 ---
 
 ## Adding a model to this matrix
@@ -521,7 +835,13 @@ ollama pull <model>
 node tools/bench-agent.js <model> agent auto simple   # single-file task
 node tools/bench-agent.js <model> agent auto full     # three-part task
 node tools/bench-agent.js <model> agent auto full B   # force Tier B
+node tools/bench-steps.js <model> steps   --machine A  # wiring an existing project
+node tools/bench-steps.js <model> nosteps --machine A  # the same, without step sessions
 ```
+
+`--machine` is required on the two newer harnesses, and it is not bookkeeping: this task
+takes 20+ minutes on Machine A and would take a small fraction of that on C. A result
+filed without its machine cannot be compared with anything.
 
 Run one at a time with nothing else competing, and let the machine cool between long
 runs. Record `ollama ps` for each run — the CPU/GPU split explains a timing better than

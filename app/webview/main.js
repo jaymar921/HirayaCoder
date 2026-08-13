@@ -26,16 +26,18 @@ const el = {
   thinking: document.getElementById('thinking'),
   permissions: document.getElementById('permissions'),
   permSummary: document.getElementById('perm-summary'),
+  stepSessions: document.getElementById('step-sessions'),
   addFile: document.getElementById('add-file'),
   addImage: document.getElementById('add-image'),
   status: document.getElementById('status'),
   sessionBadge: document.getElementById('session-badge'),
 };
 
-/** @type {{running: boolean, mode: string, indicator: ThinkingIndicator | null, trace: TraceView | null, body: HTMLElement | null}} */
+/** @type {{running: boolean, mode: string, stepSessions: boolean, indicator: ThinkingIndicator | null, trace: TraceView | null, body: HTMLElement | null}} */
 const state = {
   running: false,
   mode: 'agent',
+  stepSessions: false,
   indicator: null,
   trace: null,
   body: null,
@@ -191,6 +193,7 @@ const handlers = {
     el.sessionBadge.textContent = `session ${msg.sessionId}`;
     setMode(msg.mode);
     setCapacity(msg.thinkingCapacity);
+    setStepSessions(msg.stepSessions);
     updatePermissions(msg.permissions);
     updateModels(msg.models, msg.activeModel, msg.capability);
     if (msg.history && msg.history.length > 0) {
@@ -355,6 +358,15 @@ function setCapacity(capacity) {
   }
 }
 
+function setStepSessions(on) {
+  state.stepSessions = Boolean(on);
+  el.stepSessions.setAttribute('aria-pressed', String(state.stepSessions));
+  el.stepSessions.textContent = `Steps: ${state.stepSessions ? 'On' : 'Off'}`;
+  el.stepSessions.title = state.stepSessions
+    ? 'Experimental: each TODO item runs as its own briefed step, checked against what it changed. A step that fails twice stops the run.'
+    : 'Experimental: run each TODO item as its own briefed step';
+}
+
 function updatePermissions(permissions) {
   if (!permissions) return;
   el.permSummary.textContent =
@@ -394,6 +406,11 @@ el.thinking.addEventListener('click', (event) => {
 
 el.model.addEventListener('change', () => {
   vscode.postMessage({ type: 'model', model: el.model.value });
+});
+
+el.stepSessions.addEventListener('click', () => {
+  setStepSessions(!state.stepSessions);
+  vscode.postMessage({ type: 'step-sessions', enabled: state.stepSessions });
 });
 
 el.permissions.addEventListener('click', () => vscode.postMessage({ type: 'permissions' }));
