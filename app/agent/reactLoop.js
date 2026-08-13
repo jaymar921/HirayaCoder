@@ -107,7 +107,8 @@ function renderTrace(steps, budget) {
   if (steps.length === 0) return '';
 
   const lines = steps.map((step, index) => {
-    const target = step.action.path || step.action.command || step.action.query || '';
+    const base = step.action.path || step.action.command || step.action.query || '';
+    const target = step.action.cwd ? `${base} (in ${step.action.cwd})` : base;
     const outcome = step.result && step.result.ok ? 'ok' : 'failed';
     return `${index + 1}. ${step.action.action} ${target} → ${outcome}`;
   });
@@ -123,7 +124,10 @@ function renderTrace(steps, budget) {
  * @returns {string}
  */
 function actionKey(action) {
-  return [action.action, action.path || '', action.query || '', action.command || ''].join('|');
+  // `cwd` is part of the identity: `npm install` at the root and `npm install` inside
+  // the scaffolded app are two different actions, and without this the second one is
+  // stopped as a repeat of the first.
+  return [action.action, action.path || '', action.query || '', action.command || '', action.cwd || ''].join('|');
 }
 
 /**

@@ -85,8 +85,12 @@ const TOOL_INSTEAD_OF = new Map([
   ['move', 'Use read_file, then write_file at the new path, then delete_file on the old one.'],
   ['sed', 'Use read_file to get the file, then write_file with the complete corrected contents.'],
   ['awk', 'Use read_file to get the file, then write_file with the complete corrected contents.'],
-  ['pwd', 'Commands already run at the workspace root, so there is nothing to check.'],
-  ['cd', 'Commands already run at the workspace root, and it cannot be changed. Use workspace-relative paths in the command itself.'],
+  ['pwd', 'Commands run at the workspace root unless you set run_script\'s "cwd", so there is nothing to check.'],
+  [
+    'cd',
+    'A command cannot change directory. To run inside a subfolder, keep the command itself plain and pass the ' +
+      'folder as run_script\'s "cwd" instead — {"command": "npm install", "cwd": "todo-glass-app"}.',
+  ],
 ]);
 
 /**
@@ -140,7 +144,16 @@ function nextStepAfterRefusal(code, command) {
         'to install, and continue with whatever you can do without it.'
       );
     case 'SHELL_METACHARACTER':
-      return ' Do not resend this line. Propose one plain command, with no operators, redirects, or chaining.';
+      return (
+        ' Do not resend this line. Propose one plain command, with no operators, redirects, or chaining. ' +
+        'If you were chaining `cd folder && …`, drop the `cd` and pass the folder as "cwd" instead.'
+      );
+    case 'CWD_NOT_FOUND':
+    case 'CWD_NOT_A_DIRECTORY':
+      return (
+        ' Check what actually exists with list_files before choosing "cwd" — the path is relative to the ' +
+        'workspace root, so it is "todo-glass-app", never "./todo-glass-app/src/.." or an absolute path.'
+      );
     case 'USER_DENIED':
       return (
         ' That was the user deciding, not an error to work around. Do not retry it and do not achieve the ' +
@@ -157,15 +170,19 @@ function nextStepAfterRefusal(code, command) {
  * @param {string} command
  * @param {import('../../security/scriptRunner').RunResult} result
  * @param {number} budget
+ * @param {string} [cwd] Workspace-relative folder it ran in, when not the root.
  * @returns {string}
  */
-function describeRun(command, result, budget) {
+function describeRun(command, result, budget, cwd) {
   const parts = [];
+  // Named on every line so the model does not lose track of which project it is in
+  // across a run that touches both the root and a scaffolded subfolder.
+  const where = cwd ? ` in \`${cwd}\`` : '';
 
   if (result.timedOut) {
-    parts.push(`\`${command}\` was still running after the time limit and was stopped.`);
+    parts.push(`\`${command}\`${where} was still running after the time limit and was stopped.`);
   } else {
-    parts.push(`\`${command}\` finished with exit code ${result.code}.`);
+    parts.push(`\`${command}\`${where} finished with exit code ${result.code}.`);
   }
 
   // stderr first: when something fails, that is where the reason is.
@@ -186,7 +203,7 @@ function describeRun(command, result, budget) {
 }
 
 /**
- * @param {{command: string}} args
+ * @param {{command: string, cwd?: string}} args
  * @param {import('../toolRegistry').ToolContext} context
  * @returns {Promise<import('../toolRegistry').ToolResult>}
  */
@@ -196,7 +213,14 @@ module.exports = async function runScript(args, context) {
     return { ok: false, observation: 'run_script needs a "command" to run.' };
   }
 
-  const request = { command, sessionId: context.sessionId, mode: context.mode, timeoutMs: context.scriptTimeoutMs };
+  const cwd = String(args.cwd || '').trim();
+  const request = {
+    command,
+    cwd,
+    sessionId: context.sessionId,
+    mode: context.mode,
+    timeoutMs: context.scriptTimeoutMs,
+  };
   const decision = await context.gate.requestScript(request);
 
   if (!decision.allowed) {
@@ -230,14 +254,15 @@ module.exports = async function runScript(args, context) {
     : OUTPUT_TOKENS;
 
   if (context.changeSet) {
-    context.changeSet.recordCommand({ command, exitCode: result.code, ok: result.ok });
+    context.changeSet.recordCommand({ command, cwd: cwd || undefined, exitCode: result.code, ok: result.ok });
   }
 
   return {
     ok: result.ok,
-    observation: describeRun(command, result, budget),
+    observation: describeRun(command, result, budget, cwd),
     detail: {
       command,
+      cwd: cwd || undefined,
       exitCode: result.code,
       timedOut: result.timedOut,
       durationMs: result.durationMs,

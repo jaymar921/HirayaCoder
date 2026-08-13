@@ -168,14 +168,20 @@ const TOOLS = [
     name: 'run_script',
     description:
       'Run a single build or tooling command such as `npm install`, `npm run build`, or `javac -d build Foo.java`. ' +
-      'One command only — no chaining with && or |, no redirects. NOT for files or folders: write_file creates any ' +
-      'missing folders by itself, so never run mkdir; use list_files instead of ls, read_file instead of cat, ' +
-      'delete_file instead of rm.',
+      'One command only — no chaining with && or |, no redirects. To run inside a subfolder, set "cwd" instead of ' +
+      'using cd. NOT for files or folders: write_file creates any missing folders by itself, so never run mkdir; ' +
+      'use list_files instead of ls, read_file instead of cat, delete_file instead of rm.',
     mutating: true,
     parameters: {
       type: 'object',
       properties: {
         command: { type: 'string', description: 'The command to run, e.g. npm install' },
+        cwd: {
+          type: 'string',
+          description:
+            'Optional folder to run in, relative to the project root, e.g. "todo-glass-app". ' +
+            'Leave it out to run at the root. It must already exist.',
+        },
       },
       required: ['command'],
     },

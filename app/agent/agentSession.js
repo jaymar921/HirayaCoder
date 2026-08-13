@@ -111,7 +111,7 @@ class ChangeSet {
   }
 
   /**
-   * @param {{command: string, exitCode: number | null, ok: boolean}} entry
+   * @param {{command: string, cwd?: string, exitCode: number | null, ok: boolean}} entry
    */
   recordCommand(entry) {
     this.revision += 1;
@@ -1702,6 +1702,7 @@ class AgentSession {
       action: step.action.action,
       path: step.action.path,
       command: step.action.command,
+      cwd: step.action.cwd,
       thought: step.action.thought,
       result,
       ok: step.result.ok,

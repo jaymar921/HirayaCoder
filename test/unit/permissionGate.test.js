@@ -246,6 +246,62 @@ describe('PermissionGate', () => {
       assert.match(result.stdout, /42/);
     });
 
+    it('runs in a subfolder when one is named', async () => {
+      // The case every model failed: the project lives in a folder it scaffolded, and
+      // `cd app && npm run build` is refused as chaining. Without this the command has
+      // nowhere to go.
+      fs.mkdirSync(path.join(root, 'todo-glass-app'));
+      const { gate } = makeGate(root);
+      const request = { command: 'node -e "console.log(process.cwd())"', cwd: 'todo-glass-app' };
+      const decision = await gate.requestScript(request);
+      const result = await gate.runScript(request, decision);
+      assert.strictEqual(result.ok, true);
+      assert.match(result.stdout.trim(), /todo-glass-app$/);
+    });
+
+    it('names the folder in the confirmation, so the user sees where it will run', async () => {
+      fs.mkdirSync(path.join(root, 'todo-glass-app'));
+      const { gate, prompts } = makeGate(root);
+      await gate.requestScript({ command: 'npm install', cwd: 'todo-glass-app' });
+      assert.match(prompts[0].detail, /todo-glass-app/);
+    });
+
+    it('refuses a folder outside the workspace', async () => {
+      const { gate, prompts } = makeGate(root, { autoApproveScripts: true });
+      const decision = await gate.requestScript({ command: 'npm install', cwd: '../..' });
+      assert.strictEqual(decision.allowed, false);
+      assert.strictEqual(decision.code, 'OUTSIDE_WORKSPACE');
+      assert.strictEqual(prompts.length, 0, 'never even asked');
+    });
+
+    it('says the folder does not exist rather than failing to spawn', async () => {
+      const { gate } = makeGate(root, { autoApproveScripts: true });
+      const decision = await gate.requestScript({ command: 'npm install', cwd: 'not-scaffolded-yet' });
+      assert.strictEqual(decision.allowed, false);
+      assert.strictEqual(decision.code, 'CWD_NOT_FOUND');
+      assert.match(decision.reason, /does not exist/i);
+    });
+
+    it('refuses a file where a folder was meant', async () => {
+      const { gate } = makeGate(root, { autoApproveScripts: true });
+      const decision = await gate.requestScript({ command: 'npm install', cwd: 'src/app.js' });
+      assert.strictEqual(decision.allowed, false);
+      assert.strictEqual(decision.code, 'CWD_NOT_A_DIRECTORY');
+    });
+
+    it('runs at the root when the folder is swapped in after approval', async () => {
+      // The approved decision carries the resolved folder, so a `cwd` that appears
+      // between the click and the spawn is not the one that takes effect.
+      fs.mkdirSync(path.join(root, 'elsewhere'));
+      const { gate } = makeGate(root);
+      const decision = await gate.requestScript({ command: 'node -e "console.log(process.cwd())"' });
+      const result = await gate.runScript(
+        { command: 'node -e "console.log(process.cwd())"', cwd: 'elsewhere' },
+        decision
+      );
+      assert.strictEqual(result.stdout.trim(), fs.realpathSync(root));
+    });
+
     it('refuses to run without an approving decision', async () => {
       // Guards against a future tool forgetting to check the decision.
       const { gate } = makeGate(root);

@@ -106,6 +106,26 @@ const SHELL_METACHARACTERS = new Set([';', '&', '|', '<', '>', '`', '$', '(', ')
 /** Characters `cmd.exe` re-interprets, screened before any Windows shim invocation. */
 const CMD_METACHARACTERS = /[&|<>^%\r\n]/;
 
+/**
+ * Environment overlay for every agent-run command.
+ *
+ * Colour is stripped because ANSI escapes are pure noise once the output is going
+ * into a prompt. The rest is about prompts of the other kind: `npm create vite@latest`
+ * asks whether to install the package, `npm init` asks for a project name, and a
+ * process blocked on a question it will never be answered looks exactly like a hung
+ * build. `CI` is the flag nearly all Node tooling checks to mean "nobody is watching",
+ * and `npm_config_yes` covers `npx`/`npm create` specifically.
+ */
+const NON_INTERACTIVE_ENV = {
+  FORCE_COLOR: '0',
+  NO_COLOR: '1',
+  CI: '1',
+  npm_config_yes: 'true',
+  npm_config_audit: 'false',
+  npm_config_fund: 'false',
+  npm_config_progress: 'false',
+};
+
 const DEFAULT_TIMEOUT_MS = 120000;
 const MAX_OUTPUT_CHARS = 100000;
 
@@ -315,7 +335,8 @@ function resolveBinary(name, opts = {}) {
  *
  * @param {string} command
  * @param {object} options
- * @param {string} options.cwd Workspace root; the process never starts elsewhere.
+ * @param {string} options.cwd Directory to start in. Always inside the workspace —
+ *   `permissionGate` resolves it through `pathGuard` before it gets here.
  * @param {string[]} [options.allowedBinaries]
  * @param {number} [options.timeoutMs]
  * @param {(stream: 'stdout' | 'stderr', chunk: string) => void} [options.onOutput]
@@ -374,8 +395,20 @@ async function run(command, options) {
       // The whole point: no shell interpretation at any layer.
       shell: false,
       windowsHide: true,
-      env: { ...env, FORCE_COLOR: '0', NO_COLOR: '1' },
+      env: { ...env, ...NON_INTERACTIVE_ENV },
     });
+
+    // Nothing is ever typed at this process. Left open, a scaffolder that asks
+    // "Ok to proceed? (y)" waits on a pipe that will never produce a byte, and the
+    // only visible symptom is a timeout minutes later with no output to explain it.
+    // Closing stdin turns the question into an immediate EOF, which every one of
+    // these tools treats as "take the defaults" or "abort" — both answerable.
+    if (child.stdin) {
+      child.stdin.on('error', () => {
+        /* the child may exit before the close lands; not our problem */
+      });
+      child.stdin.end();
+    }
 
     let stdout = '';
     let stderr = '';
@@ -491,4 +524,5 @@ module.exports = {
   SHELL_METACHARACTERS,
   DEFAULT_TIMEOUT_MS,
   MAX_OUTPUT_CHARS,
+  NON_INTERACTIVE_ENV,
 };

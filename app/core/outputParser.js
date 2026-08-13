@@ -66,7 +66,13 @@ const REQUIRED_FIELDS = new Map([
  * safety interlock on `delete_folder` — the tool refuses a non-empty folder without it
  * — so a model that cannot express it would be permanently unable to remove one.
  */
-const OPTIONAL_FIELDS = new Map([['delete_folder', ['recursive']]]);
+const OPTIONAL_FIELDS = new Map([
+  ['delete_folder', ['recursive']],
+  // Same reasoning as `recursive`: without `cwd` declared here, a Tier B model has no
+  // way to say "run this in the folder I just scaffolded" and falls back to the one
+  // phrasing that is guaranteed to be refused, `cd app && npm run build`.
+  ['run_script', ['cwd']],
+]);
 
 /** Keys that must never be copied out of parsed JSON onto an object. */
 const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
@@ -84,6 +90,7 @@ const MAX_PATH_LENGTH = 200;
  * @property {string} [query]
  * @property {string} [code]
  * @property {string} [command]
+ * @property {string} [cwd]
  * @property {boolean} [recursive]
  * @property {string} [thought]
  * @property {string} [summary]
@@ -303,7 +310,7 @@ function parseAction(raw, opts = {}) {
   const summary = asString(fields.summary);
   if (summary) result.summary = summary.trim();
 
-  for (const field of ['path', 'query', 'command']) {
+  for (const field of ['path', 'query', 'command', 'cwd']) {
     // `field` comes from a literal array on the line above.
     // eslint-disable-next-line security/detect-object-injection
     const value = asString(fields[field]);
@@ -369,6 +376,15 @@ const FIELD_SCHEMAS = new Map([
   ['code', { type: 'string', description: 'The COMPLETE new contents of the file — every line, not just the changed part.' }],
   ['query', { type: 'string', description: 'Text to search for across the project.' }],
   ['command', { type: 'string', description: 'The shell command to run.' }],
+  [
+    'cwd',
+    {
+      type: 'string',
+      description:
+        'Optional folder to run the command in, relative to the project root, e.g. "todo-glass-app". ' +
+        'Omit it to run at the root. Never use cd.',
+    },
+  ],
   [
     'recursive',
     {

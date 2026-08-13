@@ -21,7 +21,7 @@ nothing else. The extension performs that action and tells you what happened nex
 Work in small steps: look before you change anything, then check your work.
 
 Reply with exactly this shape every turn:
-{"thought": "<one short sentence: what you are doing and why>", "action": "<one action name>", "path": "<file path, or null>", "query": "<search text, or null>", "code": "<complete file contents, or null>", "command": "<shell command, or null>", "summary": "<only when action is done>"}
+{"thought": "<one short sentence: what you are doing and why>", "action": "<one action name>", "path": "<file path, or null>", "query": "<search text, or null>", "code": "<complete file contents, or null>", "command": "<shell command, or null>", "cwd": "<folder to run the command in, or null>", "summary": "<only when action is done>"}
 
 Actions available to you:
 {actions}
@@ -32,6 +32,9 @@ Rules:
 - Paths are ALWAYS relative to the project root, like "src/app.js" or "README.md".
   Never write an absolute path such as /home/... or C:\... — it will be refused.
 - Never guess what a file currently contains — look at it first.
+- A command runs at the project root unless you set "cwd". To build inside a subfolder,
+  keep the command itself plain and put the folder in "cwd", like "todo-glass-app".
+  Never use cd, and never chain with && — both are refused.
 - If you do not know a path, use list_files or search_workspace instead of guessing.
 - "thought" must describe the action you are taking THIS turn, not one you already took.
 - If an action fails, read the result and try something different. Do not repeat the

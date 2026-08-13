@@ -103,12 +103,42 @@ describe('runScript refusals', () => {
     assert.match(nextStepAfterRefusal('BINARY_NOT_ALLOWED', 'docker compose up'), /tell the user which command/i);
   });
 
+  it('sends a cd to the cwd argument, which is the thing that actually works', async () => {
+    // The dead end behind most of the failed script runs in the v0.5.3 testing round:
+    // the project was scaffolded into a subfolder, and the only way models knew to get
+    // there was `cd todo-glass-app && npm run build` — refused as chaining, with no
+    // alternative named, so they either retried it or gave up on building at all.
+    const { toolForRefusedCommand } = runScript;
+
+    assert.match(toolForRefusedCommand('cd todo-glass-app'), /"cwd"/);
+    assert.match(nextStepAfterRefusal('SHELL_METACHARACTER'), /"cwd"/);
+  });
+
+  it('says how to correct a folder that does not exist, rather than only that it does not', () => {
+    for (const code of ['CWD_NOT_FOUND', 'CWD_NOT_A_DIRECTORY']) {
+      assert.match(nextStepAfterRefusal(code), /list_files/);
+    }
+  });
+
   it('still reports the gate\'s own reason first', async () => {
     const result = await runScript(
       { command: 'rm -rf .' },
       refusingContext('BINARY_NOT_ALLOWED', '"rm" is not in the allowed program list.')
     );
     assert.match(result.observation, /"rm" is not in the allowed program list/);
+  });
+});
+
+describe('what the model is told about a run', () => {
+  const { describeRun } = runScript;
+  const ok = { ok: true, code: 0, stdout: 'built in 1.2s', stderr: '', timedOut: false, durationMs: 12, argv: [] };
+
+  it('names the folder, so a later step builds in the same place', () => {
+    assert.match(describeRun('npm run build', ok, 400, 'todo-glass-app'), /in `todo-glass-app`/);
+  });
+
+  it('says nothing about a folder for a command that ran at the root', () => {
+    assert.match(describeRun('npm run build', ok, 400), /^`npm run build` finished/);
   });
 });
 

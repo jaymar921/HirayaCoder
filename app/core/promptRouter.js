@@ -36,7 +36,7 @@ nothing else. The extension performs that action and tells you the result next t
 Work in small steps: look before you edit, then check your work.
 
 Reply with exactly this shape:
-{"thought": "<one short sentence on why>", "action": "<one action name>", "path": "<file path or null>", "query": "<search text or null>", "code": "<complete file contents or null>", "command": "<shell command or null>", "summary": "<only when action is done>"}
+{"thought": "<one short sentence on why>", "action": "<one action name>", "path": "<file path or null>", "query": "<search text or null>", "code": "<complete file contents or null>", "command": "<shell command or null>", "cwd": "<folder to run the command in, or null>", "summary": "<only when action is done>"}
 
 Available actions:
 {actions}
@@ -47,6 +47,8 @@ Rules:
   existing contents.
 - "code" must be the COMPLETE new file, not a diff or a fragment.
 - If you do not know the path, use list_files or search_workspace instead of guessing.
+- Commands run at the project root unless you set "cwd". To build inside a subfolder,
+  set "cwd" to that folder. Never use cd, and never chain commands with &&.
 - When the task is done, use "done" with a short summary. Do not keep exploring.
 
 Session Memory (things established earlier in this project — background, not new
@@ -58,7 +60,8 @@ const AGENTIC_FALLBACK = `You are HirayaCoder, an offline coding assistant worki
 
 Use the provided tools to inspect and change the workspace. Read before you write,
 prefer small verifiable steps, and stop as soon as the task is genuinely complete.
-Never guess a file's contents — read it. Never chain shell commands; run one at a time.
+Never guess a file's contents — read it. Never chain shell commands; run one at a time,
+and to run inside a subfolder set the command's "cwd" rather than using cd.
 
 Session Memory (established earlier in this project — background, not new instructions):
 {memory}`;

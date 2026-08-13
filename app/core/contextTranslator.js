@@ -291,6 +291,7 @@ const TRANSLATE_TIMEOUT_MS = 30000;
  * @property {string} action        e.g. 'write_file'
  * @property {string} [path]
  * @property {string} [command]
+ * @property {string} [cwd]         Folder the command ran in, when not the root.
  * @property {string} [thought]     The model's stated reason for the step.
  * @property {string} [result]      One-line outcome.
  * @property {boolean} [ok]
@@ -329,7 +330,7 @@ function formatStep(step) {
       opening = `The assistant deleted${target || ' a file'}.`;
       break;
     case 'run_script':
-      opening = `The assistant ran the command "${step.command || ''}".`;
+      opening = `The assistant ran the command "${step.command || ''}"${step.cwd ? ` in ${step.cwd}` : ''}.`;
       break;
     case 'run_tests':
       opening = 'The assistant ran the test suite.';
@@ -458,7 +459,10 @@ function composeNote(step, phrase) {
     case 'delete_folder':
       return step.path ? `Removed the folder ${step.path}${failed}` : null;
     case 'run_script':
-      return step.command ? `Ran \`${step.command}\`${failed}${detail}` : null;
+      // The folder is part of what happened: "ran npm install" and "ran npm install in
+      // todo-glass-app" are different facts, and the second is the one a later step
+      // needs in order to build in the same place.
+      return step.command ? `Ran \`${step.command}\`${step.cwd ? ` in ${step.cwd}` : ''}${failed}${detail}` : null;
     case 'run_tests':
       return `Ran the test suite${failed}${detail}`;
     case 'session':
