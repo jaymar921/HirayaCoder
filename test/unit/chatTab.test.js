@@ -110,6 +110,75 @@ describe('ChatTab', () => {
     });
   });
 
+  describe('a tab closed while the agent is working', () => {
+    /** @type {Function} */
+    let originalInfo;
+
+    beforeEach(() => {
+      originalInfo = stub.window.showInformationMessage;
+      stub.window.showInformationMessage = async () => undefined;
+    });
+
+    afterEach(() => {
+      stub.window.showInformationMessage = originalInfo;
+    });
+
+    it('keeps a running turn alive instead of cancelling it', () => {
+      // Closing a tab is not the same decision as pressing Stop. On CPU inference a
+      // turn is minutes long, so this used to throw away a whole autonomous run on a
+      // misclick, at the moment it could least afford it.
+      let cancelled = false;
+      const retired = [];
+      const { tab } = makeTab();
+      tab.onRetire = () => retired.push(true);
+      tab.session = /** @type {any} */ ({ cancel: () => { cancelled = true; } });
+
+      tab._dispose();
+
+      assert.strictEqual(cancelled, false, 'the run was cancelled');
+      assert.strictEqual(tab.isDetached(), true);
+      assert.deepStrictEqual(retired, [], 'a running session must stay tracked, or it can never be reopened');
+    });
+
+    it('gives up its place in the queue when nothing has started yet', () => {
+      // The other half of the rule: a queued turn has done nothing worth saving, and
+      // holding the lane for a tab nobody is watching starves every other session.
+      let aborted = false;
+      const retired = [];
+      const { tab } = makeTab();
+      tab.onRetire = () => retired.push(true);
+      tab._starting = true;
+      tab._queueAbort = /** @type {any} */ ({ abort: () => { aborted = true; } });
+
+      tab._dispose();
+
+      assert.strictEqual(aborted, true);
+      assert.deepStrictEqual(retired, [true]);
+    });
+
+    it('ignores a late dispose from a panel it has already replaced', () => {
+      const { tab } = makeTab();
+      const stale = /** @type {any} */ ({ webview: {} });
+      const live = tab.panel;
+
+      tab._dispose(stale);
+
+      assert.strictEqual(tab.panel, live, 'the reopened panel was torn down by the old one');
+    });
+
+    it('shows the turn as still running when the session is reopened', async () => {
+      const { tab, posted } = makeTab({ listModels: async () => [] });
+      tab.session = /** @type {any} */ ({ cancel: () => {} });
+      tab._detachedAt = Date.now();
+
+      await tab._sendInit();
+
+      assert.ok(posted.some((m) => m.type === 'start'), 'the composer would look idle over a live session');
+      assert.match(posted.filter((m) => m.type === 'status').pop().text, /kept running/i);
+      assert.strictEqual(tab.isDetached(), false);
+    });
+  });
+
   describe('step sessions', () => {
     const capability = { tier: 'B', label: 'Lite', canPlanTodos: true };
 

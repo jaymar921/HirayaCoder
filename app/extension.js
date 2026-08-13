@@ -868,20 +868,28 @@ function openSession(context, app, sessionId) {
     return;
   }
 
-  const tab = new ChatTab({ context, app, sessionId });
+  // Both handlers belong to the tab rather than to a panel, because a session that
+  // kept running after its tab was closed opens a *second* panel when it is reopened.
+  // Wired to the first panel only, the tab would never be forgotten and focus would
+  // stop following it.
+  const tab = new ChatTab({
+    context,
+    app,
+    sessionId,
+    // Which session the memory commands mean is decided by which tab the user is
+    // looking at, so it has to follow focus rather than be sampled when a command runs
+    // — by then the quick-pick has taken focus and every panel reports inactive.
+    onPanelActive: () => {
+      lastActiveSessionId = sessionId;
+    },
+    onRetire: () => {
+      openChatTabs.delete(sessionId);
+      if (lastActiveSessionId === sessionId) lastActiveSessionId = null;
+    },
+  });
   openChatTabs.set(sessionId, tab);
-  const panel = tab.reveal();
+  tab.reveal();
   lastActiveSessionId = sessionId;
-  panel.onDidDispose(() => {
-    openChatTabs.delete(sessionId);
-    if (lastActiveSessionId === sessionId) lastActiveSessionId = null;
-  });
-  // Which session the memory commands mean is decided by which tab the user is
-  // looking at, so it has to follow focus rather than be sampled when a command runs —
-  // by then the quick-pick has taken focus and every panel reports inactive.
-  panel.onDidChangeViewState(() => {
-    if (panel.active) lastActiveSessionId = sessionId;
-  });
 
   // A brand-new session has no memory file until something is remembered, so the list
   // would not show it otherwise.
@@ -1504,6 +1512,15 @@ async function showStatusCommand(app) {
 }
 
 function deactivate() {
+  // A turn survives its tab being closed, but not the window going away: the extension
+  // host is about to stop, and a `npm install` left running would be reparented with
+  // nothing able to kill it or read its output.
+  for (const tab of openChatTabs.values()) {
+    if (tab.isBusy()) {
+      logger.info(`Stopping session ${tab.sessionId}: the window is closing.`);
+      tab.cancel();
+    }
+  }
   logger.info('HirayaCoder deactivated.');
 }
 
