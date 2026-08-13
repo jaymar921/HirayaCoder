@@ -84,6 +84,191 @@ describe('webview markdown segmentation', () => {
   });
 });
 
+/**
+ * A DOM small enough to prove the one property that matters.
+ *
+ * `markdown.js` is allowed to call exactly four things — `createElement`,
+ * `createTextNode`, `createDocumentFragment`, `appendChild` — plus `textContent`,
+ * `className`, and `setAttribute`. There is deliberately no `innerHTML` on these nodes:
+ * if the renderer ever reaches for one, these tests fail with a TypeError rather than
+ * quietly passing, which is a stronger guarantee than asserting on output strings.
+ */
+function installStubDom() {
+  const makeNode = (tag) => ({
+    tagName: String(tag).toUpperCase(),
+    children: [],
+    attributes: {},
+    dataset: {},
+    className: '',
+    type: '',
+    _text: '',
+    get textContent() {
+      if (this._text) return this._text;
+      return this.children.map((child) => child.textContent).join('');
+    },
+    set textContent(value) {
+      this._text = String(value);
+      this.children = [];
+    },
+    appendChild(child) {
+      this.children.push(child);
+      return child;
+    },
+    setAttribute(name, value) {
+      this.attributes[name] = String(value);
+    },
+    addEventListener() {},
+  });
+
+  const previous = global.document;
+  global.document = {
+    createElement: (tag) => makeNode(tag),
+    createTextNode: (text) => ({ tagName: '#text', children: [], textContent: String(text) }),
+    createDocumentFragment: () => makeNode('#fragment'),
+  };
+  return () => {
+    global.document = previous;
+  };
+}
+
+/** Flatten a node tree to `tag(children)` so a structural assertion reads as one line. */
+function shape(node) {
+  if (node.tagName === '#text') return JSON.stringify(node.textContent);
+  const inner = node.children.map(shape).join(',');
+  return node._text ? `${node.tagName}(${JSON.stringify(node._text)})` : `${node.tagName}(${inner})`;
+}
+
+describe('webview markdown rendering', () => {
+  /** @type {(text: string) => any} */
+  let render;
+  /** @type {() => void} */
+  let restore;
+
+  before(async () => {
+    // See the note above — the specifier is local and literal.
+    // eslint-disable-next-line no-unsanitized/method
+    ({ render } = await import(moduleUrl('components/markdown.js')));
+  });
+
+  beforeEach(() => {
+    restore = installStubDom();
+  });
+
+  afterEach(() => restore());
+
+  /** @param {string} text */
+  const tags = (text) => render(text).children.map((child) => child.tagName);
+  /** Shape of the single top-level node, without the fragment wrapper. */
+  const one = (text) => shape(render(text).children[0]);
+
+  it('renders headings as heading elements, not as hashes', () => {
+    // The reported bug: "## **LocoMenu — …**" and "### Core Purpose" appeared on screen
+    // with their punctuation intact.
+    const out = render('## LocoMenu\n\n### Core Purpose');
+    assert.deepStrictEqual(
+      out.children.map((c) => c.tagName),
+      ['H4', 'H5']
+    );
+    assert.strictEqual(out.children[0].textContent, 'LocoMenu');
+    assert.strictEqual(out.children[1].textContent, 'Core Purpose');
+  });
+
+  it('renders bold and italic as elements', () => {
+    assert.strictEqual(one('**bold** and *thin*'), 'P(STRONG("bold")," and ",EM("thin"))');
+    assert.strictEqual(one('__bold__'), 'P(STRONG("bold"))');
+  });
+
+  it('renders a heading that is itself bold, without leaving asterisks', () => {
+    // Exactly the reported line shape.
+    const out = render('## **LocoMenu - Hyper-Local Food Price Intelligence Platform**');
+    assert.strictEqual(out.children[0].tagName, 'H4');
+    assert.strictEqual(out.children[0].textContent, 'LocoMenu - Hyper-Local Food Price Intelligence Platform');
+    assert.strictEqual(shape(out.children[0].children[0]), 'STRONG("LocoMenu - Hyper-Local Food Price Intelligence Platform")');
+  });
+
+  it('renders bullet and numbered lists', () => {
+    assert.deepStrictEqual(tags('- one\n- two'), ['UL']);
+    assert.strictEqual(render('- one\n- two').children[0].children.length, 2);
+
+    const ordered = render('1. first\n2. second');
+    assert.strictEqual(ordered.children[0].tagName, 'OL');
+    assert.strictEqual(ordered.children[0].children[0].textContent, 'first');
+  });
+
+  it('keeps a list numbered from where the model started it', () => {
+    const out = render('3. third\n4. fourth');
+    assert.strictEqual(out.children[0].attributes.start, '3');
+  });
+
+  it('starts a new element when the line kind changes mid-block', () => {
+    // Models emit a heading and its list with no blank line between them.
+    assert.deepStrictEqual(tags('### Features\n- one\n- two\nAnd some prose.'), ['H5', 'UL', 'P']);
+  });
+
+  it('leaves markdown inside a code fence completely alone', () => {
+    const out = render('```md\n## Not a heading\n**not bold**\n```');
+    assert.strictEqual(out.children[0].className, 'code-block');
+    assert.match(out.children[0].textContent, /## Not a heading/);
+    assert.match(out.children[0].textContent, /\*\*not bold\*\*/);
+  });
+
+  it('leaves emphasis inside inline code alone', () => {
+    assert.strictEqual(one('use `**kwargs` here'), 'P("use ",CODE("**kwargs")," here")');
+  });
+
+  it('does not turn arithmetic or globs into emphasis', () => {
+    assert.strictEqual(one('2 * 3 * 4'), 'P("2 * 3 * 4")');
+    assert.strictEqual(one('snake_case_name and other_thing'), 'P("snake_case_name and other_thing")');
+  });
+
+  it('nests inline code inside bold', () => {
+    assert.strictEqual(one('**run `npm test` now**'), 'P(STRONG("run ",CODE("npm test")," now"))');
+  });
+
+  it('never produces markup from hostile text — it produces characters', () => {
+    // The property the whole module exists for. A heading is still just text.
+    const out = render('## <img src=x onerror=alert(1)>\n\n- <script>alert(1)</script>');
+    assert.strictEqual(out.children[0].textContent, '<img src=x onerror=alert(1)>');
+    assert.strictEqual(out.children[1].children[0].textContent, '<script>alert(1)</script>');
+    // And nothing anywhere claimed to be an IMG or a SCRIPT element.
+    const everyTag = [];
+    const walk = (n) => {
+      everyTag.push(n.tagName);
+      (n.children || []).forEach(walk);
+    };
+    walk(out);
+    assert.ok(!everyTag.includes('IMG'));
+    assert.ok(!everyTag.includes('SCRIPT'));
+  });
+
+  it('renders the reported answer without leaving any markdown punctuation', () => {
+    const reported = [
+      '## **LocoMenu - Hyper-Local Food Price Intelligence Platform**',
+      '',
+      '### Core Purpose',
+      'A community-powered platform that helps people discover food prices.',
+      '',
+      '### Key Features',
+      '1. **Price Discovery**: Interactive map showing live prices',
+      '2. **Crowdsourced Contributions**: Users can submit new prices',
+    ].join('\n');
+
+    const out = render(reported);
+    assert.deepStrictEqual(
+      out.children.map((c) => c.tagName),
+      ['H4', 'H5', 'P', 'H5', 'OL']
+    );
+    // No stray `#` or `**` survived anywhere in the rendered text.
+    assert.doesNotMatch(out.textContent, /\*\*/);
+    assert.doesNotMatch(out.textContent, /^#/m);
+  });
+
+  it('still handles plain prose and empty input', () => {
+    assert.deepStrictEqual(tags('Just a sentence.'), ['P']);
+    assert.deepStrictEqual(tags(''), []);
+  });
+});
+
 describe('thinking indicator lines', () => {
   /** @type {any} */
   let mod;

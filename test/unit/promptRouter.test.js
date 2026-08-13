@@ -50,8 +50,29 @@ describe('promptRouter — Ask mode', () => {
     }
   });
 
-  it('tells the model it has no tools this turn', () => {
-    assert.match(routeFor('ask').systemPrompt, /no tools this turn/i);
+  /** The prompt as one line, since it is hard-wrapped and phrases straddle the breaks. */
+  const flat = (mode) => routeFor(mode).systemPrompt.replace(/\s+/g, ' ');
+
+  it('tells the model it cannot act this turn', () => {
+    const prompt = flat('ask');
+    assert.match(prompt, /cannot open a file/i);
+    assert.match(prompt, /do not claim to have done any of those/i);
+  });
+
+  it('tells it what it does know, and not only what it lacks', () => {
+    // The prompt used to lead with "you have no tools this turn" and stop there, and
+    // the model drew the obvious inference: asked to list the workspace, it answered
+    // "There are no files listed in your workspace", and asked to read the README it
+    // said it had no access to the project. Both were false — the context had the
+    // listing and the project's own description in it.
+    const prompt = flat('ask');
+    assert.match(prompt, /never reply that you have no access to the project/i);
+    // The capability framing has to come before the limitation, or the model stops
+    // reading at the limitation.
+    assert.ok(
+      prompt.indexOf('Answer from it') < prompt.indexOf('cannot'),
+      'the prompt should say what it knows before it says what it cannot do'
+    );
   });
 
   it('cannot mutate', () => {

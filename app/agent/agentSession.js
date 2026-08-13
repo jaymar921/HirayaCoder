@@ -1293,10 +1293,16 @@ class AgentSession {
       // agent mid-task, and until 0.4.0 nothing in the prompt could answer either.
       conversation: this.conversation,
       contextFiles: this.contextFiles ? this.contextFiles.renderForPrompt() : '',
-      // What the project says it is. Carried on every strategy: "what is this about?"
-      // is asked at least as often in Ask mode as in Agent mode, and Ask has no way to
-      // go and find out.
-      projectOverview: projectOverview.build(this.workspaceRoot),
+      // What the project says it is. Carried everywhere except the conversational
+      // route: "what is this about?" is asked at least as often in Ask mode as in Agent
+      // mode, and Ask has no way to go and find out.
+      //
+      // The exception is not a budget decision. A model handed a project description
+      // and the message "Hello Hiraya" answers with the project description — observed
+      // twice in one session, once for a greeting and once for "I'm Jay". The chat
+      // route exists for messages that are not about the project, and giving it the
+      // one block that is guarantees the reply will be.
+      projectOverview: activeRoute.strategy === 'chat' ? '' : projectOverview.build(this.workspaceRoot),
       // A model that has to discover the file tree spends steps on it and, worse,
       // invents paths when it guesses. Seeding the listing costs a fraction of the
       // budget and removes the most common failure on Tier B outright.

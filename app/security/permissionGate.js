@@ -42,7 +42,7 @@ const scriptRunner = require('./scriptRunner');
 
 /**
  * @typedef {object} ConfirmRequest
- * @property {'write' | 'delete' | 'script'} kind
+ * @property {'write' | 'delete' | 'script' | 'read'} kind
  * @property {string} title
  * @property {string} detail
  * @property {'normal' | 'elevated'} risk  'elevated' for always-confirm commands.
@@ -61,6 +61,7 @@ const scriptRunner = require('./scriptRunner');
  * @property {(request: ConfirmRequest) => Promise<boolean>} confirm
  * @property {string[]} [allowedBinaries]
  * @property {string[]} [protectedPrefixes]
+ * @property {import('./ignoreRules').IgnoreRules} [ignoreRules]
  */
 
 class PermissionGate {
@@ -74,6 +75,14 @@ class PermissionGate {
     this.confirm = options.confirm;
     this.allowedBinaries = options.allowedBinaries;
     this.protectedPrefixes = options.protectedPrefixes;
+    /**
+     * Which paths need asking about before a read. Optional: a gate constructed without
+     * one auto-approves every confined read, which is the behaviour every caller had
+     * before this existed.
+     *
+     * @type {import('./ignoreRules').IgnoreRules | null}
+     */
+    this.ignoreRules = options.ignoreRules || null;
     /**
      * Deletes ask even under Auto Edit, unless explicitly disabled.
      *
@@ -91,20 +100,86 @@ class PermissionGate {
   }
 
   /**
-   * Reads need path confinement but never a confirmation click.
+   * Reads need path confinement, and a confirmation click for anything the project has
+   * marked as not-source.
+   *
+   * ## Why a read ever asks
+   *
+   * This used to auto-approve unconditionally, documented as "reads need path
+   * confinement but never a confirmation click", on the reasoning that reading damages
+   * nothing. It damages nothing in the workspace. It does move the file's contents into
+   * a prompt, a session transcript on disk, and the context of every later turn — and
+   * `api/.env` went through here twice, auto-approved, in a project whose `.gitignore`
+   * begins `*.env`.
+   *
+   * So the confinement check is now joined by a sensitivity check. Ordinary source is
+   * unaffected and still never prompts; a `.env`, a private key, or anything the
+   * project's own `.gitignore` excludes is shown to the user first, and remembered for
+   * the session once allowed.
+   *
+   * A gate with no `ignoreRules` configured behaves exactly as before, which is what
+   * keeps every existing caller and test valid.
    *
    * @param {{path: string, sessionId?: string, mode?: string}} request
    * @returns {Promise<Decision>}
    */
   async requestRead(request) {
+    /** @type {import('./pathGuard').ResolvedPath} */
+    let resolved;
     try {
-      const resolved = pathGuard.resolvePath(this.workspaceRoot, request.path);
+      resolved = pathGuard.resolvePath(this.workspaceRoot, request.path);
       await pathGuard.assertRealPath(resolved);
-      await this._audit({ action: 'read_file', decision: 'auto-approved', path: resolved.relative, ...this._context(request) });
-      return { allowed: true, decision: 'auto-approved', resolved };
     } catch (err) {
       return this._blocked('read_file', request, err);
     }
+
+    const verdict = this.ignoreRules ? this.ignoreRules.classify(resolved.relative) : { sensitive: false };
+
+    if (!verdict.sensitive || this.ignoreRules.isGranted(resolved.relative)) {
+      await this._audit({
+        action: 'read_file',
+        decision: 'auto-approved',
+        path: resolved.relative,
+        ...this._context(request),
+      });
+      return { allowed: true, decision: 'auto-approved', resolved };
+    }
+
+    const approved = await this.confirm({
+      kind: 'read',
+      title: `Read ${resolved.relative}?`,
+      detail:
+        verdict.because === 'always'
+          ? `${resolved.relative} looks like it holds credentials. Reading it puts its contents into the model's context and this session's transcript.`
+          : `${resolved.relative} is excluded by this project's .gitignore, so it is not source the agent would normally see. Reading it puts its contents into the model's context and this session's transcript.`,
+      // Always elevated. A read that reaches this branch is a secret or a deliberate
+      // exclusion, and neither should be a one-glance approval.
+      risk: 'elevated',
+      path: resolved.relative,
+      absolute: resolved.absolute,
+    });
+
+    await this._audit({
+      action: 'read_file',
+      decision: approved ? 'approved' : 'denied',
+      path: resolved.relative,
+      sensitive: verdict.because,
+      ...this._context(request),
+    });
+
+    if (!approved) {
+      return {
+        allowed: false,
+        decision: 'denied',
+        code: 'USER_DENIED',
+        // Phrased for the model, which must not treat this as a problem to route
+        // around by reading the same secret through `search_workspace` instead.
+        reason: `You declined to let me read ${resolved.relative}. That was the user's decision, not an error — do not try to read it again or reach its contents another way. Carry on without it, and say so if the answer genuinely depends on it.`,
+      };
+    }
+
+    this.ignoreRules.grant(resolved.relative);
+    return { allowed: true, decision: 'approved', resolved };
   }
 
   /**

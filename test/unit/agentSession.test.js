@@ -132,6 +132,19 @@ describe('AgentSession', () => {
       assert.match(prompt, /README\.md/);
     });
 
+    it('does not hand the project description to a greeting', async () => {
+      // The regression seeding the overview introduced: given a project description and
+      // the message "Hello Hiraya", the model answered with the project description.
+      // Twice in one session — once for the greeting, once for "I'm Jay".
+      fs.writeFileSync(path.join(root, 'README.md'), '# LocoMenu\n\nFind the best food prices near you.\n');
+      const client = scriptedClient(['Hey Jay!']);
+
+      const result = await makeSession({ client }).run("Hi, I'm Jay", { mode: 'agent' });
+
+      assert.strictEqual(result.stopReason, 'conversation');
+      assert.doesNotMatch(client.prompts[0], /food prices/, 'the project overview reached a conversational turn');
+    });
+
     it('is told what the project is, in the project own words', async () => {
       fs.writeFileSync(
         path.join(root, 'README.md'),

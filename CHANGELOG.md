@@ -5,6 +5,124 @@ All notable changes to HirayaCoder are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.2] — unreleased
+
+Machine B, sessions 8–12, testing the 0.5.1 build. Project comprehension is fixed —
+session 8 opened with *"LocoMenu - Hyper-Local Food Price Intelligence Platform"* and a
+correct feature breakdown, which is the answer four earlier sessions could not produce.
+Everything below is what that build got wrong.
+
+### Fixed — the agent read `api/.env`
+
+The audit log records it twice, in sessions 8 and 11, both `"decision":"auto-approved"`.
+The project's `.gitignore` is three lines and the first is `*.env`. Nothing in the
+extension had ever read it.
+
+`requestRead` was documented as "reads need path confinement but never a confirmation
+click", on the reasoning that reading damages nothing. Reading damages nothing in the
+*workspace*. It moves the file's contents into a prompt, into the session transcript on
+disk, and into the context of every later turn.
+
+New `security/ignoreRules`, consulted before every read:
+
+- Anything matching the project's own `.gitignore` needs the user's say-so.
+- `ALWAYS_SENSITIVE` — `.env` and its variants, `*.pem`, `id_rsa`, `.npmrc`,
+  `service-account*.json` — needs it whether or not a `.gitignore` exists, since plenty
+  of projects have none and a folder that is not a git repository still has secrets.
+- `.env.example` and friends are explicitly exempt. They hold placeholders, they are
+  committed on purpose, and prompting for them would train the user to click through.
+- Granted per path, remembered for the session. Allowing `api/.env` is not allowing
+  every `.env`.
+- Neither Auto Edit nor Auto Approve Scripts waves this through — neither is about
+  reads, and neither may become a blanket grant over the user's own `.gitignore`.
+
+`search_workspace` skips sensitive files rather than prompting, and says how many it
+skipped. It returns matching *lines*, so a `.env` hit would have gone straight past the
+new confirmation, and `redact` does not help: it recognises provider key formats, not
+`SECRET=value`.
+
+### Fixed — "I'm Jay" ran the agent
+
+Four times, across three sessions. Once it read a file, once it began editing
+`AuthenticationController.js` unprompted, and twice it hit the repeat guard and reported
+*"I stopped because I kept repeating the same step (read_file on /app/dev_win.bat)"*.
+
+An introduction has no verb, no file, and no pleasantry, so `isPurelySocial` — which
+needs a social *word*, and "Jay" is not one — matched nothing and the `task` default
+took it. `isIntroduction` now catches it, placed after the verb and file rules so "I'm
+adding a route" and "I'm looking at src/app.js" are still work, and gated on a stoplist
+so "I'm stuck", "I'm getting an error", and "I'm not sure" still reach the agent.
+
+### Fixed — "Magandang hapon!" proposed a shell command
+
+The Filipino and Spanish greetings were absent from `SOCIAL_WORDS`, so they classified
+as work. "Magandang hapon!" produced a `run_script` for
+`start_development_windows.bat -d build --no-hup -p 3000 …` with fourteen invented
+flags, refused only because it contained a shell operator. The extension is named for a
+Filipino word; its users greet it in Filipino. Added those, plus Spanish, French,
+German, and Italian greetings.
+
+### Fixed — asked its version, it answered the project's
+
+*"My version is v1.0.0. This matches the project's current release tag as shown in
+`api/package.json`."*
+
+0.5.1 put the real version in every system prompt and said in as many words not to look
+for it in the workspace. It lost, because "what version are you?" classified as `task`,
+the agent loop ran, and a loop with a file in front of it will believe the file. The fix
+is not to argue harder — it is `ABOUT_THE_VERSION`, so no loop starts for a question
+that has nothing to do with the project. "What version of node does this project need"
+is untouched and still gets its tools.
+
+### Fixed — Ask mode still insisted it had no access to the project
+
+0.5.1 gave Ask mode the file listing and the project overview. It kept refusing anyway:
+*"I can't directly list files from your workspace — my instructions say I have no tools
+for browsing or accessing files during this turn."* The context had the listing in it.
+
+The prompt was still leading with "You have no tools this turn", and the model stopped
+reading there. It now states what the model knows first and what it cannot do second,
+and says outright never to claim it has no access to the project. A test asserts the
+ordering, because the ordering is the fix.
+
+### Fixed — greetings got the project description
+
+A regression from 0.5.1's own overview block. Given a project description and the
+message "Hello Hiraya", the model answered with the project description; the same for
+"I'm Jay". The conversational route exists for messages that are not about the project,
+and handing it the one block that is guaranteed the reply would be. The overview now
+reaches every strategy except `chat`.
+
+### Fixed — headings and bold rendered as punctuation
+
+`webview/components/markdown.js` handled fenced code, inline code, and paragraphs, on
+the reasoning that anything more was "another parser branch operating on hostile input
+for very little benefit". Models write structured answers regardless, and the better the
+model the more structure — session 8's genuinely good answer arrived on screen as
+`## **LocoMenu - Hyper-Local Food Price Intelligence Platform**`.
+
+Added headings, bold, italic, and ordered and unordered lists. The security property is
+unchanged and unchangeable: every addition emits elements and text nodes, nothing
+concatenates markup, and there is still no `innerHTML` anywhere in the module. The unit
+tests now render through a stub DOM that has no `innerHTML` to reach for, so a future
+regression fails loudly instead of quietly.
+
+Links, images, tables, and blockquotes stay out. Links and images carry a URL, which is
+the one markdown construct that can reach somewhere.
+
+Inline parsing is now earliest-match-wins across all rules rather than rule-by-rule.
+Trying code first — which is what makes `` `**kwargs` `` stay literal — also meant a bold
+span *containing* code could never match, and ``**run `npm test` now**`` rendered with
+its asterisks showing.
+
+### Known, still not fixed
+
+- **Two models cannot run at once.** Sessions 8 and 12 are full of "The model could not
+  be reached: Request aborted." and "No answer was produced." Unchanged from 0.5.1:
+  `activeModel` is global and `_run` has no busy guard.
+- **Session memory records only actions.** `memory/session10.txt` is one line, and that
+  line is the malformed shell command from the greeting above.
+
 ## [0.5.1] — unreleased
 
 Everything here comes out of one evaluation **on Machine B**: seven sessions against
