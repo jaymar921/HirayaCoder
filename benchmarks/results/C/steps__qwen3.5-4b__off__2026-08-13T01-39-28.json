@@ -1,0 +1,37 @@
+{
+  "benchmark": "bench-steps",
+  "machine": "C",
+  "model": "qwen3.5:4b",
+  "stepSessions": false,
+  "startedAt": "2026-08-13T01:39:28.909Z",
+  "durationMs": 34003,
+  "tier": "A",
+  "canPlanTodos": true,
+  "stopReason": "done",
+  "steps": 13,
+  "graded": {
+    "appChanged": true,
+    "named": [
+      "TodoInput",
+      "TodoList"
+    ],
+    "wired": [
+      "TodoInput",
+      "TodoList"
+    ],
+    "broken": [],
+    "created": [
+      "src/hooks/useTodos.js",
+      "src/components/TodoInput.jsx",
+      "src/components/TodoList.jsx"
+    ],
+    "stillCounter": false
+  },
+  "appImportLines": [
+    "import { useState } from 'react';",
+    "import TodoInput from './components/TodoInput';",
+    "import TodoList from './components/TodoList';",
+    "import './App.css';"
+  ],
+  "modelSummary": "4 of 4 item(s) completed.\n\n1. Create src/hooks/useTodos.js with state and addTodo/removeToggle functions. — done\n2. Create src/components/TodoInput.jsx to handle form submission via useTodos hook. — done\n3. Create src/components/TodoList.jsx to render todos list items with delete buttons. — done\n4. Rewrite src/App.jsx to import the new components and remove counter demo code. — done\n\nDetail:\n1. done\n2. done\n3. done\n4. done\n\nThese steps did not complete:\n- The folder src/components does not exist."
+}
