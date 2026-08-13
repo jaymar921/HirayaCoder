@@ -11,7 +11,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { recoveryHint, nextStepHint } = require('../../app/agent/reactLoop');
+const { recoveryHint, nextStepHint, goalReminder } = require('../../app/agent/reactLoop');
 const { AgentSession } = require('../../app/agent/agentSession');
 const { PermissionGate } = require('../../app/security/permissionGate');
 const { PermissionModes } = require('../../app/security/permissionModes');
@@ -51,6 +51,34 @@ describe('reactLoop', () => {
 
     it('falls back to restating the error it does not recognise', () => {
       assert.match(recoveryHint('something unexpected'), /something unexpected/);
+    });
+  });
+
+  describe('goalReminder', () => {
+    it('restates the task where the model is about to decide', () => {
+      const reminder = goalReminder('Build a TODO app with six components', 0, 8);
+
+      assert.match(reminder, /Build a TODO app with six components/);
+      assert.match(reminder, /step 1 of 8/);
+    });
+
+    it('cuts a spec down rather than pasting it in whole', () => {
+      const spec = `Build a TODO app. ${'Every detail matters. '.repeat(60)}`;
+      const reminder = goalReminder(spec, 2, 8);
+
+      assert.ok(reminder.length < 400, 'the whole spec went back into every turn');
+      assert.match(reminder, /Build a TODO app/);
+      assert.match(reminder, /…/);
+    });
+
+    it('turns "keep exploring" into "finish" as the budget runs out', () => {
+      assert.doesNotMatch(goalReminder('do the thing', 0, 8), /finish with "done"/);
+      assert.match(goalReminder('do the thing', 6, 8), /finish with "done"/);
+    });
+
+    it('says nothing when there is no task to restate', () => {
+      assert.strictEqual(goalReminder('', 0, 8), '');
+      assert.strictEqual(goalReminder(undefined, 0, 8), '');
     });
   });
 

@@ -23,7 +23,10 @@
  * @module agent/agentSession
  */
 
+const fs = require('fs');
+
 const logger = require('../utils/logger');
+const pathGuard = require('../security/pathGuard');
 const promptRouter = require('../core/promptRouter');
 const intentRouter = require('../core/intentRouter');
 const toolRegistry = require('./toolRegistry');
@@ -111,7 +114,7 @@ class ChangeSet {
   }
 
   /**
-   * @param {{command: string, exitCode: number | null, ok: boolean}} entry
+   * @param {{command: string, cwd?: string, exitCode: number | null, ok: boolean}} entry
    */
   recordCommand(entry) {
     this.revision += 1;
@@ -791,6 +794,15 @@ class AgentSession {
             `Right now, do only item ${position}: ${item.text}\n` +
             'Ignore the other items — they are handled separately. When this one item is complete, reply with "done".';
 
+        // The transition itself, at info, because the experimental step mode is the
+        // feature most often being evaluated when someone reads this log — and "was it
+        // even on?" was previously answerable only from a line written when the tab
+        // toggled it, hours earlier in a different session.
+        logger.info(
+          `Step ${position}/${todos.items.length}, attempt ${attempt} of ${maxAttempts}: ` +
+            `${itemBudget} step(s) budgeted, ${this.stepSessions ? 'step-scoped brief' : 'full request'}.`
+        );
+
         // A step's memory is selected by what the step is about, not by what happened
         // most recently — the note naming the file this step has to import is usually
         // the oldest one in the file by the time the step runs. See
@@ -989,8 +1001,36 @@ class AgentSession {
         task,
         changed: changeSet.revision > revisionBefore,
         written: changeSet.list().filter((change) => change.kind !== 'delete'),
+        // Every command this run executed, so a `done` cannot be accepted on top of a
+        // build the model watched fail. Not scoped to `revisionBefore` like the file
+        // checks: a TODO item that leaves the build broken has broken it for every item
+        // after it, and the run should not reach the end still red.
+        commands: changeSet.commands,
         planned: Boolean(opts.planned),
+        exists: (relativePath) => this._existsInWorkspace(relativePath),
       });
+  }
+
+  /**
+   * Is there a file at this workspace-relative path right now?
+   *
+   * Confined the same way every other path is, and false for anything that escapes —
+   * a task naming `/etc/passwd` is not evidence about this project. Used only to
+   * decide whether a file the task named is genuinely missing.
+   *
+   * @param {string} relativePath
+   * @returns {boolean}
+   * @private
+   */
+  _existsInWorkspace(relativePath) {
+    if (!this.workspaceRoot) return false;
+    try {
+      const resolved = pathGuard.resolvePath(this.workspaceRoot, relativePath);
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- confined above
+      return fs.existsSync(resolved.absolute);
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -1131,6 +1171,7 @@ class AgentSession {
 
     void this.ledger.recordStep({
       model: this.model,
+      params: this.capability ? this.capability.params : undefined,
       tier: this.capability ? this.capability.tier : 'B',
       thinking: this.thinkingCapacity,
       mode: activeRoute.mode,
@@ -1181,6 +1222,7 @@ class AgentSession {
 
     await this.ledger.recordSession({
       model: this.model,
+      params: this.capability ? this.capability.params : undefined,
       tier: this.capability ? this.capability.tier : 'B',
       thinking: this.thinkingCapacity,
       mode: result.mode,
@@ -1625,6 +1667,16 @@ class AgentSession {
     // Recorded here rather than in the loops, because this is the one place every
     // action passes through regardless of which tier produced it.
     this._recordStep(action, result, activeRoute, Boolean(tool.mutating), ms);
+
+    // The one line that reconstructs a session afterwards: what was asked for, what
+    // happened, and how long it took. Debug rather than info, because a run is dozens
+    // of these — but when a user reports "it said it edited the file and it did not",
+    // this is the record that settles it, and it costs nothing until they turn it on.
+    const target = action.path || action.command || action.query || '';
+    logger.debug(
+      `Step: ${action.action}${target ? ` ${target}` : ''}${action.cwd ? ` (in ${action.cwd})` : ''} → ` +
+        `${result.ok ? 'ok' : `failed${result.error ? ` [${result.error}]` : ''}`} in ${ms}ms`
+    );
     return result;
   }
 
@@ -1702,6 +1754,7 @@ class AgentSession {
       action: step.action.action,
       path: step.action.path,
       command: step.action.command,
+      cwd: step.action.cwd,
       thought: step.action.thought,
       result,
       ok: step.result.ok,

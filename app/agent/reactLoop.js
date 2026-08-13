@@ -107,7 +107,8 @@ function renderTrace(steps, budget) {
   if (steps.length === 0) return '';
 
   const lines = steps.map((step, index) => {
-    const target = step.action.path || step.action.command || step.action.query || '';
+    const base = step.action.path || step.action.command || step.action.query || '';
+    const target = step.action.cwd ? `${base} (in ${step.action.cwd})` : base;
     const outcome = step.result && step.result.ok ? 'ok' : 'failed';
     return `${index + 1}. ${step.action.action} ${target} → ${outcome}`;
   });
@@ -123,7 +124,10 @@ function renderTrace(steps, budget) {
  * @returns {string}
  */
 function actionKey(action) {
-  return [action.action, action.path || '', action.query || '', action.command || ''].join('|');
+  // `cwd` is part of the identity: `npm install` at the root and `npm install` inside
+  // the scaffolded app are two different actions, and without this the second one is
+  // stopped as a repeat of the first.
+  return [action.action, action.path || '', action.query || '', action.command || '', action.cwd || ''].join('|');
 }
 
 /**
@@ -187,6 +191,19 @@ function nextStepHint(action, result, repeats, activeRoute) {
     );
   }
 
+  // A command that failed because of a file the model itself wrote is the one failure
+  // where "try something else, or finish" is precisely wrong: the observation has
+  // already named the file and the repair, and this hint would talk over it. Seen on
+  // `gemma4:e4b` — a correct build, one bad postcss.config.js, and a run that ended
+  // with the app declared finished rather than with the two-line fix.
+  if (!result.ok && result.detail && result.detail.fixFirst) {
+    return (
+      'That failure is in a file you wrote, and the result above says which file and what is wrong with it. ' +
+      'Open it, write it back corrected, and then run the same command again. Do not start anything else, ' +
+      'and do not finish while it is still failing.'
+    );
+  }
+
   // Every other failure with no alternative offered gets retried verbatim until the
   // budget is gone, so correct it immediately rather than waiting for a repeat.
   if (!result.ok) {
@@ -234,6 +251,48 @@ function nextStepHint(action, result, repeats, activeRoute) {
   }
 
   return '';
+}
+
+/** Longest restatement of the goal carried into a reminder. */
+const MAX_GOAL_CHARS = 240;
+
+/**
+ * The goal, restated at the point of decision.
+ *
+ * The task is already in the prompt — `contextBuilder` puts it at the top of the
+ * context block, rebuilt every turn. That is the correct place for it and it is not
+ * enough. By the time a 1B model has read a project overview, a file listing, session
+ * memory, a step trace, and 400 tokens of npm output, the sentence describing what it
+ * is *for* is thousands of tokens behind it, and recency wins: the model answers the
+ * observation instead of the request. This is the mechanism behind the most expensive
+ * failure in the v0.5.3 round — an agent that scaffolds an app, gets absorbed in
+ * making the build pass, and never returns to the six components it was asked for.
+ *
+ * So the goal is repeated last, immediately before the instruction to act, where a
+ * short-context model reads it while deciding rather than before it started. It costs
+ * about sixty tokens a turn, which is the cheapest thing in the prompt.
+ *
+ * The step count goes with it for the same reason: "you are on step 6 of 8" is what
+ * turns "keep exploring" into "write the file now", and a model with no memory of its
+ * own has no other way to know the budget is nearly gone.
+ *
+ * @param {string} task
+ * @param {number} stepIndex Zero-based.
+ * @param {number} maxSteps
+ * @returns {string}
+ */
+function goalReminder(task, stepIndex, maxSteps) {
+  const text = String(task || '').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+
+  const goal = text.length > MAX_GOAL_CHARS ? `${text.slice(0, MAX_GOAL_CHARS)}…` : text;
+  const remaining = maxSteps - stepIndex;
+  const budget =
+    remaining <= 2
+      ? `This is step ${stepIndex + 1} of ${maxSteps} — the last ones. Do the most important thing still missing, then finish with "done".`
+      : `This is step ${stepIndex + 1} of ${maxSteps}.`;
+
+  return `Remember what you are doing. The whole task, unchanged: ${goal}\n${budget}`;
 }
 
 /**
@@ -368,6 +427,8 @@ async function run(options) {
       observation ? `Result of your last action:\n${observation}` : '',
       hint,
       parseNudge,
+      // Last, and deliberately so — see goalReminder.
+      goalReminder(options.task, stepIndex, budgets.maxSteps),
       'Reply with one JSON action now.',
     ].filter(Boolean);
 
@@ -562,6 +623,7 @@ module.exports = {
   renderTrace,
   actionKey,
   nextStepHint,
+  goalReminder,
   recoveryHint,
   echoedNotice,
   REPEAT_LIMIT,

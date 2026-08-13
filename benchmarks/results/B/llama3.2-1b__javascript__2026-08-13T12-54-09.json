@@ -1,0 +1,202 @@
+{
+  "schemaVersion": 1,
+  "benchmark": "build-todo-app",
+  "machine": "B",
+  "model": "llama3.2:1b",
+  "startedAt": "2026-08-13T12:54:09.013Z",
+  "finishedAt": "2026-08-13T12:59:16.731Z",
+  "tier": "B",
+  "strategy": "react",
+  "canPlanTodos": false,
+  "modelInfo": {
+    "params": "1.2B",
+    "supportsTools": true,
+    "supportsThinking": false,
+    "contextLength": 131072
+  },
+  "host": {
+    "platform": "win32",
+    "arch": "x64",
+    "release": "10.0.26100",
+    "cpu": "AMD Ryzen 5 3600X 6-Core Processor             ",
+    "cores": 12,
+    "totalMemGb": 31.9,
+    "node": "v24.11.1"
+  },
+  "notes": "0.6.0 branch, low-param A/B",
+  "skipped": {},
+  "results": [
+    {
+      "language": "javascript",
+      "label": "JavaScript (Node)",
+      "workspace": null,
+      "phases": [
+        {
+          "name": "create",
+          "durationMs": 179419,
+          "claimed": {
+            "stopReason": "unparseable",
+            "summary": "{\"thought\": \"Create a TODO application\", \"action\": \"create_folder\", \"path\": \"src/todo-app.js/.todo-app.js/TODOs.txt/README.md/main.js/README.md/src/todo.js/README.md/src/main.js/README.md/src/todo.js/README.md/src/todo-app.js/TODOs.txt/TODOs.txt/TODOs.json/TODOs.txt/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.json/TODOs.jso"
+          },
+          "actions": {
+            "create_folder": 1
+          },
+          "actionsSucceeded": {
+            "create_folder": 1
+          },
+          "steps": 1,
+          "failures": [],
+          "refusedCommands": [],
+          "commands": [],
+          "filesTouched": [
+            {
+              "path": "src/todo-app.js/",
+              "kind": "create"
+            }
+          ],
+          "verification": {
+            "ran": false,
+            "reason": "no entry point (looked for src/main.js, main.js, index.js)",
+            "stdout": "",
+            "stderr": "",
+            "missingExpectations": [
+              "/TOTAL:\\s*2\\b/"
+            ]
+          },
+          "passed": false
+        },
+        {
+          "name": "run",
+          "durationMs": 113479,
+          "claimed": {
+            "stopReason": "unparseable",
+            "summary": "{\"thought\": \"Read the TODO application's output to find TOTAL line\", \"action\": \"read_file\", \"path\": \"src/todo-app.js:0:1: 'TOTAL' is not defined, it should be 'TOTAL: 0.0.0.0', which is a line number in the TODO application's output, not a total of lines in the file system or process output.\"}\n\nThese steps did not complete:\n- `node src/main.js` was not run: The folder \"src/todo-app.js:0:1: 'TOTAL' is not defined, it should be 'TOTAL: 0.0.0.0', which is a line number in the TODO application's output, not a total of lines in the file system or process output.\" does not exist yet, so nothing can run there. Create the project first, or run from the workspace root by leaving \"cwd\" out. Check what actually exists with list_files before choosing \"cwd\" — the path is relative to the workspace root, so it is \"todo-glass-app\", never \"./todo-glass-app/src/..\" or an absolute path.\n- `cd src && node src/main.js` was not run: Refused: \"&\" is a shell operator, and HirayaCoder never runs commands through a shell. Propose one command at a time instead of chaining or redirecting. Do not resend this line. Propose one plain command, with no operators, redirects, or chaining. If you were chaining `cd fo"
+          },
+          "actions": {
+            "run_script": 3,
+            "list_files": 1
+          },
+          "actionsSucceeded": {
+            "list_files": 1
+          },
+          "steps": 4,
+          "failures": [
+            {
+              "action": "run_script",
+              "target": "node src/main.js",
+              "observation": "`node src/main.js` in `src/todo-app.js` finished with exit code 1.\nError output:\nnode:internal/modules/cjs/loader:1424\r\n  throw err;\r\n  ^\r\n\r\nError: Cannot find module 'C:\\Users\\Jaymar\\AppData\\Local\\Temp\\hiraya-build-javascript-J80paW\\src\\todo-app.js\\src\\main.js'\r\n    at Module._resolveFilename (node:internal/modules/cjs/loader:1421:15)\r\n    at defaultResolveImpl (node:internal/modules/cjs/loader:1"
+            },
+            {
+              "action": "run_script",
+              "target": "cd src && node src/main.js",
+              "observation": "`cd src && node src/main.js` was not run: Refused: \"&\" is a shell operator, and HirayaCoder never runs commands through a shell. Propose one command at a time instead of chaining or redirecting. Do not resend this line. Propose one plain command, with no operators, redirects, or chaining. If you were chaining `cd folder && …`, drop the `cd` and pass the folder as \"cwd\" instead."
+            },
+            {
+              "action": "run_script",
+              "target": "node src/main.js",
+              "observation": "`node src/main.js` was not run: The folder \"src/todo-app.js:0:1: 'TOTAL' is not defined, it should be 'TOTAL: 0.0.0.0', which is a line number in the TODO application's output, not a total of lines in the file system or process output.\" does not exist yet, so nothing can run there. Create the project first, or run from the workspace root by leaving \"cwd\" out. Check what actually exists with list_f"
+            }
+          ],
+          "refusedCommands": [
+            {
+              "command": "cd src && node src/main.js",
+              "reason": "Refused: \"&\" is a shell operator, and HirayaCoder never runs commands through a shell. Propose one command at a time instead of chaining or redirecting. Do not resend this line. Propose one plain command, with no operators, redirects, or ch"
+            },
+            {
+              "command": "node src/main.js",
+              "reason": "The folder \"src/todo-app.js:0:1: 'TOTAL' is not defined, it should be 'TOTAL: 0.0.0.0', which is a line number in the TODO application's output, not a total of lines in the file system or process output.\" does not exist yet, so nothing can "
+            }
+          ],
+          "commands": [
+            {
+              "command": "node src/main.js",
+              "exitCode": 1,
+              "ok": false
+            }
+          ],
+          "filesTouched": [],
+          "verification": {
+            "ran": false,
+            "reason": "no entry point (looked for src/main.js, main.js, index.js)",
+            "stdout": "",
+            "stderr": "",
+            "missingExpectations": [
+              "/TOTAL:\\s*2\\b/"
+            ]
+          },
+          "passed": false
+        },
+        {
+          "name": "modify",
+          "durationMs": 14811,
+          "claimed": {
+            "stopReason": "repeating",
+            "summary": "I stopped because I kept repeating the same step (write_file on src/todo.js). Before that I completed 2 step(s) — check the changes above before relying on them."
+          },
+          "actions": {
+            "write_file": 2
+          },
+          "actionsSucceeded": {
+            "write_file": 2
+          },
+          "steps": 2,
+          "failures": [],
+          "refusedCommands": [],
+          "commands": [],
+          "filesTouched": [
+            {
+              "path": "src/todo.js",
+              "kind": "create"
+            }
+          ],
+          "verification": {
+            "ran": false,
+            "reason": "no entry point (looked for src/main.js, main.js, index.js)",
+            "stdout": "",
+            "stderr": "",
+            "missingExpectations": [
+              "/TOTAL:\\s*2\\b/",
+              "/DONE:\\s*1\\b/"
+            ]
+          },
+          "passed": false
+        }
+      ],
+      "capabilities": {
+        "addFiles": true,
+        "readFiles": false,
+        "runScripts": false,
+        "modifyFiles": false,
+        "builtWorkingApp": false,
+        "modifiedWithoutBreaking": false
+      },
+      "filesInWorkspace": [
+        "src/todo.js"
+      ],
+      "auditDecisions": {
+        "auto-approved": 11,
+        "failed": 1,
+        "blocked": 2
+      },
+      "passedPhases": 0,
+      "totalPhases": 3,
+      "durationMs": 307709
+    }
+  ],
+  "summary": {
+    "languagesRun": 1,
+    "phasesPassed": 0,
+    "phasesTotal": 3,
+    "capabilities": {
+      "addFiles": [
+        "javascript"
+      ],
+      "readFiles": [],
+      "runScripts": [],
+      "modifyFiles": [],
+      "builtWorkingApp": [],
+      "modifiedWithoutBreaking": []
+    },
+    "durationMs": 307709
+  }
+}

@@ -18,9 +18,52 @@
 
 const { truncateToTokens } = require('../../utils/tokenBudget');
 const { redact } = require('../../security/secretsScanner');
+const { diagnose, isServerCommand } = require('../scriptDiagnosis');
+const { preflight } = require('../scriptPreflight');
+const logger = require('../../utils/logger');
 
 /** Per-stream budget for what goes back into the prompt. */
 const OUTPUT_TOKENS = 400;
+
+/**
+ * How long a server is watched before it is stopped and called started.
+ *
+ * Long enough for a bundler to compile and for a port collision or a syntax error to
+ * surface, short enough that being wrong about it costs seconds rather than the whole
+ * two-minute script budget. Vite and CRA both print their startup banner well inside
+ * this; anything that has not failed by now was going to keep running.
+ */
+const PROBE_MS = 20000;
+
+/**
+ * Did a server fall over during the probe, as opposed to simply staying up?
+ *
+ * Being killed at the probe deadline is the *expected* outcome, so the exit status says
+ * nothing. What separates "started" from "broke" is whether it complained on the way.
+ *
+ * This began as a list of specific failures — a port collision, a missing module, a
+ * config that would not load — and that list was too short by exactly the failure that
+ * turned up first. A live `qwen3.5:4b` run left Vite serving nothing but 500s:
+ *
+ *   VITE v8.2.1  ready in 906 ms
+ *   [vite] Internal server error: [postcss] It looks like you're trying to use
+ *   `tailwindcss` directly as a PostCSS plugin…
+ *
+ * None of the named patterns matched, so the probe reported a working dev server and
+ * the model believed it. The test is now the general one — did it say the word "error"
+ * — because a dev server that started cleanly does not, and being wrong in that
+ * direction costs one honest failure report rather than a broken app declared finished.
+ *
+ * @param {import('../../security/scriptRunner').RunResult} result
+ * @returns {boolean}
+ */
+function looksLikeStartupFailure(result) {
+  const text = `${result.stderr || ''}\n${result.stdout || ''}`
+    // "0 errors" and "no problems found" are how build tools announce the opposite.
+    .replace(/\b(?:0|no)\s+(?:errors?|problems?|warnings?)\b/gi, '');
+
+  return /\b(?:error|errors|failed|failure|exception|ERR!|cannot|unable to|not found)\b/i.test(text);
+}
 
 /**
  * Shell commands that have a HirayaCoder tool doing the same job.
@@ -85,8 +128,12 @@ const TOOL_INSTEAD_OF = new Map([
   ['move', 'Use read_file, then write_file at the new path, then delete_file on the old one.'],
   ['sed', 'Use read_file to get the file, then write_file with the complete corrected contents.'],
   ['awk', 'Use read_file to get the file, then write_file with the complete corrected contents.'],
-  ['pwd', 'Commands already run at the workspace root, so there is nothing to check.'],
-  ['cd', 'Commands already run at the workspace root, and it cannot be changed. Use workspace-relative paths in the command itself.'],
+  ['pwd', 'Commands run at the workspace root unless you set run_script\'s "cwd", so there is nothing to check.'],
+  [
+    'cd',
+    'A command cannot change directory. To run inside a subfolder, keep the command itself plain and pass the ' +
+      'folder as run_script\'s "cwd" instead — {"command": "npm install", "cwd": "todo-glass-app"}.',
+  ],
 ]);
 
 /**
@@ -140,7 +187,16 @@ function nextStepAfterRefusal(code, command) {
         'to install, and continue with whatever you can do without it.'
       );
     case 'SHELL_METACHARACTER':
-      return ' Do not resend this line. Propose one plain command, with no operators, redirects, or chaining.';
+      return (
+        ' Do not resend this line. Propose one plain command, with no operators, redirects, or chaining. ' +
+        'If you were chaining `cd folder && …`, drop the `cd` and pass the folder as "cwd" instead.'
+      );
+    case 'CWD_NOT_FOUND':
+    case 'CWD_NOT_A_DIRECTORY':
+      return (
+        ' Check what actually exists with list_files before choosing "cwd" — the path is relative to the ' +
+        'workspace root, so it is "todo-glass-app", never "./todo-glass-app/src/.." or an absolute path.'
+      );
     case 'USER_DENIED':
       return (
         ' That was the user deciding, not an error to work around. Do not retry it and do not achieve the ' +
@@ -157,15 +213,22 @@ function nextStepAfterRefusal(code, command) {
  * @param {string} command
  * @param {import('../../security/scriptRunner').RunResult} result
  * @param {number} budget
+ * @param {string} [cwd] Workspace-relative folder it ran in, when not the root.
+ * @param {object} [extra]
+ * @param {import('../scriptDiagnosis').Diagnosis | null} [extra.diagnosis]
+ * @param {number} [extra.attempts]
  * @returns {string}
  */
-function describeRun(command, result, budget) {
+function describeRun(command, result, budget, cwd, extra = {}) {
   const parts = [];
+  // Named on every line so the model does not lose track of which project it is in
+  // across a run that touches both the root and a scaffolded subfolder.
+  const where = cwd ? ` in \`${cwd}\`` : '';
 
   if (result.timedOut) {
-    parts.push(`\`${command}\` was still running after the time limit and was stopped.`);
+    parts.push(`\`${command}\`${where} was still running after the time limit and was stopped.`);
   } else {
-    parts.push(`\`${command}\` finished with exit code ${result.code}.`);
+    parts.push(`\`${command}\`${where} finished with exit code ${result.code}.`);
   }
 
   // stderr first: when something fails, that is where the reason is.
@@ -182,11 +245,44 @@ function describeRun(command, result, budget) {
     parts.push('It produced no output.');
   }
 
+  // Last, so it is the final thing in the model's context before it decides — and
+  // phrased as an instruction rather than an observation, because a small model reading
+  // 400 tokens of stack trace needs to be told which sentence was the actionable one.
+  if (extra.diagnosis) {
+    const retried = extra.attempts > 1 ? ' It was run twice, with the same result.' : '';
+    parts.push(`What went wrong: ${extra.diagnosis.summary}.${retried} ${extra.diagnosis.fix}`);
+  }
+
   return parts.join('\n');
 }
 
 /**
- * @param {{command: string}} args
+ * Report a server that was started, watched, and stopped.
+ *
+ * @param {string} command
+ * @param {import('../../security/scriptRunner').RunResult} result
+ * @param {number} budget
+ * @param {string} [cwd]
+ * @returns {string}
+ */
+function describeServerProbe(command, result, budget, cwd) {
+  const where = cwd ? ` in \`${cwd}\`` : '';
+  const output = redact(`${result.stdout || ''}\n${result.stderr || ''}`).trim();
+  const seconds = Math.round(result.durationMs / 1000);
+
+  return [
+    `\`${command}\`${where} started and was still running after ${seconds}s with no startup errors, ` +
+      'so it works. It has been stopped — a server that keeps running would hold the session open ' +
+      'forever, and there is no browser here to look at it.',
+    output ? `Output:\n${truncateToTokens(output, budget, { keep: 'head' }).text}` : '',
+    'Do not run it again. If you need to verify the project builds, build it.',
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+/**
+ * @param {{command: string, cwd?: string}} args
  * @param {import('../toolRegistry').ToolContext} context
  * @returns {Promise<import('../toolRegistry').ToolResult>}
  */
@@ -196,7 +292,31 @@ module.exports = async function runScript(args, context) {
     return { ok: false, observation: 'run_script needs a "command" to run.' };
   }
 
-  const request = { command, sessionId: context.sessionId, mode: context.mode, timeoutMs: context.scriptTimeoutMs };
+  const cwd = String(args.cwd || '').trim();
+
+  // Before the user is asked anything: a command that provably cannot work is answered
+  // from the filesystem instead of costing a click, a subprocess, and a page of npm
+  // output for a 3B model to interpret.
+  const blocked = preflight({ command, cwd, workspaceRoot: context.workspaceRoot });
+  if (blocked) {
+    logger.info(`run_script pre-flight refused "${command}": ${blocked.code}`);
+    return {
+      ok: false,
+      observation: `\`${command}\` was not run: ${blocked.reason}`,
+      error: blocked.code,
+      detail: { command, cwd: cwd || undefined, reason: blocked.code, attempts: 0 },
+    };
+  }
+
+  const server = isServerCommand(command);
+  const request = {
+    command,
+    cwd,
+    sessionId: context.sessionId,
+    mode: context.mode,
+    // A server is given a short probe rather than the full budget. See PROBE_MS.
+    timeoutMs: server ? Math.min(PROBE_MS, context.scriptTimeoutMs || PROBE_MS) : context.scriptTimeoutMs,
+  };
   const decision = await context.gate.requestScript(request);
 
   if (!decision.allowed) {
@@ -209,43 +329,92 @@ module.exports = async function runScript(args, context) {
 
   /** @type {import('../../security/scriptRunner').RunResult} */
   let result;
-  try {
-    result = await context.gate.runScript({ ...request, signal: context.signal }, decision);
-  } catch (err) {
-    // The code travels with the result. `BINARY_NOT_FOUND` is raised here rather than
-    // at validation — the allow-list vets the name, and only `scriptRunner.run` looks
-    // for the program on PATH — so without this it was the one refusal reason that
-    // reached the loop as prose and nothing else. `factStore` reads it to record that
-    // the toolchain is absent, which is the fact worth keeping from a failed run.
-    const code = /** @type {Error & {code?: string}} */ (err).code;
-    return {
-      ok: false,
-      observation: `\`${command}\` could not be started: ${/** @type {Error} */ (err).message}${nextStepAfterRefusal(code, command)}`,
-      error: code,
-    };
+  /** @type {import('../scriptDiagnosis').Diagnosis | null} */
+  let diagnosis = null;
+  let attempts = 0;
+
+  // One retry, and only for a diagnosis that says the command was right and the world
+  // was briefly wrong. Not re-asking the user is deliberate: they approved this exact
+  // command seconds ago, and a second confirmation dialog for the same string is how a
+  // network blip turns into an abandoned task. It is audited as a separate run either
+  // way, and the observation says the retry happened.
+  for (;;) {
+    attempts += 1;
+    try {
+      result = await context.gate.runScript({ ...request, signal: context.signal }, decision);
+    } catch (err) {
+      // The code travels with the result. `BINARY_NOT_FOUND` is raised here rather than
+      // at validation — the allow-list vets the name, and only `scriptRunner.run` looks
+      // for the program on PATH — so without this it was the one refusal reason that
+      // reached the loop as prose and nothing else. `factStore` reads it to record that
+      // the toolchain is absent, which is the fact worth keeping from a failed run.
+      const code = /** @type {Error & {code?: string}} */ (err).code;
+      logger.warn(`run_script could not start "${command}": ${code || 'unknown'}`);
+      return {
+        ok: false,
+        observation: `\`${command}\` could not be started: ${/** @type {Error} */ (err).message}${nextStepAfterRefusal(code, command)}`,
+        error: code,
+      };
+    }
+
+    diagnosis = result.ok ? null : diagnose(result, { command });
+    logger.info(
+      `run_script "${command}"${cwd ? ` in ${cwd}` : ''} attempt ${attempts}: ` +
+        `exit ${result.timedOut ? 'timeout' : result.code} in ${result.durationMs}ms` +
+        `${diagnosis ? ` — ${diagnosis.reason}: ${diagnosis.summary}` : ''}`
+    );
+
+    if (!diagnosis || !diagnosis.retryable || attempts > 1 || context.signal?.aborted) break;
+    logger.info(`run_script retrying "${command}" once: ${diagnosis.summary}`);
   }
 
   const budget = context.maxObservationTokens
     ? Math.min(OUTPUT_TOKENS, Math.floor(context.maxObservationTokens / 2))
     : OUTPUT_TOKENS;
 
+  // A server that was still up when the probe ended is a server that started. Reporting
+  // that as a timeout failure is what sent models back to `npm run dev` a second and a
+  // third time, each costing the full budget, on a task they had already completed.
+  const startedCleanly = server && result.timedOut && !looksLikeStartupFailure(result);
+
   if (context.changeSet) {
-    context.changeSet.recordCommand({ command, exitCode: result.code, ok: result.ok });
+    context.changeSet.recordCommand({
+      command,
+      cwd: cwd || undefined,
+      exitCode: result.code,
+      ok: result.ok || startedCleanly,
+    });
   }
 
   return {
-    ok: result.ok,
-    observation: describeRun(command, result, budget),
+    ok: result.ok || startedCleanly,
+    // The reason travels as the error code so the ledger counts *why* runs fail, not
+    // just how often — "this model hits MISSING_DEPENDENCY eleven times a week" is a
+    // fixable observation, "37 failed steps" is not.
+    error: startedCleanly || result.ok || !diagnosis ? undefined : diagnosis.reason,
+    observation: startedCleanly
+      ? describeServerProbe(command, result, budget, cwd)
+      : describeRun(command, result, budget, cwd, { diagnosis, attempts }),
     detail: {
       command,
+      cwd: cwd || undefined,
       exitCode: result.code,
       timedOut: result.timedOut,
       durationMs: result.durationMs,
+      attempts,
+      reason: diagnosis ? diagnosis.reason : undefined,
+      // Read by the loop, which otherwise answers every failure with "try something
+      // else, or finish" — the one thing that must not be said about a build broken by
+      // a file the model just wrote.
+      fixFirst: diagnosis ? Boolean(diagnosis.fixFirst) : undefined,
     },
   };
 };
 
 module.exports.describeRun = describeRun;
+module.exports.describeServerProbe = describeServerProbe;
+module.exports.looksLikeStartupFailure = looksLikeStartupFailure;
+module.exports.PROBE_MS = PROBE_MS;
 module.exports.nextStepAfterRefusal = nextStepAfterRefusal;
 module.exports.toolForRefusedCommand = toolForRefusedCommand;
 module.exports.TOOL_INSTEAD_OF = TOOL_INSTEAD_OF;

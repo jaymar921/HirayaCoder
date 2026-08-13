@@ -50,6 +50,10 @@ You do not normally need create_folder: write_file makes every folder on the way
 file, so writing `src/main/java/App.java` creates `src/main/java` by itself. Reach for it
 only when the task asks for a folder that no file is about to go into.
 
+run_script runs one plain command at the project root. There is no shell, so `cd app && npm
+run build` is refused as chaining — pass the folder as run_script's `cwd` instead
+(`{"command": "npm run build", "cwd": "todo-glass-app"}`). The folder must already exist.
+
 delete_file, delete_folder, and run_script are consequential — explain why before calling
 them. They are shown to the user for approval before they happen, unless the matching
 auto-approve mode is on. delete_folder is the exception with no auto mode at all: it asks

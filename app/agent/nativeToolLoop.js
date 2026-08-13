@@ -291,6 +291,7 @@ async function run(options) {
         query: typeof call.args.query === 'string' ? call.args.query : undefined,
         code: typeof call.args.code === 'string' ? call.args.code : undefined,
         command: typeof call.args.command === 'string' ? call.args.command : undefined,
+        cwd: typeof call.args.cwd === 'string' ? call.args.cwd : undefined,
         // Only a real boolean counts — see the same rule in `outputParser.parseAction`.
         // A model that types "false" must not thereby authorise a recursive delete.
         recursive: call.args.recursive === true || call.args.recursive === 'true' ? true : undefined,

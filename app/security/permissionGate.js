@@ -26,6 +26,8 @@
  * @module security/permissionGate
  */
 
+const fs = require('fs');
+
 const logger = require('../utils/logger');
 const pathGuard = require('./pathGuard');
 const scriptRunner = require('./scriptRunner');
@@ -318,7 +320,7 @@ class PermissionGate {
    * Validate and seek approval for a command. Does not run it — call `runScript`
    * with the returned decision.
    *
-   * @param {{command: string, sessionId?: string, mode?: string}} request
+   * @param {{command: string, cwd?: string, sessionId?: string, mode?: string}} request
    * @returns {Promise<Decision>}
    */
   async requestScript(request) {
@@ -333,21 +335,36 @@ class PermissionGate {
       return this._blocked('run_script', request, err);
     }
 
+    /** @type {import('./pathGuard').ResolvedPath | null} */
+    let workingDirectory;
+    try {
+      workingDirectory = this._resolveWorkingDirectory(request.cwd);
+    } catch (err) {
+      return this._blocked('run_script', request, err);
+    }
+
     // Some allow-listed commands publish code or hit the network. Those never
     // auto-approve, no matter what the permission mode says.
     const elevatedReason = scriptRunner.requiresExplicitApproval(parsed);
 
     if (!elevatedReason && !this.modes.requiresScriptApproval()) {
-      await this._audit({ action: 'run_script', decision: 'auto-approved', command: request.command, ...this._context(request) });
-      return { allowed: true, decision: 'auto-approved', parsed };
+      await this._audit({
+        action: 'run_script',
+        decision: 'auto-approved',
+        command: request.command,
+        path: workingDirectory ? workingDirectory.relative : undefined,
+        ...this._context(request),
+      });
+      return { allowed: true, decision: 'auto-approved', parsed, resolved: workingDirectory || undefined };
     }
 
+    const where = workingDirectory ? workingDirectory.absolute : this.workspaceRoot;
     const approved = await this._ask({
       kind: 'script',
       title: `Run \`${request.command}\`?`,
       detail: elevatedReason
         ? `This always asks, even in auto-approve mode, because ${elevatedReason}.`
-        : `Runs in ${this.workspaceRoot} with no shell interpretation.`,
+        : `Runs in ${where} with no shell interpretation.`,
       risk: elevatedReason ? 'elevated' : 'normal',
       command: request.command,
     });
@@ -356,13 +373,56 @@ class PermissionGate {
       action: 'run_script',
       decision: approved ? 'approved' : 'denied',
       command: request.command,
+      path: workingDirectory ? workingDirectory.relative : undefined,
       reason: elevatedReason || undefined,
       ...this._context(request),
     });
 
     return approved
-      ? { allowed: true, decision: 'approved', parsed }
+      ? { allowed: true, decision: 'approved', parsed, resolved: workingDirectory || undefined }
       : { allowed: false, decision: 'denied', code: 'USER_DENIED', reason: 'You declined to run this command.' };
+  }
+
+  /**
+   * Resolve the workspace-relative directory a command asked to run in.
+   *
+   * Commands used to start at the workspace root and nowhere else, which is fine right
+   * up until the project the agent is working on lives in a subfolder. Asked to scaffold
+   * `todo-glass-app/` and then build it, every model reached for `cd todo-glass-app &&
+   * npm run build` — refused, correctly, as shell chaining — and then had no way left to
+   * express the thing it needed. The directory is a separate argument precisely so it
+   * never becomes part of a command string a shell would have to parse.
+   *
+   * Confinement is the same guard reads and writes use, so `cwd: "../.."` is refused for
+   * the same reason `read_file` refuses it. A directory that does not exist is refused
+   * here rather than surfacing as a bare `ENOENT` from `spawn`, which says nothing a
+   * model can act on.
+   *
+   * @param {string | undefined} candidate
+   * @returns {import('./pathGuard').ResolvedPath | null} null when the root is meant.
+   * @throws {import('./pathGuard').PathGuardError | Error}
+   */
+  _resolveWorkingDirectory(candidate) {
+    const raw = typeof candidate === 'string' ? candidate.trim() : '';
+    if (!raw || raw === '.' || raw === './') return null;
+
+    const resolved = pathGuard.resolvePath(this.workspaceRoot, raw);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path confined above
+    const stats = fs.existsSync(resolved.absolute) ? fs.statSync(resolved.absolute) : null;
+    if (!stats) {
+      const err = new Error(
+        `The folder "${resolved.relative}" does not exist yet, so nothing can run there. ` +
+          'Create the project first, or run from the workspace root by leaving "cwd" out.'
+      );
+      /** @type {Error & {code?: string}} */ (err).code = 'CWD_NOT_FOUND';
+      throw err;
+    }
+    if (!stats.isDirectory()) {
+      const err = new Error(`"${resolved.relative}" is a file, not a folder, so a command cannot run in it.`);
+      /** @type {Error & {code?: string}} */ (err).code = 'CWD_NOT_A_DIRECTORY';
+      throw err;
+    }
+    return resolved;
   }
 
   /**
@@ -380,8 +440,11 @@ class PermissionGate {
     }
 
     try {
+      // The directory came from `requestScript`, which resolved and confined it. Taking
+      // it from the decision rather than re-reading `request.cwd` means an unapproved
+      // directory cannot be swapped in between the click and the spawn.
       const result = await scriptRunner.run(request.command, {
-        cwd: this.workspaceRoot,
+        cwd: decision.resolved ? decision.resolved.absolute : this.workspaceRoot,
         allowedBinaries: this.allowedBinaries,
         timeoutMs: request.timeoutMs,
         onOutput: request.onOutput,

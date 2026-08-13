@@ -35,6 +35,20 @@ test/**
 builds/**
 doc/**
 
+# Everything installed, without exception.
+#
+# This extension has no runtime dependencies and never has had: `dependencies` is `{}`,
+# and everything under `node_modules` is build and test tooling. vsce prunes to the
+# production tree by itself, which is why this line was not needed until something put
+# packages there that package.json had never asked for — the v0.5.3 model round ran
+# `npm install` at the workspace root, because a command could not run anywhere else,
+# and the next build went from 0.37 MB to 22.69 MB with 3,749 files of React tooling
+# inside it.
+#
+# The prune is the fix; this is the guarantee. IF A RUNTIME DEPENDENCY IS EVER ADDED,
+# this line has to go, or the shipped extension will be missing it.
+node_modules/**
+
 # Tooling config
 eslint.config.js
 scripts/**

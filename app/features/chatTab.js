@@ -51,11 +51,31 @@ class ChatTab {
    * @param {vscode.ExtensionContext} options.context
    * @param {object} options.app        The activated singletons from extension.js.
    * @param {number} options.sessionId
+   * @param {() => void} [options.onPanelActive] This tab took focus.
+   * @param {() => void} [options.onRetire]      This tab is finished with; forget it.
    */
   constructor(options) {
     this.context = options.context;
     this.app = options.app;
     this.sessionId = options.sessionId;
+    this.onPanelActive = options.onPanelActive || (() => {});
+    this.onRetire = options.onRetire || (() => {});
+    /** Set once `onRetire` has fired, so it cannot fire twice. */
+    this._retired = false;
+    /**
+     * When the panel was closed out from under a turn that was still running.
+     *
+     * A closed tab used to cancel the turn. That is the right answer for a queued one
+     * and the wrong answer for a running one: a two-minute step budget on CPU inference
+     * means the agent is regularly mid-build when someone closes the wrong tab, and
+     * everything it had done was thrown away at the moment it could least afford it.
+     * Now the run continues headless — the permission dialogs are VS Code modals, not
+     * webview panels, so it can still ask — and the transcript records the outcome for
+     * whenever the session is reopened.
+     *
+     * @type {number | null}
+     */
+    this._detachedAt = null;
 
     /** @type {vscode.WebviewPanel | null} */
     this.panel = null;
@@ -136,14 +156,31 @@ class ChatTab {
     this.panel.iconPath = vscode.Uri.joinPath(this.context.extensionUri, 'docs', 'assets', 'icon-128.png');
 
     this.panel.webview.html = this._html(this.panel.webview, mediaRoot);
-    this.panel.onDidDispose(() => this._dispose(), null, this.context.subscriptions);
-    this.panel.webview.onDidReceiveMessage(
-      (message) => this._onMessage(message),
+    // Wired per panel rather than once per tab: a session that kept running after its
+    // tab was closed gets a *second* panel when it is reopened, and that one needs the
+    // same handlers or the tab is never cleaned up.
+    const panel = this.panel;
+    panel.onDidDispose(() => this._dispose(panel), null, this.context.subscriptions);
+    panel.onDidChangeViewState(
+      () => {
+        if (panel.active) this.onPanelActive();
+      },
       null,
       this.context.subscriptions
     );
+    panel.webview.onDidReceiveMessage((message) => this._onMessage(message), null, this.context.subscriptions);
 
     return this.panel;
+  }
+
+  /** Is this tab in the middle of a turn — queued or running? */
+  isBusy() {
+    return Boolean(this.session || this._starting);
+  }
+
+  /** Is this session running with nobody watching it? */
+  isDetached() {
+    return this._detachedAt !== null && this.panel === null;
   }
 
   /**
@@ -243,6 +280,21 @@ class ChatTab {
     });
     this._postVision();
     this._postStatus();
+
+    // Reopened onto a turn that never stopped. The webview has just painted a finished
+    // conversation, so without this it shows an idle composer over a session that is
+    // still writing files — and the user's next message is refused as "a turn is
+    // already running in this tab" with nothing on screen to explain why.
+    if (this.isBusy()) {
+      this._detachedAt = null;
+      this._post({ type: 'start' });
+      this._post({
+        type: 'status',
+        text: this.session
+          ? 'This turn kept running while the tab was closed. Still working…'
+          : 'This turn is waiting for another session to finish.',
+      });
+    }
   }
 
   /**
@@ -584,6 +636,12 @@ class ChatTab {
       // Released before the status post, so the next tab starts the moment this turn
       // is done rather than after the UI has caught up.
       if (releaseLane) releaseLane();
+      // Finished with nobody watching. The transcript already has the result, so
+      // reopening the session shows it; the tab object itself has no further use.
+      if (!this.panel) {
+        logger.info(`Session ${this.sessionId} finished while its tab was closed. The transcript has the result.`);
+        this._retire();
+      }
       // The status line is used for in-flight notes as well as the budget summary — a
       // step retry writes into it — so it is put back once the turn is over. Otherwise
       // "Retrying step 1…" sits under the composer for the rest of the conversation.
@@ -638,14 +696,61 @@ class ChatTab {
     };
   }
 
-  /** @private */
-  _dispose() {
-    // A closed tab must not keep the lane. Without the queue abort, a tab closed while
-    // waiting would hold its place in the chain and every other tab would sit behind a
-    // turn that no longer has anywhere to render.
+  /**
+   * The panel was closed.
+   *
+   * @param {vscode.WebviewPanel} [panel] The panel that closed, if it was one of ours.
+   * @private
+   */
+  _dispose(panel) {
+    // A stale handler from a panel this tab has already replaced. Reopening a detached
+    // session disposes nothing, but VS Code can deliver the old panel's dispose event
+    // late, and acting on it would tear down the live one.
+    if (panel && this.panel && panel !== this.panel) return;
+    this.panel = null;
+
+    if (!this.session) {
+      // Nothing has started. A closed tab must not keep the lane: without this, a tab
+      // closed while queued would hold its place and every other tab would sit behind a
+      // turn that no longer has anywhere to render.
+      if (this._queueAbort) this._queueAbort.abort();
+      this._retire();
+      return;
+    }
+
+    // A turn is genuinely in flight. Closing a tab is not the same decision as pressing
+    // Stop, and treating it as one threw away long autonomous runs on a misclick. The
+    // run keeps going; the only thing lost is the live view of it.
+    this._detachedAt = Date.now();
+    logger.info(`Session ${this.sessionId}: tab closed mid-turn — the run continues in the background.`);
+    void vscode.window
+      .showInformationMessage(`HirayaCoder is still working on session ${this.sessionId}.`, 'Reopen', 'Stop')
+      .then((choice) => {
+        if (choice === 'Reopen') void vscode.commands.executeCommand('hirayacoder.openSession', this.sessionId);
+        else if (choice === 'Stop') this.cancel();
+      });
+  }
+
+  /** Stop whatever this tab is doing, queued or running. */
+  cancel() {
     if (this._queueAbort) this._queueAbort.abort();
     if (this.session) this.session.cancel();
-    this.panel = null;
+  }
+
+  /**
+   * Hand this tab back to whoever is tracking it.
+   *
+   * Called when the panel closes with nothing running, and when a detached run ends —
+   * the two ways a tab stops being worth keeping. Idempotent, because both can happen
+   * to the same tab in either order.
+   *
+   * @private
+   */
+  _retire() {
+    if (this._retired) return;
+    this._retired = true;
+    this._detachedAt = null;
+    this.onRetire();
   }
 }
 

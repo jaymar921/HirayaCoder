@@ -233,6 +233,17 @@ describe('actionSchema', () => {
     assert.ok(names.includes('done'), 'no way to end the session');
   });
 
+  it('offers cwd on run_script without requiring it', () => {
+    // Same reasoning as `recursive` below: undeclared here, a Tier B model cannot say
+    // "build inside the folder I just scaffolded" at all, and falls back to the one
+    // phrasing that is always refused — `cd app && npm run build`.
+    const schema = actionSchema(new Set(['run_script', 'done']));
+    const branch = schema.anyOf.find((b) => b.properties.action.const === 'run_script');
+
+    assert.strictEqual(branch.properties.cwd.type, 'string');
+    assert.deepStrictEqual(branch.required, ['thought', 'action', 'command']);
+  });
+
   it('offers recursive on delete_folder without requiring it', () => {
     // Constrained decoding will not emit a property the schema does not mention, so a
     // missing declaration here would leave Tier B permanently unable to remove a
@@ -242,6 +253,34 @@ describe('actionSchema', () => {
 
     assert.strictEqual(branch.properties.recursive.type, 'boolean');
     assert.deepStrictEqual(branch.required, ['thought', 'action', 'path']);
+  });
+});
+
+describe('running a command somewhere other than the root', () => {
+  const { parseAction } = require('../../app/core/outputParser');
+
+  it('keeps the folder a Tier B model named', () => {
+    const result = parseAction(
+      JSON.stringify({ thought: 'build it', action: 'run_script', command: 'npm run build', cwd: 'todo-glass-app' })
+    );
+
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.action.cwd, 'todo-glass-app');
+  });
+
+  it('leaves cwd unset when the model omits it', () => {
+    const result = parseAction(JSON.stringify({ thought: 'test', action: 'run_script', command: 'npm test' }));
+
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.action.cwd, undefined);
+  });
+
+  it('treats the null a small model writes for an unused field as unset', () => {
+    const result = parseAction(
+      JSON.stringify({ thought: 'test', action: 'run_script', command: 'npm test', cwd: null })
+    );
+
+    assert.strictEqual(result.action.cwd, undefined);
   });
 });
 

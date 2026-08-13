@@ -291,6 +291,30 @@ describe('OutcomeLedger timing and health', () => {
     assert.strictEqual(record.ms, 10);
   });
 
+  it('keeps a fractional parameter count, since sub-1B is the interesting end', async () => {
+    // `count()` truncates, which would have recorded every model this project exists
+    // for as 0B and made the size comparison useless exactly where it matters.
+    const ledger = new OutcomeLedger(root);
+    await ledger.recordSession({ model: 'qwen3.5:0.5b', params: 0.5, sessionId: '1', stopReason: 'done', steps: 1, changed: false });
+    await ledger.flush();
+
+    const [record] = await ledger.read(10);
+    assert.strictEqual(record.params, 0.5);
+  });
+
+  it('carries the parameter count onto the profile, so two models can be compared', () => {
+    const profiles = summarize([
+      { kind: 'session', model: 'a:1b', params: 1, stopReason: 'done', steps: 1 },
+      { kind: 'step', model: 'a:1b', ok: true },
+    ]);
+
+    assert.strictEqual(profiles.get('a:1b').params, 1);
+  });
+
+  it('leaves the parameter count null when nothing reported one', () => {
+    assert.strictEqual(summarize([{ kind: 'session', model: 'a', stopReason: 'done' }]).get('a').params, null);
+  });
+
   it('writes a health transition with what it was before', async () => {
     const ledger = new OutcomeLedger(root);
     await ledger.recordHealth({ model: 'm', state: 'down', wasState: 'up', ms: 3000 });

@@ -1,0 +1,161 @@
+{
+  "schemaVersion": 1,
+  "benchmark": "build-todo-app",
+  "machine": "B",
+  "model": "qwen3.5:0.8b",
+  "startedAt": "2026-08-13T12:52:50.278Z",
+  "finishedAt": "2026-08-13T12:53:13.325Z",
+  "tier": "B",
+  "strategy": "react",
+  "canPlanTodos": false,
+  "modelInfo": {
+    "params": "873M",
+    "supportsTools": true,
+    "supportsThinking": true,
+    "contextLength": 262144
+  },
+  "host": {
+    "platform": "win32",
+    "arch": "x64",
+    "release": "10.0.26100",
+    "cpu": "AMD Ryzen 5 3600X 6-Core Processor             ",
+    "cores": 12,
+    "totalMemGb": 31.9,
+    "node": "v24.11.1"
+  },
+  "notes": "0.6.0 branch, low-param A/B",
+  "skipped": {},
+  "results": [
+    {
+      "language": "javascript",
+      "label": "JavaScript (Node)",
+      "workspace": null,
+      "phases": [
+        {
+          "name": "create",
+          "durationMs": 10950,
+          "claimed": {
+            "stopReason": "repeating",
+            "summary": "I stopped because I kept repeating the same step (list_files). Before that I completed 2 step(s) — check the changes above before relying on them."
+          },
+          "actions": {
+            "list_files": 2
+          },
+          "actionsSucceeded": {
+            "list_files": 2
+          },
+          "steps": 2,
+          "failures": [],
+          "refusedCommands": [],
+          "commands": [],
+          "filesTouched": [],
+          "verification": {
+            "ran": false,
+            "reason": "no entry point (looked for src/main.js, main.js, index.js)",
+            "stdout": "",
+            "stderr": "",
+            "missingExpectations": [
+              "/TOTAL:\\s*2\\b/"
+            ]
+          },
+          "passed": false
+        },
+        {
+          "name": "run",
+          "durationMs": 5263,
+          "claimed": {
+            "stopReason": "repeating",
+            "summary": "I stopped because I kept repeating the same step (list_files). Before that I completed 2 step(s) — check the changes above before relying on them."
+          },
+          "actions": {
+            "list_files": 2
+          },
+          "actionsSucceeded": {
+            "list_files": 2
+          },
+          "steps": 2,
+          "failures": [],
+          "refusedCommands": [],
+          "commands": [],
+          "filesTouched": [],
+          "verification": {
+            "ran": false,
+            "reason": "no entry point (looked for src/main.js, main.js, index.js)",
+            "stdout": "",
+            "stderr": "",
+            "missingExpectations": [
+              "/TOTAL:\\s*2\\b/"
+            ]
+          },
+          "passed": false
+        },
+        {
+          "name": "modify",
+          "durationMs": 6827,
+          "claimed": {
+            "stopReason": "repeating",
+            "summary": "I stopped because I kept repeating the same step (list_files). Before that I completed 2 step(s) — check the changes above before relying on them.\n\nThese steps did not complete:\n- src/todo.js does not exist. Use list_files or search_workspace to find the right path."
+          },
+          "actions": {
+            "list_files": 2,
+            "read_file": 1
+          },
+          "actionsSucceeded": {
+            "list_files": 2
+          },
+          "steps": 3,
+          "failures": [
+            {
+              "action": "read_file",
+              "target": "src/todo.js",
+              "observation": "src/todo.js does not exist. Use list_files or search_workspace to find the right path."
+            }
+          ],
+          "refusedCommands": [],
+          "commands": [],
+          "filesTouched": [],
+          "verification": {
+            "ran": false,
+            "reason": "no entry point (looked for src/main.js, main.js, index.js)",
+            "stdout": "",
+            "stderr": "",
+            "missingExpectations": [
+              "/TOTAL:\\s*2\\b/",
+              "/DONE:\\s*1\\b/"
+            ]
+          },
+          "passed": false
+        }
+      ],
+      "capabilities": {
+        "addFiles": false,
+        "readFiles": false,
+        "runScripts": false,
+        "modifyFiles": false,
+        "builtWorkingApp": false,
+        "modifiedWithoutBreaking": false
+      },
+      "filesInWorkspace": [],
+      "auditDecisions": {
+        "auto-approved": 10
+      },
+      "passedPhases": 0,
+      "totalPhases": 3,
+      "durationMs": 23040
+    }
+  ],
+  "summary": {
+    "languagesRun": 1,
+    "phasesPassed": 0,
+    "phasesTotal": 3,
+    "capabilities": {
+      "addFiles": [],
+      "readFiles": [],
+      "runScripts": [],
+      "modifyFiles": [],
+      "builtWorkingApp": [],
+      "modifiedWithoutBreaking": []
+    },
+    "durationMs": 23040
+  }
+}

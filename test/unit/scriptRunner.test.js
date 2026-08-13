@@ -219,6 +219,27 @@ describe('scriptRunner.run', () => {
     assert.match(result.stdout, /42/);
   });
 
+  it('closes stdin, so a command that asks a question is not left waiting', async () => {
+    // `npm create vite@latest` asks "Ok to proceed? (y)". Nothing types an answer, and
+    // with stdin left open the process sat there until the timeout killed it — which
+    // the user saw as a two-minute hang with no output and no explanation. On EOF the
+    // same prompt resolves immediately.
+    fs.writeFileSync(
+      path.join(cwd, 'asks.js'),
+      "process.stdin.on('data', () => {});\nprocess.stdin.on('end', () => console.log('answered by EOF'));\n"
+    );
+
+    const result = await run('node asks.js', { cwd, timeoutMs: 5000 });
+
+    assert.strictEqual(result.timedOut, false, 'the command should not have had to be killed');
+    assert.match(result.stdout, /answered by EOF/);
+  });
+
+  it('tells the toolchain nobody is watching', async () => {
+    const result = await run('node -e "console.log(process.env.CI)"', { cwd });
+    assert.strictEqual(result.stdout.trim(), '1');
+  });
+
   it('reports a non-zero exit without throwing', async () => {
     const result = await run('node -e "process.exit(3)"', { cwd });
     assert.strictEqual(result.ok, false);

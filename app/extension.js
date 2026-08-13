@@ -29,7 +29,7 @@ const { IgnoreRules } = require('./security/ignoreRules');
 const { TurnQueue } = require('./core/turnQueue');
 const { DEFAULT_ALLOWED_BINARIES } = require('./security/scriptRunner');
 const { MemoryStore, nextSessionId, listSessions } = require('./core/memoryStore');
-const { OutcomeLedger } = require('./core/outcomeLedger');
+const { OutcomeLedger, timings } = require('./core/outcomeLedger');
 const { FactStore } = require('./core/factStore');
 const { FileHistory } = require('./core/fileHistory');
 const earnedHints = require('./agent/earnedHints');
@@ -868,20 +868,28 @@ function openSession(context, app, sessionId) {
     return;
   }
 
-  const tab = new ChatTab({ context, app, sessionId });
+  // Both handlers belong to the tab rather than to a panel, because a session that
+  // kept running after its tab was closed opens a *second* panel when it is reopened.
+  // Wired to the first panel only, the tab would never be forgotten and focus would
+  // stop following it.
+  const tab = new ChatTab({
+    context,
+    app,
+    sessionId,
+    // Which session the memory commands mean is decided by which tab the user is
+    // looking at, so it has to follow focus rather than be sampled when a command runs
+    // — by then the quick-pick has taken focus and every panel reports inactive.
+    onPanelActive: () => {
+      lastActiveSessionId = sessionId;
+    },
+    onRetire: () => {
+      openChatTabs.delete(sessionId);
+      if (lastActiveSessionId === sessionId) lastActiveSessionId = null;
+    },
+  });
   openChatTabs.set(sessionId, tab);
-  const panel = tab.reveal();
+  tab.reveal();
   lastActiveSessionId = sessionId;
-  panel.onDidDispose(() => {
-    openChatTabs.delete(sessionId);
-    if (lastActiveSessionId === sessionId) lastActiveSessionId = null;
-  });
-  // Which session the memory commands mean is decided by which tab the user is
-  // looking at, so it has to follow focus rather than be sampled when a command runs —
-  // by then the quick-pick has taken focus and every panel reports inactive.
-  panel.onDidChangeViewState(() => {
-    if (panel.active) lastActiveSessionId = sessionId;
-  });
 
   // A brand-new session has no memory file until something is remembered, so the list
   // would not show it otherwise.
@@ -1168,13 +1176,34 @@ async function showAdaptationCommand(app) {
 
   const threshold = app.settings.adaptation.hintThreshold;
   const lines = [];
-  for (const profile of profiles.values()) {
+  // Smallest first. The question this report exists to answer is where a model stops
+  // coping, and reading it in size order is what makes the answer visible — a 9B and a
+  // 1B interleaved alphabetically is a table nobody can compare.
+  const ordered = [...profiles.values()].sort(
+    (a, b) => (a.params === null ? Infinity : a.params) - (b.params === null ? Infinity : b.params)
+  );
+  for (const profile of ordered) {
     const hints = earnedHints.select(profile, { threshold });
-    lines.push(`${profile.model}`);
+    lines.push(`${profile.model}${profile.params === null ? '' : ` (${profile.params}B)`}`);
     lines.push(
       `  ${profile.sessions} session(s), ${profile.steps} action(s), ${profile.failures} failed, ` +
         `${profile.sessionsThatChanged} changed files, ${profile.declined} declined by you`
     );
+
+    // Recorded since 0.5.0 and, until now, shown nowhere — so "gemma4:e4b took about
+    // thirty minutes" was a thing you could only learn by sitting through it with a
+    // stopwatch. `modelShare` is the part that turns a slow session into a diagnosis:
+    // near 100% is the model being the cost, well under it is a script or a huge file.
+    const time = timings(profile);
+    if (time.averageSessionMs !== null) {
+      const seconds = (ms) => `${(ms / 1000).toFixed(1)}s`;
+      lines.push(
+        `  Time: ${seconds(time.averageSessionMs)} average per turn, ` +
+          `${seconds(profile.slowestSessionMs)} slowest` +
+          `${time.averageStepMs === null ? '' : `, ${seconds(time.averageStepMs)} per action`}` +
+          `${time.modelShare === null ? '' : ` — ${Math.round(time.modelShare * 100)}% waiting on the model`}`
+      );
+    }
 
     if (profile.stops.size > 0) {
       const stops = [...profile.stops].sort((a, b) => b[1] - a[1]).map(([reason, n]) => `${reason} ×${n}`);
@@ -1504,6 +1533,15 @@ async function showStatusCommand(app) {
 }
 
 function deactivate() {
+  // A turn survives its tab being closed, but not the window going away: the extension
+  // host is about to stop, and a `npm install` left running would be reparented with
+  // nothing able to kill it or read its output.
+  for (const tab of openChatTabs.values()) {
+    if (tab.isBusy()) {
+      logger.info(`Stopping session ${tab.sessionId}: the window is closing.`);
+      tab.cancel();
+    }
+  }
   logger.info('HirayaCoder deactivated.');
 }
 
