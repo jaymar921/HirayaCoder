@@ -1,0 +1,199 @@
+{
+  "schemaVersion": 1,
+  "benchmark": "build-todo-app",
+  "machine": "B",
+  "model": "gemma3:1b",
+  "startedAt": "2026-08-13T12:53:25.560Z",
+  "finishedAt": "2026-08-13T12:54:08.733Z",
+  "tier": "B",
+  "strategy": "react",
+  "canPlanTodos": false,
+  "modelInfo": {
+    "params": "1000M",
+    "supportsTools": false,
+    "supportsThinking": false,
+    "contextLength": null
+  },
+  "host": {
+    "platform": "win32",
+    "arch": "x64",
+    "release": "10.0.26100",
+    "cpu": "AMD Ryzen 5 3600X 6-Core Processor             ",
+    "cores": 12,
+    "totalMemGb": 31.9,
+    "node": "v24.11.1"
+  },
+  "notes": "0.6.0 branch, low-param A/B",
+  "skipped": {},
+  "results": [
+    {
+      "language": "javascript",
+      "label": "JavaScript (Node)",
+      "workspace": null,
+      "phases": [
+        {
+          "name": "create",
+          "durationMs": 16605,
+          "claimed": {
+            "stopReason": "repeating",
+            "summary": "I stopped because I kept repeating the same step (write_file on ./src/todo.js). Before that I completed 2 step(s) — check the changes above before relying on them."
+          },
+          "actions": {
+            "write_file": 2
+          },
+          "actionsSucceeded": {
+            "write_file": 2
+          },
+          "steps": 2,
+          "failures": [],
+          "refusedCommands": [],
+          "commands": [],
+          "filesTouched": [
+            {
+              "path": "src/todo.js",
+              "kind": "create"
+            }
+          ],
+          "verification": {
+            "ran": false,
+            "reason": "no entry point (looked for src/main.js, main.js, index.js)",
+            "stdout": "",
+            "stderr": "",
+            "missingExpectations": [
+              "/TOTAL:\\s*2\\b/"
+            ]
+          },
+          "passed": false
+        },
+        {
+          "name": "run",
+          "durationMs": 13782,
+          "claimed": {
+            "stopReason": "repeating",
+            "summary": "I stopped because I kept repeating the same step (read_file on src/todo.js). Before that I completed 3 step(s) — check the changes above before relying on them.\n\nThese steps did not complete:\n- `node src/main.js` finished with exit code 1.\nError output:\nnode:internal/modules/cjs/loader:1424\r\n  throw err;\r\n  ^\r\n\r\nError: Cannot find module 'C:\\Users\\Jaymar\\AppData\\Local\\Temp\\hiraya-build-javascript-VWn859\\src\\main.js'\r\n    at Module._resolveFilename (node:internal/modules/cjs/loader:1421:15)\r\n    at defaultResolveImpl (node:internal/modules/cjs/loader:1059:19)\r\n    at resolveForCJSWithHooks (node:internal/modules/cjs/loader:1064:22)\r\n    at Module._load (node:internal/modules/cjs/loader:1227:37)\r\n    at TracingChannel.traceSync (node:diagnostics_channel:328:14)\r\n    at wrapModuleLoad (node:internal/modules/cjs/loader:245:24)\r\n    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)\r\n    at node:internal/main/run_main_module:33:47 {\r\n  code: 'MODULE_NOT_FOUND',\r\n  requireStack: []\r\n}\r\n\r\nNode.js v24.11.1\nWhat went wrong: a package the code imports is not installed. A package is imported but not installed. Run the install command for this project first (np"
+          },
+          "actions": {
+            "run_script": 1,
+            "read_file": 3,
+            "list_files": 1
+          },
+          "actionsSucceeded": {
+            "list_files": 1,
+            "read_file": 2
+          },
+          "steps": 5,
+          "failures": [
+            {
+              "action": "run_script",
+              "target": "node src/main.js",
+              "observation": "`node src/main.js` finished with exit code 1.\nError output:\nnode:internal/modules/cjs/loader:1424\r\n  throw err;\r\n  ^\r\n\r\nError: Cannot find module 'C:\\Users\\Jaymar\\AppData\\Local\\Temp\\hiraya-build-javascript-VWn859\\src\\main.js'\r\n    at Module._resolveFilename (node:internal/modules/cjs/loader:1421:15)\r\n    at defaultResolveImpl (node:internal/modules/cjs/loader:1059:19)\r\n    at resolveForCJSWithHook"
+            },
+            {
+              "action": "read_file",
+              "target": "C:\\Users\\Jaymar\\AppData\\Local\\Temp\\hiraya-build-javascript-VWn859\\src\\main.js",
+              "observation": "src/main.js does not exist. Use list_files or search_workspace to find the right path."
+            }
+          ],
+          "refusedCommands": [],
+          "commands": [
+            {
+              "command": "node src/main.js",
+              "exitCode": 1,
+              "ok": false
+            }
+          ],
+          "filesTouched": [],
+          "verification": {
+            "ran": false,
+            "reason": "no entry point (looked for src/main.js, main.js, index.js)",
+            "stdout": "",
+            "stderr": "",
+            "missingExpectations": [
+              "/TOTAL:\\s*2\\b/"
+            ]
+          },
+          "passed": false
+        },
+        {
+          "name": "modify",
+          "durationMs": 12779,
+          "claimed": {
+            "stopReason": "repeating",
+            "summary": "I stopped because I kept repeating the same step (write_file on ./src/todo.js). Before that I completed 1 step(s) — check the changes above before relying on them.\n\nThese steps did not complete:\n- Refused: ./src/todo.js defines no functions or classes any more — the content you sent removed the implementation and kept only the surrounding lines. Send the complete file with its code intact, changing only what you were asked to change. If the file really should be removed, use delete_file."
+          },
+          "actions": {
+            "write_file": 2
+          },
+          "actionsSucceeded": {
+            "write_file": 1
+          },
+          "steps": 2,
+          "failures": [
+            {
+              "action": "write_file",
+              "target": "./src/todo.js",
+              "observation": "Refused: ./src/todo.js defines no functions or classes any more — the content you sent removed the implementation and kept only the surrounding lines. Send the complete file with its code intact, changing only what you were asked to change. If the file really should be removed, use delete_file."
+            }
+          ],
+          "refusedCommands": [],
+          "commands": [],
+          "filesTouched": [
+            {
+              "path": "src/todo.js",
+              "kind": "edit"
+            }
+          ],
+          "verification": {
+            "ran": false,
+            "reason": "no entry point (looked for src/main.js, main.js, index.js)",
+            "stdout": "",
+            "stderr": "",
+            "missingExpectations": [
+              "/TOTAL:\\s*2\\b/",
+              "/DONE:\\s*1\\b/"
+            ]
+          },
+          "passed": false
+        }
+      ],
+      "capabilities": {
+        "addFiles": true,
+        "readFiles": true,
+        "runScripts": false,
+        "modifyFiles": true,
+        "builtWorkingApp": false,
+        "modifiedWithoutBreaking": false
+      },
+      "filesInWorkspace": [
+        "src/todo.js"
+      ],
+      "auditDecisions": {
+        "auto-approved": 15,
+        "failed": 1
+      },
+      "passedPhases": 0,
+      "totalPhases": 3,
+      "durationMs": 43166
+    }
+  ],
+  "summary": {
+    "languagesRun": 1,
+    "phasesPassed": 0,
+    "phasesTotal": 3,
+    "capabilities": {
+      "addFiles": [
+        "javascript"
+      ],
+      "readFiles": [
+        "javascript"
+      ],
+      "runScripts": [],
+      "modifyFiles": [
+        "javascript"
+      ],
+      "builtWorkingApp": [],
+      "modifiedWithoutBreaking": []
+    },
+    "durationMs": 43166
+  }
+}
