@@ -140,6 +140,14 @@ exactly one file in the workspace has that name:
     WARNING: src/App.jsx imports 2 file(s) that are not there, so it cannot run:
     - "../hooks/useTodos.js" does not exist. From src/App.jsx the correct path is "./hooks/useTodos.js".
 
+Resolution is by `existsExactly`, not `fs.stat`, and that distinction is a bug in its own
+right. Windows and macOS both resolve `./hooks/usetodos.js` to `useTodos.js` and report
+success — so a case-wrong import builds locally and fails on Linux CI or a Linux deploy,
+and the guard would have been quietly wrong in the one direction that ships a broken
+build. Every path segment is now compared byte-for-byte against what `readdir` reports,
+since that returns the real spelling however the lookup was cased. A wrong-cased directory
+counts too: `./Hooks/useTodos.js` is just as broken on Linux as `./hooks/usetodos.js`.
+
 Appended, not refused. The content is otherwise fine, and throwing away a whole file over
 a path is how a small model ends up producing a truncated one on the rewrite. `stepGuard`
 then reads the recorded result — no second trip to disk, and no disagreement with what the

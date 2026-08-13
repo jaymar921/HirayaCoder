@@ -229,6 +229,57 @@ async function resolveImports(options) {
   return [...resolved].slice(0, Number.isFinite(max) ? max : undefined);
 }
 
+/**
+ * Does this path exist on disk with exactly this spelling?
+ *
+ * `fs.stat` is not the answer, and the difference is a bug that only appears on someone
+ * else's machine. Windows and macOS both resolve `./hooks/usetodos.js` to `useTodos.js`
+ * and report success, so a model that gets the case wrong produces a file that builds
+ * locally and fails on Linux CI or a Linux deploy. The guard would be quietly wrong in
+ * the one direction that ships a broken build.
+ *
+ * So the parent directory is read and the name compared byte-for-byte. `readdir` returns
+ * the real spelling regardless of how the lookup was cased, which is the only way to ask
+ * this question portably.
+ *
+ * @param {string} workspaceRoot
+ * @param {string} relative  Workspace-relative, posix-separated.
+ * @returns {Promise<boolean>}
+ */
+async function existsExactly(workspaceRoot, relative) {
+  const posix = toPosixPath(relative);
+  const absolute = path.join(workspaceRoot, posix);
+
+  let stats;
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename
+    stats = await fs.promises.stat(absolute);
+  } catch {
+    return false;
+  }
+  if (!stats.isFile()) return false;
+
+  // Every segment has to match, not only the basename: `./Hooks/useTodos.js` is just as
+  // broken on Linux as `./hooks/usetodos.js`.
+  const segments = posix.split('/').filter(Boolean);
+  let walked = workspaceRoot;
+
+  for (const segment of segments) {
+    /** @type {string[]} */
+    let names;
+    try {
+      // eslint-disable-next-line security/detect-non-literal-fs-filename
+      names = await fs.promises.readdir(walked);
+    } catch {
+      return false;
+    }
+    if (!names.includes(segment)) return false;
+    walked = path.join(walked, segment);
+  }
+
+  return true;
+}
+
 /** Directories a search for a misplaced file should never descend into. */
 const SKIP_DIRECTORIES = new Set([
   'node_modules', '.git', '.hirayacoder', 'dist', 'out', 'build', 'coverage',
@@ -345,17 +396,14 @@ async function brokenImports(options) {
     // Only the model's own routing is in scope. A bare specifier is a dependency.
     if (!RELATIVE.test(specifier)) continue;
 
+    // `existsExactly`, not `stat` — see its note. A case-wrong import resolves on this
+    // machine and fails on Linux, and reporting it as fine is the one wrong answer that
+    // ships a broken build.
     let resolves = false;
     for (const candidate of candidatesFor(specifier, from)) {
-      try {
-        // eslint-disable-next-line security/detect-non-literal-fs-filename
-        const stats = await fs.promises.stat(path.join(workspaceRoot, candidate));
-        if (stats.isFile()) {
-          resolves = true;
-          break;
-        }
-      } catch {
-        /* try the next candidate */
+      if (await existsExactly(workspaceRoot, candidate)) {
+        resolves = true;
+        break;
       }
     }
     if (resolves) continue;
@@ -363,7 +411,9 @@ async function brokenImports(options) {
     const stem = path.posix.basename(specifier).replace(/\.[a-z0-9]{1,6}$/i, '').toLowerCase();
     const matches = stem ? await findByStem(workspaceRoot, stem) : [];
     // Only suggest when there is one obvious answer. Offering three candidate paths to
-    // a model that already picked the wrong one is not help.
+    // a model that already picked the wrong one is not help. `findByStem` matches
+    // case-insensitively and returns the real spelling, which is what makes it the right
+    // source for a suggestion when the case is the thing that was wrong.
     broken.push({ specifier, suggestion: matches.length === 1 ? specifierFrom(from, matches[0]) : null });
 
     if (broken.length >= 5) break;
@@ -379,6 +429,7 @@ module.exports = {
   brokenImports,
   findByStem,
   specifierFrom,
+  existsExactly,
   SPECIFIER_PATTERNS,
   RESOLUTION_EXTENSIONS,
   INDEX_BASENAMES,

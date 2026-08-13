@@ -100,6 +100,52 @@ describe('imports that point at nothing', function () {
       assert.strictEqual(broken[0].suggestion, null);
     });
 
+    describe('case, which is the failure that only appears on someone else\'s machine', () => {
+      // Windows and macOS both resolve './hooks/usetodos.js' to 'useTodos.js' and report
+      // success, so a case-wrong import builds locally and fails on Linux CI. `stat`
+      // alone cannot see it; the parent directory has to be read and the name compared.
+      it('catches a wrong-case filename and suggests the real spelling', async () => {
+        const broken = await importGraph.brokenImports({
+          content: "import { useTodos } from './hooks/usetodos.js';\n",
+          path: 'src/App.jsx',
+          workspaceRoot: root,
+        });
+
+        assert.strictEqual(broken.length, 1, 'a case-wrong import was accepted');
+        assert.strictEqual(broken[0].suggestion, './hooks/useTodos.js');
+      });
+
+      it('catches a wrong-case directory too', async () => {
+        // Every segment matters: './Hooks/useTodos.js' is just as broken on Linux.
+        const broken = await importGraph.brokenImports({
+          content: "import { useTodos } from './Hooks/useTodos.js';\n",
+          path: 'src/App.jsx',
+          workspaceRoot: root,
+        });
+
+        assert.strictEqual(broken.length, 1, 'a case-wrong directory was accepted');
+        assert.strictEqual(broken[0].suggestion, './hooks/useTodos.js');
+      });
+
+      it('still accepts the correctly-cased path', async () => {
+        const broken = await importGraph.brokenImports({
+          content: "import { useTodos } from './hooks/useTodos.js';\n",
+          path: 'src/App.jsx',
+          workspaceRoot: root,
+        });
+        assert.deepStrictEqual(broken, []);
+      });
+
+      it('does not report a file as existing under the wrong case', async () => {
+        assert.strictEqual(await importGraph.existsExactly(root, 'src/hooks/useTodos.js'), true);
+        assert.strictEqual(await importGraph.existsExactly(root, 'src/hooks/usetodos.js'), false);
+        assert.strictEqual(await importGraph.existsExactly(root, 'src/Hooks/useTodos.js'), false);
+        assert.strictEqual(await importGraph.existsExactly(root, 'src/hooks/missing.js'), false);
+        // A directory is not a file.
+        assert.strictEqual(await importGraph.existsExactly(root, 'src/hooks'), false);
+      });
+    });
+
     it('declines to guess when several files share the name', async () => {
       fs.writeFileSync(path.join(root, 'src', 'components', 'useTodos.js'), 'export function useTodos() {}\n');
       const broken = await importGraph.brokenImports({

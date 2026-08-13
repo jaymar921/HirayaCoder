@@ -327,9 +327,18 @@ the harness: is `App.jsx` different, and do its imports resolve to real files?
 | 1 | on | `App.jsx` rewritten, counter gone; imports not resolved by the grader at the time | 1450s (24.2 min) |
 | 2 | on | `App.jsx` rewritten, counter gone, **imports all broken** (`../hooks/…` from `src/`) | 738s (12.3 min) |
 | 3 | on | `App.jsx` rewritten, counter gone, **all three imports resolve** | 1278s (21.3 min) |
+| 4 | on | `App.jsx` rewritten, counter gone, **all three imports resolve** | 781s (13.0 min) |
 
 Run 2 is why `write_file` now checks a written file's imports. Run 3 completed only
 because its step 4 timed out and the retry caught it — see below.
+
+**What four runs do and do not establish.** Three of four produced a wired app and one did
+not, on the same fixture and the same model. That is a rate estimated from four samples,
+which is barely an estimate — and the one broken run came *before* the import guard
+existed, so it cannot be used to argue the guard fixed anything. The guard is covered by
+sixteen unit tests built from run 2's verbatim output and **has not yet been observed
+firing in a live run**. Machine C is asked to supply the repeat count that would settle
+both; see `setup/FOLLOWUP-PROMPT-MACHINE-C.md`.
 
 **The control is missing, and Machine B is meant to supply it.** The comparison above is
 0.4.0 code against 0.5.0 code, and those differ by three bug fixes as well as by step
