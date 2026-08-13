@@ -15,7 +15,24 @@ const noUnsanitized = require('eslint-plugin-no-unsanitized');
 
 module.exports = [
   {
-    ignores: ['node_modules/**', 'out/**', 'dist/**', 'builds/**', '.vscode-test/**'],
+    // Everything here is generated or downloaded, never authored — the same set the
+    // repository already refuses to track.
+    //
+    // `.ignore/` is where benchmark runs leave the projects the agent built (Vite
+    // configs, React hooks, and a minified `dist/` bundle). It is model output, not
+    // this project's source: `npm run lint` never sees it because that script names
+    // `app test`, but a bare `eslint .` — and the ESLint editor extension, which lints
+    // the whole workspace — reported 861 errors from it and made the repository look
+    // broken on a clean checkout of `main`. Linting it says nothing about HirayaCoder,
+    // and re-running a benchmark would change the count anyway.
+    ignores: [
+      'node_modules/**',
+      'out/**',
+      'dist/**',
+      'builds/**',
+      '.vscode-test/**',
+      '.ignore/**',
+    ],
   },
   {
     files: ['**/*.js'],
