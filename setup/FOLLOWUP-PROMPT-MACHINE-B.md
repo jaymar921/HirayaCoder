@@ -168,8 +168,18 @@ runs already finished are still in your terminal and can be pasted.)
 Then collate:
 
 ```bash
+git pull            # do this first — see below
 node tools/bench-steps-summary.js --machine B
 ```
+
+> **Pull before you collate.** The collator had a grading bug: it scored **one** resolving
+> import out of three as a fully wired app, which turned Machine C's real 7/10 into a
+> reported 100%. It is fixed, and the fix requires all three of the task's imports to
+> resolve.
+>
+> **Your runs are unaffected and nothing needs repeating.** The per-run JSON is the source
+> of truth and the collator recomputes from it, so re-scoring is free — but a table
+> produced by the old version is not comparable with Machine C's, so regenerate it.
 
 It prints a markdown table and lists each run that did not produce a working app, with its
 reason. Paste both into `doc/MODELS.md` under a **Machine B** subsection alongside Machine

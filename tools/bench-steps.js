@@ -107,6 +107,16 @@ const TASK = `Turn this scaffolded Vite app into a working TODO app.
 
 Use React function components and hooks only. No backend.`;
 
+/**
+ * What `App.jsx` has to end up importing for the task to have been done.
+ *
+ * All three, not any of them: the hook holds the state and the two components render it,
+ * so an `App.jsx` that imports the components without the hook renders an app with no
+ * data, and one that imports the hook without the components renders nothing at all.
+ * Both were observed on Machine C and both were scored as successes for one commit.
+ */
+const WIRING_TARGETS = ['useTodos', 'TodoInput', 'TodoList'];
+
 function writeScaffold(root) {
   for (const [relative, content] of Object.entries(SCAFFOLD)) {
     const target = path.join(root, relative);
@@ -142,15 +152,19 @@ async function grade(root) {
     if (fs.existsSync(path.join(root, relative))) created.push(relative);
   }
 
-  const named = ['useTodos', 'TodoInput', 'TodoList'].filter((name) =>
-    new RegExp(`import[^\\n]*\\b${name}\\b`).test(app)
-  );
+  const named = WIRING_TARGETS.filter((name) => new RegExp(`import[^\\n]*\\b${name}\\b`).test(app));
 
   const resolved = await importGraph.resolveImports({ content: app, path: 'src/App.jsx', workspaceRoot: root });
   const wired = named.filter((name) => resolved.some((target) => target.includes(name)));
 
   return {
     appChanged: app !== SCAFFOLD['src/App.jsx'],
+    // Recorded so the pass mark lives in the data rather than in whichever version of
+    // the collator happens to read it. `bench-steps-summary.js` scored one resolving
+    // import out of three as a success for one commit, which turned a real 7/10 into a
+    // reported 100% — a grading bar that is only in code can drift from the task it is
+    // supposed to be grading, silently.
+    expected: [...WIRING_TARGETS],
     named,
     wired,
     broken: named.filter((name) => !wired.includes(name)),

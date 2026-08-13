@@ -386,6 +386,21 @@ empty and the check passes. The table above requires all three to resolve. Left 
 deliberately: Machine B is collating with the same tool right now, and changing a grading
 bar after seeing results is the one thing §5 of both handoffs forbids.
 
+> **Since fixed, and the caution above was right but did not need to cost anything.**
+> The predicate now requires every one of the task's three imports to resolve, and the
+> collator reproduces the hand count in the table exactly: 8/10 with step sessions, 7/10
+> without. It also reports partially-wired runs in their own column rather than hiding
+> them among the passes, and `benchStepsSummary.test.js` pins all of it, including the
+> two shapes that used to slip through.
+>
+> Re-grading after the fact is safe **because the per-run JSON is the source of truth**:
+> the collator recomputes from files that were written before anyone knew the bar was
+> wrong, so nothing needs re-running and no result changes retroactively except the one
+> that was miscounted. What §5 forbids is moving the bar to flatter a result; restoring
+> the bar the comment always claimed, and re-scoring every arm with it, is the opposite.
+> The bar now travels in each record as `graded.expected`, so a future collator cannot
+> quietly disagree with the task it is grading.
+
 **1. What is the success rate?** With step sessions, **8 in 10**. The two failures were
 different from each other — one wired all three imports correctly but left the counter demo
 in `App.jsx` alongside the todo app and reported `4 of 4 done`; one wrote every import a
