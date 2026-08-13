@@ -153,12 +153,24 @@ say so plainly.
 
 ## 4. What to write down
 
-Add a **Machine C** subsection under the `bench-steps` results in `doc/MODELS.md`,
-alongside A and B. **Do not overwrite either.** Losing a baseline loses the ability to say
-whether anything helped the machine that needed it.
+**Machine B is benchmarking at the same time you are, on the same branch.** Every run
+now writes its own JSON file to `benchmarks/results/<machine>/`, one file per run, never
+appended — so the two of you cannot conflict as long as you let the harness do the
+writing. Commit those files as they are.
 
-| Model | Steps | Runs | `App.jsx` wired | Imports resolving | Median | CPU/GPU |
-|---|---|---|---|---|---|---|
+Then collate:
+
+```bash
+node tools/bench-steps-summary.js --machine C
+```
+
+It prints a markdown table and lists each run that did not produce a working app, with
+its reason. Paste both into `doc/MODELS.md` under a **Machine C** subsection alongside A
+and B. **Do not overwrite either**, and do not hand-edit anyone else's rows — losing a
+baseline loses the ability to say whether anything helped the machine that needed it.
+
+If you pull and find Machine B has already added its section, rebase rather than
+resolving by hand; the JSON files are the source of truth and the table is regenerable.
 
 Then answer these, in the doc, with what actually happened:
 
@@ -210,6 +222,7 @@ npx mocha test/unit/brokenImports.test.js          # seconds, no model — confi
 for i in 1 2 3 4 5; do
   node tools/bench-steps.js qwen3.5:4b steps --machine C
 done
+node tools/bench-steps-summary.js --machine C
 ```
 
 Five runs of one model and the five grade blocks pasted verbatim into `doc/MODELS.md`.

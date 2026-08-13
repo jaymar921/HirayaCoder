@@ -33,6 +33,12 @@
  * nothing without the machine that produced it, and the three in `doc/MODELS.md` differ
  * by more than an order of magnitude on this task. It can also come from
  * `HIRAYA_BENCH_MACHINE`.
+ *
+ * Each run writes one JSON file to `benchmarks/results/<machine>/`, never appending to a
+ * shared one — the same rule `bench-build.js` follows, and for the same reason: three
+ * machines running this at once would otherwise conflict the moment their branches meet.
+ * It also makes a repeat sweep collatable, which matters here because one run of this
+ * task tells you very little (Machine A: four runs, three outcomes).
  */
 
 const fs = require('fs');
@@ -233,11 +239,44 @@ async function grade(root) {
   // The App.jsx import lines, verbatim. A wrong relative path is the one failure this
   // report cannot convey in a boolean, and it is cheap to just show.
   const appFile = path.join(root, 'src', 'App.jsx');
+  /** @type {string[]} */
+  let importLines = [];
   if (fs.existsSync(appFile)) {
-    const lines = fs.readFileSync(appFile, 'utf8').split('\n').filter((line) => /^\s*import\b/.test(line));
-    if (lines.length > 0) console.log(`\nApp.jsx imports, verbatim:\n${lines.join('\n')}`);
+    importLines = fs.readFileSync(appFile, 'utf8').split('\n').filter((line) => /^\s*import\b/.test(line));
+    if (importLines.length > 0) console.log(`\nApp.jsx imports, verbatim:\n${importLines.join('\n')}`);
   }
   console.log(`\nThe model's own account (graded on nothing):\n${result.summary}\n`);
+
+  // One file per run, in this machine's own directory. Nothing is appended to a shared
+  // file, so two machines benchmarking at the same time cannot conflict.
+  const record = {
+    benchmark: 'bench-steps',
+    machine: MACHINE,
+    model: MODEL,
+    stepSessions: STEP_SESSIONS,
+    startedAt: new Date(startedAt).toISOString(),
+    durationMs: Date.now() - startedAt,
+    tier: capability.tier,
+    canPlanTodos: capability.canPlanTodos,
+    stopReason: result.stopReason,
+    steps: result.steps.length,
+    // The grade, from the filesystem. `wired` is the one that matters: naming an import
+    // and having one are different things, and the difference is a broken app.
+    graded,
+    appImportLines: importLines,
+    // Kept deliberately, and clearly labelled. It is evidence about how confidently a
+    // failed run describes itself, and it is graded on nothing.
+    modelSummary: result.summary,
+  };
+
+  const dir = path.join(__dirname, '..', 'benchmarks', 'results', MACHINE);
+  fs.mkdirSync(dir, { recursive: true });
+  const stamp = new Date(startedAt).toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const slug = (text) => String(text).replace(/[^a-z0-9._-]+/gi, '-');
+  const file = path.join(dir, `steps__${slug(MODEL)}__${STEP_SESSIONS ? 'on' : 'off'}__${stamp}.json`);
+  fs.writeFileSync(file, `${JSON.stringify(record, null, 2)}\n`, 'utf8');
+  console.log(`\nWrote ${path.relative(process.cwd(), file)}`);
+  console.log('Commit that file as-is. Do not edit results by hand.');
 
   if (KEEP) console.log(`kept ${root}`);
   else fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });

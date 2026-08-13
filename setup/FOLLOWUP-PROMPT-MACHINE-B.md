@@ -159,12 +159,25 @@ plainly: it settles whether the default should change.
 
 ## 4. What to write down
 
-Add a **Machine B** subsection under the `bench-steps` results in `doc/MODELS.md`,
-alongside the Machine A table. **Do not overwrite Machine A.** Losing that baseline loses
-the ability to say whether anything helped the machine that needed it.
+**Machine C is benchmarking at the same time you are, on the same branch.** Every run now
+writes its own JSON file to `benchmarks/results/<machine>/`, one file per run, never
+appended — so the two of you cannot conflict as long as you let the harness do the
+writing. Commit those files as they are. (If you started before this landed, `git pull`;
+runs already finished are still in your terminal and can be pasted.)
 
-| Model | Steps | `App.jsx` changed | Imports resolving | Still counter | Wall clock | CPU/GPU |
-|---|---|---|---|---|---|---|
+Then collate:
+
+```bash
+node tools/bench-steps-summary.js --machine B
+```
+
+It prints a markdown table and lists each run that did not produce a working app, with its
+reason. Paste both into `doc/MODELS.md` under a **Machine B** subsection alongside Machine
+A. **Do not overwrite Machine A**, and do not hand-edit Machine C's rows — losing a
+baseline loses the ability to say whether anything helped the machine that needed it.
+
+If you pull and find Machine C has already added its section, rebase rather than resolving
+by hand; the JSON files are the source of truth and the table is regenerable.
 
 Then answer these in the doc, with what actually happened:
 
