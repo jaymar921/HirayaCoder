@@ -1,0 +1,39 @@
+{
+  "benchmark": "bench-steps",
+  "machine": "C",
+  "model": "qwen3.5:4b",
+  "stepSessions": false,
+  "startedAt": "2026-08-13T01:36:03.520Z",
+  "durationMs": 32695,
+  "tier": "A",
+  "canPlanTodos": true,
+  "stopReason": "done",
+  "steps": 15,
+  "graded": {
+    "appChanged": true,
+    "named": [
+      "useTodos",
+      "TodoInput",
+      "TodoList"
+    ],
+    "wired": [
+      "useTodos",
+      "TodoInput",
+      "TodoList"
+    ],
+    "broken": [],
+    "created": [
+      "src/hooks/useTodos.js",
+      "src/components/TodoInput.jsx",
+      "src/components/TodoList.jsx"
+    ],
+    "stillCounter": false
+  },
+  "appImportLines": [
+    "import { useTodos } from './hooks/useTodos';",
+    "import TodoInput from './components/TodoInput';",
+    "import TodoList from './components/TodoList';",
+    "import './App.css';"
+  ],
+  "modelSummary": "4 of 4 item(s) completed.\n\n1. Create src/hooks/useTodos.js with state and addTodo, removeTodo, toggleTodo functions. — done\n2. Create src/components/TodoInput.jsx as a form that calls the hook's addTodo on submit. — done\n3. Create src/components/TodoList.jsx to render todos from the hook with individual delete buttons. — done\n4. Rewrite src/App.jsx to use the new hook and components instead of the counter demo. — done\n\nDetail:\n1. done\n2. done\n3. done\n4. Done — `src/App.jsx` now imports and uses the `useTodos` hook along with `TodoInput` and `TodoList`, replacing the counter demo entirely.\n\nThese steps did not complete:\n- The folder src/components does not exist.\n- No test command could be found for this project (no \"test\" script in package.json, and no pytest, cargo, go, maven, or gradle setup). Use run_script if you know the right command."
+}
