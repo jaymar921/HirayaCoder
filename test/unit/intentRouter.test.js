@@ -212,3 +212,90 @@ describe('intentRouter.classify', () => {
     });
   });
 });
+
+/**
+ * The Machine B sessions 8–12: greetings, introductions, and questions about the
+ * assistant that were all classified as work and sent into the agent loop.
+ *
+ * The costs were not cosmetic. "Magandang hapon!" produced a `run_script` proposing
+ * `start_development_windows.bat` with fourteen invented flags. "I'm Jay" started
+ * editing `AuthenticationController.js`. "what version are you?" read
+ * `api/package.json` and reported the *project's* version as its own.
+ */
+describe('intentRouter — messages that are not work', () => {
+  const { classify, isIntroduction } = require('../../app/core/intentRouter');
+
+  /** @param {string} message */
+  const intentOf = (message) => classify(message).intent;
+
+  describe('introductions', () => {
+    for (const message of [
+      "I'm Jay",
+      'I am Jay',
+      'my name is Jay',
+      "Hi there, I'm Jay",
+      "I'm Jay, can you help me?",
+      'Ako si Jay',
+      'you can call me Jay',
+    ]) {
+      it(`treats "${message}" as conversation`, () => {
+        assert.strictEqual(intentOf(message), 'chat');
+      });
+    }
+
+    it('does not mistake a state for a name', () => {
+      // "I'm" opens plenty of real requests. These must still reach the agent.
+      for (const message of [
+        "I'm getting an error when I run the tests",
+        "I'm trying to fix the bug",
+        "I'm stuck on the auth flow",
+        "I'm not sure why src/app.js fails",
+      ]) {
+        assert.strictEqual(intentOf(message), 'task', `"${message}" was treated as small talk`);
+      }
+    });
+
+    it('is decided on the word after the pronoun', () => {
+      assert.strictEqual(isIntroduction("I'm Jay"), true);
+      assert.strictEqual(isIntroduction("I'm confused"), false);
+      assert.strictEqual(isIntroduction("I'm going to refactor this"), false);
+    });
+  });
+
+  describe('greetings in the languages people actually use', () => {
+    for (const message of ['Kumusta!', 'Magandang hapon!', 'Magandang umaga', 'Hola', 'Buenos dias', 'Bonjour', 'Ciao']) {
+      it(`answers "${message}" instead of running the agent at it`, () => {
+        assert.strictEqual(intentOf(message), 'chat');
+      });
+    }
+
+    it('still hears the request behind a greeting', () => {
+      // The rule this must never break: a pleasantry in front of work is work.
+      assert.strictEqual(intentOf('hola, delete src/old.js'), 'task');
+      assert.strictEqual(intentOf('Magandang umaga, please add a login route'), 'task');
+    });
+  });
+
+  describe('questions about the assistant', () => {
+    for (const message of ['what version are you?', 'what is your version', 'which version are you', 'are you v0.5.1?']) {
+      it(`answers "${message}" without reading the project`, () => {
+        assert.strictEqual(intentOf(message), 'chat');
+      });
+    }
+
+    it('leaves a question about the project version to the agent', () => {
+      // "what version of node does this project need" is a real workspace question and
+      // must keep its tools.
+      assert.strictEqual(intentOf('what version of node does this project need'), 'task');
+      assert.strictEqual(intentOf('what version of react is installed'), 'task');
+    });
+  });
+
+  describe('banter', () => {
+    for (const message of ['can you share a joke', 'tell me a joke', 'got a fun fact?']) {
+      it(`treats "${message}" as conversation`, () => {
+        assert.strictEqual(intentOf(message), 'chat');
+      });
+    }
+  });
+});

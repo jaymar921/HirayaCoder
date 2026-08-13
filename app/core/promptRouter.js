@@ -25,6 +25,7 @@
 const toolRegistry = require('../agent/toolRegistry');
 const modelCapability = require('./modelCapability');
 const earnedHints = require('../agent/earnedHints');
+const productInfo = require('../utils/productInfo');
 const { loadTemplate } = require('../utils/promptLoader');
 
 /** Fallback if `setup/prompts/lite-1b-system-prompt.md` cannot be read. */
@@ -70,13 +71,64 @@ writing, deleting, or running commands is available to you. Explore what you nee
 then finish with "done" whose summary is a numbered plan: one line per step, naming
 the file each step would touch. Do not describe changes as though you made them.`;
 
-/** The Ask-mode instruction. No tools exist in this mode. */
-const ASK_SYSTEM = `You are HirayaCoder, an offline coding assistant.
+/**
+ * Appended when the message asked to be told something and nothing more.
+ *
+ * Says the same thing the missing tools already say, because on Tier B the two failure
+ * modes are different: an absent tool stops the action, and this stops the model
+ * spending three of its eight steps proposing one and being refused.
+ */
+const READ_ONLY_SUFFIX = `
 
-Answer the user's question directly and concisely, using only the context provided
-below. You have no tools this turn: do not claim to have read, changed, or run
-anything. If answering would require looking at a file you were not given, say which
-file you would need.`;
+This request asks you to look and explain, not to change anything. Nothing that writes,
+deletes, or runs a command is available to you this turn — not because it was refused,
+but because it is not part of this task. Read what you need, then answer in prose.
+
+Do not run the project, its dev script, or its server to find out what it does. Reading
+the files tells you that, and starting a server does not answer a question — it hangs
+waiting for requests that will never come.`;
+
+/**
+ * The Ask-mode instruction. No tools exist in this mode.
+ *
+ * ## Why the original wording was actively harmful
+ *
+ * This prompt used to say only that the model had no tools. Combined with a context
+ * block that carried no file listing (see `agentSession._buildContext`), the model
+ * concluded it had no *project* — and said so, repeatedly and with conviction: "There
+ * are no files listed in your workspace", "I don't currently have access to any project
+ * files or context in our conversation", "No, I am not capable of reading files",
+ * three times in a row to a user who could see the files in the sidebar.
+ *
+ * Two separate faults compounded there. The context was genuinely empty, which is fixed
+ * where it was built. But the prompt also encouraged the conclusion, because "you have
+ * no tools" is one short inferential step from "you know nothing about this project",
+ * and nothing here contradicted it.
+ *
+ * So this now states what the model *does* have, before it states what it lacks. The
+ * distinction the model has to hold is between reading a file right now (it cannot) and
+ * knowing what is in the project (it does, for what it was given), and a prompt that
+ * only names the limitation will not teach that difference.
+ */
+const ASK_SYSTEM = `{identity}
+
+Everything below this line is what you know about the user's project: its own
+description of itself, a listing of the files in it, the conversation so far, notes from
+earlier in this session, and whatever the user has open in their editor. All of it is
+real and current. Answer from it.
+
+If the user asks what the project is, what files it contains, or what you know about it,
+you can answer — the information is right there. Never reply that you have no access to
+the project, no information about their workspace, or no files to look at. That is
+false, and it was the single most common wrong answer this mode used to give.
+
+The one thing you cannot do this turn is perform an action: you cannot open a file that
+was not already given to you, run a command, or change anything. So do not claim to have
+done any of those. If a question genuinely needs the contents of a file you were not
+handed, name that file and say it can be read in Agent mode. That is a specific, useful
+answer; "I have no tools" is not, and on its own it is not even true of what you know.
+
+Answer the question that was actually asked, directly and concisely.`;
 
 /**
  * Agent mode, for a message that turned out to be conversation.
@@ -96,12 +148,17 @@ file you would need.`;
  * told it has no tools reports that it *cannot* help with the next request, and the user
  * has to fight it back into working.
  */
-const CHAT_SYSTEM = `You are HirayaCoder, a coding assistant that lives in the user's editor.
+const CHAT_SYSTEM = `{identity}
 
 This message is conversation, not a task — nothing needs to be built, read, or changed
 to answer it. Reply the way a colleague would: directly, in a sentence or two, in the
 user's own language if they are not writing in English. No checklists, no summaries of
 work, no offers to do six things.
+
+You are allowed to have a personality. If the user is joking, joke back; if they ask for
+a joke, tell one — an actual one, not a restatement of the last thing they said. Being a
+coding assistant is not a reason to be dull, and "I am an AI assistant" is not an answer
+to anything a person actually asked.
 
 The conversation so far and the notes from this project are below. Answer from them. If
 the answer is not there — you were asked about something from before this session, or a
@@ -111,6 +168,36 @@ discussed.
 You have no tools for this reply, so do not claim to have read, changed, or run
 anything. This is about this message only: the moment the user asks for work, you will
 have every tool back.`;
+
+/**
+ * Put the product's own name and version into a system prompt.
+ *
+ * ## Why every prompt gets this, including the loop tiers
+ *
+ * "What version are you?" was unanswerable in every mode, because no prompt carried the
+ * answer. What the modes did with that varied, and none of it was good: Agent mode
+ * replied with a summary of changes to `api/package.json`, having reached for the only
+ * version number anywhere in its context; Ask mode suggested the user look it up in a
+ * README. One session did answer "HirayaCoder v0.5.0" correctly — two turns after the
+ * user had typed that exact string, which the transcript then supplied back.
+ *
+ * Reaching for the workspace's version when asked about its own is the specific
+ * confusion worth designing against, so `productInfo.identityLine` separates the two
+ * explicitly rather than just stating a number.
+ *
+ * Templates that carry an `{identity}` placeholder have it substituted in place. The
+ * two prompt files on disk do not, and are author-editable, so for those the line is
+ * prepended — which also means a user's customised prompt file cannot accidentally
+ * drop the extension's identity by not knowing about the placeholder.
+ *
+ * @param {string} prompt
+ * @returns {string}
+ */
+function withIdentity(prompt) {
+  const identity = productInfo.identityLine();
+  if (prompt.includes('{identity}')) return prompt.replace('{identity}', identity);
+  return `${identity}\n\n${prompt}`;
+}
 
 /**
  * Render the earned-hints block appended to a system prompt.
@@ -149,6 +236,9 @@ function renderEarnedHints(hints) {
  * @property {string} [memory]  Rendered Session Memory block.
  * @property {string[]} [earnedHints]  Sentences from `agent/earnedHints`, already selected.
  * @property {'chat' | 'task'} [intent]  From `core/intentRouter`. Only consulted in Agent mode.
+ * @property {boolean} [readOnlyTurn]  From `intentRouter.isReadOnlyRequest`. Drops the
+ *   mutating tools for one message. Only consulted in Agent mode — Plan has already
+ *   dropped them, and Ask never had any.
  */
 
 /**
@@ -162,7 +252,9 @@ function renderEarnedHints(hints) {
  * @property {Set<string>} allowedActions
  * @property {string} systemPrompt
  * @property {import('./modelCapability').Budgets} budgets
- * @property {boolean} readOnly
+ * @property {boolean} readOnly       True in Plan mode and on a read-only Agent turn.
+ * @property {boolean} readOnlyTurn   True only for the latter — the user is still in
+ *   Agent mode and their next message gets the full toolset back.
  */
 
 /**
@@ -185,9 +277,12 @@ function route(request) {
       tools: [],
       ollamaTools: [],
       allowedActions: new Set(),
-      systemPrompt: ASK_SYSTEM,
+      systemPrompt: withIdentity(ASK_SYSTEM),
       budgets: { ...budgets, maxSteps: 0 },
       readOnly: true,
+      // Read-only because the user chose a mode, not because this message was a
+      // question. Stated rather than left undefined so a caller can tell the two apart.
+      readOnlyTurn: false,
     };
   }
 
@@ -206,14 +301,22 @@ function route(request) {
       tools: [],
       ollamaTools: [],
       allowedActions: new Set(),
-      systemPrompt: CHAT_SYSTEM,
+      systemPrompt: withIdentity(CHAT_SYSTEM),
       budgets: { ...budgets, maxSteps: 0 },
       readOnly: true,
+      readOnlyTurn: false,
     };
   }
 
-  const tools = toolRegistry.forMode(mode);
-  const allowedActions = toolRegistry.actionsForMode(mode);
+  // A turn that asked to be told something gets the tools to find out and none of the
+  // tools to act. Structurally the same restriction Plan mode applies, decided per
+  // message rather than by a button, and reported separately so the UI and the audit
+  // log can tell "the user chose read-only" from "this request was read-only".
+  const readOnlyTurn = mode === 'agent' && Boolean(request.readOnlyTurn);
+  const toolMode = readOnlyTurn ? 'plan' : mode;
+
+  const tools = toolRegistry.forMode(toolMode);
+  const allowedActions = toolRegistry.actionsForMode(toolMode);
   const useNative = Boolean(capability) && capability.strategy === 'native';
 
   let systemPrompt;
@@ -221,13 +324,16 @@ function route(request) {
     systemPrompt = loadTemplate('agentic-system-prompt.md', AGENTIC_FALLBACK).replace('{memory}', memory);
   } else {
     systemPrompt = loadTemplate('lite-1b-system-prompt.md', LITE_FALLBACK)
-      .replace('{actions}', toolRegistry.describeForPrompt(mode))
+      .replace('{actions}', toolRegistry.describeForPrompt(toolMode))
       .replace('{memory}', memory)
       // The shipped prompt file uses this placeholder name for the memory block.
       .replace('{session_memory}', memory);
   }
 
+  systemPrompt = withIdentity(systemPrompt);
+
   if (mode === 'plan') systemPrompt += PLAN_SUFFIX;
+  if (readOnlyTurn) systemPrompt += READ_ONLY_SUFFIX;
 
   // Ask mode never reaches this line, having returned above, and that is deliberate:
   // every earned hint is about performing an action — how to send a file, how to phrase
@@ -239,11 +345,15 @@ function route(request) {
     strategy: useNative ? 'native' : 'react',
     mode,
     tools,
-    ollamaTools: useNative ? toolRegistry.toOllamaTools(mode) : [],
+    // `toolMode`, not `mode` — this is the list a Tier A model is actually offered, and
+    // filtering `tools` without filtering this would leave the restriction cosmetic on
+    // exactly the tier that can call a tool directly.
+    ollamaTools: useNative ? toolRegistry.toOllamaTools(toolMode) : [],
     allowedActions,
     systemPrompt,
     budgets,
-    readOnly: mode === 'plan',
+    readOnly: mode === 'plan' || readOnlyTurn,
+    readOnlyTurn,
   };
 }
 
@@ -264,6 +374,8 @@ module.exports = {
   route,
   canMutate,
   renderEarnedHints,
+  withIdentity,
+  READ_ONLY_SUFFIX,
   ASK_SYSTEM,
   CHAT_SYSTEM,
   PLAN_SUFFIX,

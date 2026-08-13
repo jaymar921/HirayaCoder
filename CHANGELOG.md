@@ -5,6 +5,287 @@ All notable changes to HirayaCoder are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.3] — unreleased
+
+Machine B, sessions 8–12, testing the 0.5.1 build. Project comprehension is fixed —
+session 8 opened with *"LocoMenu - Hyper-Local Food Price Intelligence Platform"* and a
+correct feature breakdown, which is the answer four earlier sessions could not produce.
+Everything below is what that build got wrong.
+
+### Fixed — the agent read `api/.env`
+
+The audit log records it twice, in sessions 8 and 11, both `"decision":"auto-approved"`.
+The project's `.gitignore` is three lines and the first is `*.env`. Nothing in the
+extension had ever read it.
+
+`requestRead` was documented as "reads need path confinement but never a confirmation
+click", on the reasoning that reading damages nothing. Reading damages nothing in the
+*workspace*. It moves the file's contents into a prompt, into the session transcript on
+disk, and into the context of every later turn.
+
+New `security/ignoreRules`, consulted before every read:
+
+- Anything matching the project's own `.gitignore` needs the user's say-so.
+- `ALWAYS_SENSITIVE` — `.env` and its variants, `*.pem`, `id_rsa`, `.npmrc`,
+  `service-account*.json` — needs it whether or not a `.gitignore` exists, since plenty
+  of projects have none and a folder that is not a git repository still has secrets.
+- `.env.example` and friends are explicitly exempt. They hold placeholders, they are
+  committed on purpose, and prompting for them would train the user to click through.
+- Granted per path, remembered for the session. Allowing `api/.env` is not allowing
+  every `.env`.
+- Neither Auto Edit nor Auto Approve Scripts waves this through — neither is about
+  reads, and neither may become a blanket grant over the user's own `.gitignore`.
+
+`search_workspace` skips sensitive files rather than prompting, and says how many it
+skipped. It returns matching *lines*, so a `.env` hit would have gone straight past the
+new confirmation, and `redact` does not help: it recognises provider key formats, not
+`SECRET=value`.
+
+### Fixed — "I'm Jay" ran the agent
+
+Four times, across three sessions. Once it read a file, once it began editing
+`AuthenticationController.js` unprompted, and twice it hit the repeat guard and reported
+*"I stopped because I kept repeating the same step (read_file on /app/dev_win.bat)"*.
+
+An introduction has no verb, no file, and no pleasantry, so `isPurelySocial` — which
+needs a social *word*, and "Jay" is not one — matched nothing and the `task` default
+took it. `isIntroduction` now catches it, placed after the verb and file rules so "I'm
+adding a route" and "I'm looking at src/app.js" are still work, and gated on a stoplist
+so "I'm stuck", "I'm getting an error", and "I'm not sure" still reach the agent.
+
+### Fixed — "Magandang hapon!" proposed a shell command
+
+The Filipino and Spanish greetings were absent from `SOCIAL_WORDS`, so they classified
+as work. "Magandang hapon!" produced a `run_script` for
+`start_development_windows.bat -d build --no-hup -p 3000 …` with fourteen invented
+flags, refused only because it contained a shell operator. The extension is named for a
+Filipino word; its users greet it in Filipino. Added those, plus Spanish, French,
+German, and Italian greetings.
+
+### Fixed — asked its version, it answered the project's
+
+*"My version is v1.0.0. This matches the project's current release tag as shown in
+`api/package.json`."*
+
+0.5.1 put the real version in every system prompt and said in as many words not to look
+for it in the workspace. It lost, because "what version are you?" classified as `task`,
+the agent loop ran, and a loop with a file in front of it will believe the file. The fix
+is not to argue harder — it is `ABOUT_THE_VERSION`, so no loop starts for a question
+that has nothing to do with the project. "What version of node does this project need"
+is untouched and still gets its tools.
+
+### Fixed — Ask mode still insisted it had no access to the project
+
+0.5.1 gave Ask mode the file listing and the project overview. It kept refusing anyway:
+*"I can't directly list files from your workspace — my instructions say I have no tools
+for browsing or accessing files during this turn."* The context had the listing in it.
+
+The prompt was still leading with "You have no tools this turn", and the model stopped
+reading there. It now states what the model knows first and what it cannot do second,
+and says outright never to claim it has no access to the project. A test asserts the
+ordering, because the ordering is the fix.
+
+### Fixed — greetings got the project description
+
+A regression from 0.5.1's own overview block. Given a project description and the
+message "Hello Hiraya", the model answered with the project description; the same for
+"I'm Jay". The conversational route exists for messages that are not about the project,
+and handing it the one block that is guaranteed the reply would be. The overview now
+reaches every strategy except `chat`.
+
+### Fixed — headings and bold rendered as punctuation
+
+`webview/components/markdown.js` handled fenced code, inline code, and paragraphs, on
+the reasoning that anything more was "another parser branch operating on hostile input
+for very little benefit". Models write structured answers regardless, and the better the
+model the more structure — session 8's genuinely good answer arrived on screen as
+`## **LocoMenu - Hyper-Local Food Price Intelligence Platform**`.
+
+Added headings, bold, italic, and ordered and unordered lists. The security property is
+unchanged and unchangeable: every addition emits elements and text nodes, nothing
+concatenates markup, and there is still no `innerHTML` anywhere in the module. The unit
+tests now render through a stub DOM that has no `innerHTML` to reach for, so a future
+regression fails loudly instead of quietly.
+
+Links, images, tables, and blockquotes stay out. Links and images carry a URL, which is
+the one markdown construct that can reach somewhere.
+
+Inline parsing is now earliest-match-wins across all rules rather than rule-by-rule.
+Trying code first — which is what makes `` `**kwargs` `` stay literal — also meant a bold
+span *containing* code could never match, and ``**run `npm test` now**`` rendered with
+its asterisks showing.
+
+### Fixed — two turns at once, which is where every "Request aborted." came from
+
+Two distinct bugs wearing the same symptom.
+
+*Within a tab*: `_run` had no guard. A message sent while a turn was still running built
+a second `AgentSession` and overwrote `this.session` with it. The first kept running,
+orphaned — nothing could cancel it, its result still posted into the same panel, and
+whichever finished last cleared `this.session` for both. Session 8 has two consecutive
+user turns with no reply between them, which is exactly this.
+
+*Across tabs*: `activeModel` is one global, the client is one instance, and Ollama holds
+one model resident on the hardware this targets. A turn started in a second tab made
+Ollama unload the first model and load the second; the first turn stalled behind it,
+long enough that the user pressed Stop. That is where the aborts came from — the user
+giving up on a hang, not a fault in the client.
+
+New `core/turnQueue`: one model turn at a time, shared by every tab. A second message to
+the *same* tab is refused, because it almost always means the user thought the first had
+failed. A turn in *another* tab queues and is told what it is waiting for, since
+retyping a lost message is worse than waiting and the wait can be a minute on CPU.
+
+Serialising costs nothing real — two turns interleaved through one Ollama are slower
+than two in order, and one of them is usually broken.
+
+The care is all in the cancellation paths. A queued turn that is cancelled, or whose tab
+is closed, has to leave the chain without stalling the turns behind it *and* without
+letting them start early. The first implementation got the second half wrong: a
+cancelled middle entry resolved its own link immediately, releasing the turn queued
+behind it while the turn in front was still running. Ordering assertions did not catch
+it; counting concurrent holders did, and that test is now in the suite.
+
+### Fixed — session memory recorded only actions
+
+A forty-turn session produced a three-line memory file, every line a failed command.
+Session 10 produced one line, and that line was the malformed
+`start_development_windows.bat` invocation the model proposed in reply to "Magandang
+hapon!". Nothing either party *said* was in there, which is why "have you already
+answered this?" was unanswerable from memory: the memory contained no answers.
+
+Questions answered and conversational turns are now recorded as exchanges. That matters
+beyond completeness, because memory is recalled by *relevance* to the current question
+rather than by recency — so an exchange from early in a long session comes back when its
+subject does, which is the range the ten-turn transcript window cannot reach.
+
+Turns that changed files are deliberately excluded. Those are already recorded by the
+action notes, `fileHistory`, and the change set, and a fourth copy would spend a Tier B
+recall budget of three to five slots on a duplicate.
+
+### Known, still not fixed
+
+- **Model selection is still global.** Switching models switches them for every open
+  tab. The queue means this no longer corrupts a turn in flight, but a tab does not
+  remember the model it was started with.
+
+## [0.5.1] — unreleased
+
+Everything here comes out of one evaluation **on Machine B**: seven sessions against
+`loco-menu`, an existing project the agent had never seen, asking it — in various
+phrasings and all three modes — what the project was. It got it wrong every time.
+
+The repository's `README.md` says, on line 3: *"Find the best food prices near you before
+you buy."* Across four separate sessions the agent answered with four variations of *"a
+full-stack web application built using Node.js, Express, and Vite, with a strong focus on
+API development"*. That description is what you get from reading directory names, which
+is exactly what it had been given and all it had been given.
+
+None of this is a reasoning failure. Every one of these is something the extension either
+withheld from the model or actively told it to do.
+
+### Fixed — every Agent turn ended with a changelog, whatever had been asked
+
+Rule 9 of `setup/prompts/agentic-system-prompt.md` read: *"When finished, summarize what
+changed in 2-4 bullet points, listing every file touched."* Unconditionally. So the
+model did, on turns where nothing had been touched and nothing had been asked for.
+
+Asked **"how about yours?"** — a follow-up to "can you remember my name?" — the reply was
+four bullet points about `api/package.json` and `server.js`. Asked to **explain the
+README**, the same. Told **"wow impressive"**, the same. Five times in one session, the
+answer to a question was a report of work that never happened.
+
+The rule now branches on what was asked: a changelog for a change, prose for a question,
+a sentence or two for conversation, and an explicit instruction never to close with "here
+is what changed" when nothing did.
+
+### Fixed — Ask mode could not see that the project had any files in it
+
+`_buildContext` passed `workspaceFiles: []` on both loopless strategies, with the
+reasoning that a mode with no tools has no way to act on a listing. That conflated acting
+with knowing. Ask mode cannot open a file; it is routinely asked what is *in* the project.
+
+Asked **"can you list the files available on this workspace?"**, it answered **"There are
+no files listed in your workspace."** Pressed — "are you sure??" — it corrected itself to
+"I don't have any information about the files in your workspace", which was true, and
+nobody's fault but ours.
+
+The listing is now carried on every strategy. Ask mode still offers **zero tools**: the
+route is unchanged, the model is offered nothing and can request nothing. The extension
+reads the directory and puts the result in the prompt, exactly as it has always done for
+the open editor file.
+
+### Added — the project's own description of itself, seeded into every prompt
+
+New `core/projectOverview`: the README's title and opening prose, stopping at the first
+section heading, plus the manifest's name and description. Badges, logos, and HTML
+wrappers are stripped; the result is redacted and symlink-confined like any other read.
+
+About 150 tokens, which survives even a 300-token budget. It is the highest-value
+orientation available per token, and it removes a whole class of confident wrong answer:
+before it, discovering what the project was cost a turn to find the README, a turn to
+read it, and a turn to answer — out of eight, on Tier B. Across the observed sessions the
+small models never got there. One looped on `read_file` until the repeat guard stopped
+it; one escalated to running the project's dev script.
+
+### Fixed — "read the README" started the user's API server
+
+Asked **"can you read the README.md file?"** and then told **"proceed"**, the agent ran
+`start_development_windows.bat` (refused — not on the program allowlist) and then `node
+api/server.js` (allowed, because `node` has to be). That bound a port, failed to reach
+MongoDB, and hung the session until the step budget ran out. The user: *"I asked you to
+read it not run it."*
+
+The allowlist was never the right place to catch this. A gate that inspects only the
+command cannot know the request was to read. `intentRouter.isReadOnlyRequest` now
+classifies the message instead: a request to read, explain, describe, or review — with no
+mutating and no execution verb — drops every mutating tool for that one turn. The mode is
+still Agent and the next message gets the full toolset back.
+
+A bare "proceed" inherits the restriction of the request it is agreeing to, which is the
+only reading of that word matching what the user thought they were saying.
+
+### Added — the agent knows its own name and version
+
+`utils/productInfo` reads the version from `package.json` and injects it into every
+system prompt. Nothing had ever done this. Asked **"what version are you?"**, Agent mode
+replied with a summary of changes to `api/package.json` — having reached for the only
+version number in its context — and Ask mode suggested looking it up in a README.
+
+One session did answer *"HirayaCoder v0.5.0"* correctly, two turns after the user had
+typed that exact string. It was reading the transcript back. The identity line therefore
+distinguishes the extension's version from the open project's explicitly, because
+confusing the two is the specific mistake on record.
+
+### Added — a check that the answer matches the question, before it is sent
+
+New `agent/answerCheck`, with `agentSession._rethink` as the caller. A free structural
+check runs on every drafted reply; a model round-trip runs only when it fires.
+
+It catches two shapes: a report of file changes offered as the answer to a question where
+nothing changed, and an answer repeated near-verbatim for a different question — the
+latter observed with `qwen3.5:0.8b`, which answered "give me a joke" by restating the
+previous turn's arithmetic. Replayed over the seven session transcripts it flags 11 of 44
+assistant turns, including every changelog hijack above.
+
+One redraft only, and every failure path keeps the original: a redraft that times out,
+returns empty, or comes back still mismatched leaves the user with the answer they would
+have had. The check is allowed to be wrong; it is not allowed to lose the reply. It
+deliberately does not judge whether an answer is *correct* — that is not something a
+heuristic can settle, and one that tried would fail in the same confident, invisible way
+this release exists to fix.
+
+### Known, not fixed in this release
+
+- **Two models cannot run at once.** `activeModel` is global extension state shared by
+  one client across all tabs, and `_run` has no busy guard — only `runExternalTask` does.
+  Starting a turn in a second tab swaps the model under the first, which surfaces as
+  *"The model could not be reached: Request aborted."* Observed between sessions 5 and 6.
+- **Session memory records only actions.** `memory/session5.txt` for a 40-turn session is
+  three lines, all of them failed commands. Nothing either party *said* is stored, so
+  "have you already answered this?" is unanswerable from memory. The conversation
+  transcript partly covers this in-session and does not persist across sessions.
+
 ## [0.5.0] — 2026-08-13
 
 Everything here comes out of one evaluation **on Machine A** — the CPU-only laptop the

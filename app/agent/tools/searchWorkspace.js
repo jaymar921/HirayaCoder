@@ -60,11 +60,13 @@ module.exports = async function searchWorkspace(args, context) {
 
   const root = decision.resolved.absolute;
   const needle = query.toLowerCase();
+  const ignoreRules = context.gate ? context.gate.ignoreRules : null;
 
   /** @type {string[]} */
   const matches = [];
   let filesScanned = 0;
   let filesWithMatches = 0;
+  let skippedSensitive = 0;
   let truncated = false;
 
   /**
@@ -101,6 +103,19 @@ module.exports = async function searchWorkspace(args, context) {
       if (!dirent.isFile()) continue;
       if (SKIP_EXTENSIONS.has(path.extname(dirent.name).toLowerCase())) continue;
 
+      // A search returns matching *lines*, so a `.env` that matches the needle would
+      // put its values straight into the prompt — past `read_file`'s new confirmation,
+      // which only guards a whole-file read. Skipped rather than prompted: a search
+      // touches hundreds of files, and a dialog per sensitive hit would be unusable and
+      // would train the user to click through. `redact` is not enough on its own; it
+      // recognises provider key formats, not `SECRET=value`.
+      if (ignoreRules && ignoreRules.classify(childRelative).sensitive) {
+        if (!ignoreRules.isGranted(childRelative)) {
+          skippedSensitive += 1;
+          continue;
+        }
+      }
+
       let content;
       try {
         const stats = await fs.promises.stat(childAbsolute);
@@ -134,18 +149,23 @@ module.exports = async function searchWorkspace(args, context) {
 
   await walk(root, '');
 
+  // Stated rather than silent. A model that searched for a variable name and got no
+  // hits would otherwise conclude the project does not use it and act on that; told the
+  // file was skipped, it can say so or ask.
+  const skipped = skippedSensitive > 0 ? `\n${skippedSensitive} ignored or credential file(s) were not searched.` : '';
+
   if (matches.length === 0) {
     return {
       ok: true,
-      observation: `No matches for "${query}" in ${filesScanned} files searched.`,
-      detail: { query, matches: [], filesScanned },
+      observation: `No matches for "${query}" in ${filesScanned} files searched.${skipped}`,
+      detail: { query, matches: [], filesScanned, skippedSensitive },
     };
   }
 
   const suffix = truncated ? `\n(showing the first ${matches.length} matches)` : '';
   return {
     ok: true,
-    observation: `${matches.length} match(es) for "${query}" across ${filesWithMatches} file(s):\n${matches.join('\n')}${suffix}`,
-    detail: { query, matches, filesScanned, truncated },
+    observation: `${matches.length} match(es) for "${query}" across ${filesWithMatches} file(s):\n${matches.join('\n')}${suffix}${skipped}`,
+    detail: { query, matches, filesScanned, truncated, skippedSensitive },
   };
 };
