@@ -375,6 +375,10 @@ module.exports = async function runScript(args, context) {
 
   return {
     ok: result.ok || startedCleanly,
+    // The reason travels as the error code so the ledger counts *why* runs fail, not
+    // just how often — "this model hits MISSING_DEPENDENCY eleven times a week" is a
+    // fixable observation, "37 failed steps" is not.
+    error: startedCleanly || result.ok || !diagnosis ? undefined : diagnosis.reason,
     observation: startedCleanly
       ? describeServerProbe(command, result, budget, cwd)
       : describeRun(command, result, budget, cwd, { diagnosis, attempts }),

@@ -88,6 +88,7 @@ const DEFAULT_STATS_WINDOW = 1000;
  * @property {number} declined            Permission prompts the user answered no to.
  * @property {Map<string, number>} trips  Guard error code → how many times.
  * @property {Map<string, number>} stops  Stop reason → how many sessions ended that way.
+ * @property {number | null} params       Parameter count in billions, as last reported.
  */
 
 /**
@@ -106,6 +107,11 @@ function emptyProfile(model) {
     declined: 0,
     trips: new Map(),
     stops: new Map(),
+    // Carried on the records so a comparison between two models is a comparison
+    // between two sizes. Without it the file can say `ornith:9b` finishes twice as
+    // often as `qwen3.5:2b` but not that the interesting part is the gap between 9B
+    // and 2B — which is the whole question when the goal is making small models work.
+    params: null,
     // Timing, summed rather than averaged on the way in, so the window can be resized
     // without the numbers having already been flattened.
     sessionMs: 0,
@@ -172,6 +178,8 @@ function summarize(records) {
 
     if (!byModel.has(model)) byModel.set(model, emptyProfile(model));
     const profile = /** @type {ModelProfile} */ (byModel.get(model));
+
+    if (typeof record.params === 'number' && Number.isFinite(record.params)) profile.params = record.params;
 
     if (record.kind === 'health') {
       if (typeof record.state === 'string' && record.state) bump(profile.outages, record.state);
@@ -275,6 +283,8 @@ class OutcomeLedger extends JsonlLog {
       typeof value === 'string' && value !== '' ? this._bound(redact(value), MAX_VALUE_CHARS) : undefined;
     const flag = (value) => (typeof value === 'boolean' ? value : undefined);
     const count = (value) => (typeof value === 'number' && Number.isFinite(value) ? Math.trunc(value) : undefined);
+    const size = (value) =>
+      typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.round(value * 100) / 100 : undefined;
 
     // This literal *is* the allow-list. Written out rather than looped over a list of
     // field names so that adding a field is a visible edit to the record shape.
@@ -302,6 +312,9 @@ class OutcomeLedger extends JsonlLog {
       // bug depending on whether the model was thinking or a script was hanging.
       ms: count(entry.ms),
       modelMs: count(entry.modelMs),
+      // Billions, and not truncated to an integer: the models this project exists for
+      // are the ones below 1B, where `count()` would record every one of them as zero.
+      params: size(entry.params),
       // Health records only.
       state: text(entry.state),
       wasState: text(entry.wasState),

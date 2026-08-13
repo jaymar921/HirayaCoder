@@ -23,7 +23,10 @@
  * @module agent/agentSession
  */
 
+const fs = require('fs');
+
 const logger = require('../utils/logger');
+const pathGuard = require('../security/pathGuard');
 const promptRouter = require('../core/promptRouter');
 const intentRouter = require('../core/intentRouter');
 const toolRegistry = require('./toolRegistry');
@@ -990,7 +993,30 @@ class AgentSession {
         changed: changeSet.revision > revisionBefore,
         written: changeSet.list().filter((change) => change.kind !== 'delete'),
         planned: Boolean(opts.planned),
+        exists: (relativePath) => this._existsInWorkspace(relativePath),
       });
+  }
+
+  /**
+   * Is there a file at this workspace-relative path right now?
+   *
+   * Confined the same way every other path is, and false for anything that escapes —
+   * a task naming `/etc/passwd` is not evidence about this project. Used only to
+   * decide whether a file the task named is genuinely missing.
+   *
+   * @param {string} relativePath
+   * @returns {boolean}
+   * @private
+   */
+  _existsInWorkspace(relativePath) {
+    if (!this.workspaceRoot) return false;
+    try {
+      const resolved = pathGuard.resolvePath(this.workspaceRoot, relativePath);
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- confined above
+      return fs.existsSync(resolved.absolute);
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -1131,6 +1157,7 @@ class AgentSession {
 
     void this.ledger.recordStep({
       model: this.model,
+      params: this.capability ? this.capability.params : undefined,
       tier: this.capability ? this.capability.tier : 'B',
       thinking: this.thinkingCapacity,
       mode: activeRoute.mode,
@@ -1181,6 +1208,7 @@ class AgentSession {
 
     await this.ledger.recordSession({
       model: this.model,
+      params: this.capability ? this.capability.params : undefined,
       tier: this.capability ? this.capability.tier : 'B',
       thinking: this.thinkingCapacity,
       mode: result.mode,

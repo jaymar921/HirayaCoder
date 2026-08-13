@@ -240,6 +240,48 @@ function nextStepHint(action, result, repeats, activeRoute) {
   return '';
 }
 
+/** Longest restatement of the goal carried into a reminder. */
+const MAX_GOAL_CHARS = 240;
+
+/**
+ * The goal, restated at the point of decision.
+ *
+ * The task is already in the prompt — `contextBuilder` puts it at the top of the
+ * context block, rebuilt every turn. That is the correct place for it and it is not
+ * enough. By the time a 1B model has read a project overview, a file listing, session
+ * memory, a step trace, and 400 tokens of npm output, the sentence describing what it
+ * is *for* is thousands of tokens behind it, and recency wins: the model answers the
+ * observation instead of the request. This is the mechanism behind the most expensive
+ * failure in the v0.5.3 round — an agent that scaffolds an app, gets absorbed in
+ * making the build pass, and never returns to the six components it was asked for.
+ *
+ * So the goal is repeated last, immediately before the instruction to act, where a
+ * short-context model reads it while deciding rather than before it started. It costs
+ * about sixty tokens a turn, which is the cheapest thing in the prompt.
+ *
+ * The step count goes with it for the same reason: "you are on step 6 of 8" is what
+ * turns "keep exploring" into "write the file now", and a model with no memory of its
+ * own has no other way to know the budget is nearly gone.
+ *
+ * @param {string} task
+ * @param {number} stepIndex Zero-based.
+ * @param {number} maxSteps
+ * @returns {string}
+ */
+function goalReminder(task, stepIndex, maxSteps) {
+  const text = String(task || '').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+
+  const goal = text.length > MAX_GOAL_CHARS ? `${text.slice(0, MAX_GOAL_CHARS)}…` : text;
+  const remaining = maxSteps - stepIndex;
+  const budget =
+    remaining <= 2
+      ? `This is step ${stepIndex + 1} of ${maxSteps} — the last ones. Do the most important thing still missing, then finish with "done".`
+      : `This is step ${stepIndex + 1} of ${maxSteps}.`;
+
+  return `Remember what you are doing. The whole task, unchanged: ${goal}\n${budget}`;
+}
+
 /**
  * Turn a parse error into an instruction the model can act on.
  *
@@ -372,6 +414,8 @@ async function run(options) {
       observation ? `Result of your last action:\n${observation}` : '',
       hint,
       parseNudge,
+      // Last, and deliberately so — see goalReminder.
+      goalReminder(options.task, stepIndex, budgets.maxSteps),
       'Reply with one JSON action now.',
     ].filter(Boolean);
 
@@ -566,6 +610,7 @@ module.exports = {
   renderTrace,
   actionKey,
   nextStepHint,
+  goalReminder,
   recoveryHint,
   echoedNotice,
   REPEAT_LIMIT,

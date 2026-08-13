@@ -267,6 +267,9 @@ function restate(task) {
  *   Files this run created or edited, with their new contents.
  * @property {boolean} [planned]      True when `task` is a TODO item rather than a
  *   message the user typed. See `intentRouter.requiresChange`.
+ * @property {(relativePath: string) => boolean} [exists]
+ *   Does this workspace-relative path exist now? Supplied by the caller because this
+ *   module does not touch the filesystem; without it the named-files check is skipped.
  */
 
 /**
@@ -339,12 +342,98 @@ function objectTo(context) {
     );
   }
 
+  const missing = missingNamedFiles(task, context.written || [], context.exists);
+  if (missing.length > 0) {
+    return (
+      `You replied "done", but the task names ${missing.length} file(s) that do not exist: ` +
+      `${missing.slice(0, MAX_NAMED_IN_OBJECTION).join(', ')}` +
+      `${missing.length > MAX_NAMED_IN_OBJECTION ? ', …' : ''}. ` +
+      'Create each of them with write_file, one per turn, with its complete contents. ' +
+      'If one of them genuinely is not needed, reply "done" again and say which and why.'
+    );
+  }
+
   return null;
+}
+
+/** How many missing paths to name before the objection becomes a wall of text. */
+const MAX_NAMED_IN_OBJECTION = 6;
+
+/**
+ * How many files a task must name before their absence counts as evidence.
+ *
+ * Two is an ordinary sentence — "read package.json and update README.md" — and half of
+ * those are things to look at rather than things to create. Three or more paths is a
+ * project structure being specified, which is the case this exists for: the v0.5.3
+ * benchmark prompt lays out eleven files, and models routinely wrote four of them and
+ * declared the app finished.
+ */
+const MIN_NAMED_FILES = 3;
+
+/**
+ * A dotted or slashed token — `App.jsx`, `src/hooks/useTodos.js`, `tailwind.config.js`.
+ *
+ * Each repetition must consume a separator and at least one character after it, so no
+ * two ways of splitting the same token exist and the match is linear. The extension is
+ * checked afterwards in JavaScript rather than as another alternation here: a list of
+ * twenty suffixes inside the pattern is what makes these expressions unreadable and
+ * their cost hard to reason about.
+ */
+// eslint-disable-next-line security/detect-unsafe-regex -- unambiguous by construction; input is capped below
+const DOTTED_TOKEN = /\b[\w@-]+(?:[./][\w@-]+)+\b/g;
+
+/** Suffixes that mean "a source file" rather than "a word with a dot in it". */
+const SOURCE_EXTENSIONS = new Set([
+  'js', 'jsx', 'ts', 'tsx', 'mjs', 'cjs', 'css', 'scss', 'sass', 'html', 'htm',
+  'json', 'md', 'yml', 'yaml', 'py', 'java', 'go', 'rs', 'rb', 'php', 'vue',
+  'svelte', 'sql', 'sh',
+]);
+
+/** Beyond this, a task is prose with a spec inside it and the head already holds the spec. */
+const MAX_SCANNED_TASK_CHARS = 8000;
+
+/**
+ * Files the task named that are nowhere to be found.
+ *
+ * Existence is checked against the workspace and not only against what this run wrote,
+ * because plenty of the named files are created by the tooling rather than by the
+ * agent: `npm create vite` writes `index.html` and `vite.config.js`, and objecting that
+ * those are missing would be both wrong and impossible for the model to act on
+ * sensibly. Without an `exists` probe the check does not run at all.
+ *
+ * @param {string} task
+ * @param {Array<{path: string}>} written
+ * @param {((relativePath: string) => boolean) | undefined} exists
+ * @returns {string[]}
+ */
+function missingNamedFiles(task, written, exists) {
+  if (typeof exists !== 'function') return [];
+
+  const text = String(task || '').slice(0, MAX_SCANNED_TASK_CHARS);
+  const named = [
+    ...new Set(
+      (text.match(DOTTED_TOKEN) || [])
+        .map((token) => token.replace(/^\.\//, ''))
+        .filter((token) => SOURCE_EXTENSIONS.has(token.split('.').pop().toLowerCase()))
+    ),
+  ];
+  if (named.length < MIN_NAMED_FILES) return [];
+
+  // Compared on the basename as well as the whole path: a task's tree diagram writes
+  // `TodoItem.jsx` under an indented `components/`, while the model correctly wrote
+  // `src/components/TodoItem.jsx`. Treating those as different files would object to
+  // work that was done.
+  const base = (value) => String(value).split(/[/\\]/).pop().toLowerCase();
+  const producedBases = new Set((written || []).map((file) => base(file.path)));
+
+  return named.filter((name) => !producedBases.has(base(name)) && !exists(name));
 }
 
 module.exports = {
   objectTo,
   restate,
+  missingNamedFiles,
+  MIN_NAMED_FILES,
   placeholderBodies,
   placeholderLiterals,
   inertControls,

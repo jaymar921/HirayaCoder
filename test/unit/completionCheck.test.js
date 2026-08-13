@@ -324,3 +324,82 @@ describe('completionCheck.inertControls', () => {
     });
   });
 });
+
+describe('completionCheck.missingNamedFiles', () => {
+  const { missingNamedFiles } = require('../../app/agent/completionCheck');
+
+  /** @param {string[]} present */
+  const workspace = (present) => (relativePath) => present.includes(relativePath);
+
+  const spec =
+    'Build it with this structure: src/components/TodoInput.jsx, src/components/TodoItem.jsx, ' +
+    'src/components/TodoList.jsx, src/hooks/useTodos.js, and README.md at the root.';
+
+  it('names the files a structure spec asked for and never got', () => {
+    // The v0.5.3 benchmark shape: eleven files specified, four written, "done".
+    const missing = missingNamedFiles(
+      spec,
+      [{ path: 'src/components/TodoInput.jsx' }, { path: 'src/hooks/useTodos.js' }],
+      workspace([])
+    );
+
+    assert.deepStrictEqual(missing.sort(), [
+      'README.md',
+      'src/components/TodoItem.jsx',
+      'src/components/TodoList.jsx',
+    ]);
+  });
+
+  it('credits a file the tooling created rather than the agent', () => {
+    // `npm create vite` writes index.html and vite.config.js; they never pass through
+    // write_file, so the change set has no record of them.
+    const task = 'Scaffold it: index.html, vite.config.js, tailwind.config.js must all exist.';
+
+    const missing = missingNamedFiles(task, [], workspace(['index.html', 'vite.config.js', 'tailwind.config.js']));
+
+    assert.deepStrictEqual(missing, []);
+  });
+
+  it('matches a tree diagram against the path the file was written to', () => {
+    // Task trees indent the folder and name the leaf; the model writes the full path.
+    const missing = missingNamedFiles(
+      'Create TodoInput.jsx, TodoItem.jsx and useTodos.js under src/.',
+      [{ path: 'src/components/TodoInput.jsx' }, { path: 'src/components/TodoItem.jsx' }, { path: 'src/hooks/useTodos.js' }],
+      workspace([])
+    );
+
+    assert.deepStrictEqual(missing, []);
+  });
+
+  it('says nothing about an ordinary sentence that happens to name two files', () => {
+    // "read package.json and update README.md" is not a structure spec, and half of
+    // what it names is something to look at rather than something to create.
+    assert.deepStrictEqual(
+      missingNamedFiles('Read package.json and update README.md.', [], workspace([])),
+      []
+    );
+  });
+
+  it('does not run at all without a way to check the workspace', () => {
+    assert.deepStrictEqual(missingNamedFiles(spec, [], undefined), []);
+  });
+
+  it('ignores dotted words that are not files', () => {
+    assert.deepStrictEqual(
+      missingNamedFiles('Use React 18.2, Node 20.11 and Vite 5.0 for this.', [], workspace([])),
+      []
+    );
+  });
+
+  it('objects once, with the missing paths named', () => {
+    const objection = objectTo({
+      task: spec,
+      changed: true,
+      written: [{ path: 'src/components/TodoInput.jsx', after: 'export default function TodoInput() { return null; }' }],
+      exists: workspace([]),
+    });
+
+    assert.match(objection, /do not exist/);
+    assert.match(objection, /README\.md/);
+  });
+});
