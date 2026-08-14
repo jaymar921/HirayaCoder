@@ -269,6 +269,66 @@ describe('webview markdown rendering', () => {
   });
 });
 
+describe('step panel rows', () => {
+  /** @type {(action: object) => {verb: string, target: string, status: string, full: string}} */
+  let describeStep;
+
+  before(async () => {
+    // eslint-disable-next-line no-unsanitized/method
+    ({ describeStep } = await import(moduleUrl('components/messageBubble.js')));
+  });
+
+  it('names the action in the language of what it does', () => {
+    // `read_file` is the identifier the model is required to emit. Showing it to the
+    // user leaks the tool protocol into the surface that is meant to explain the run.
+    assert.strictEqual(describeStep({ action: 'read_file', path: 'README.md' }).verb, 'Reading');
+    assert.strictEqual(describeStep({ action: 'run_script', command: 'npm install' }).verb, 'Running');
+    assert.strictEqual(describeStep({ action: 'write_file', path: 'src/App.jsx' }).verb, 'Editing');
+  });
+
+  it('falls back to the raw name for an action it does not know', () => {
+    assert.strictEqual(describeStep({ action: 'some_new_tool' }).verb, 'some_new_tool');
+  });
+
+  it('shows what the step is being done to, whichever field carries it', () => {
+    assert.strictEqual(describeStep({ action: 'read_file', path: 'src/App.jsx' }).target, 'src/App.jsx');
+    assert.strictEqual(describeStep({ action: 'run_script', command: 'npm run build' }).target, 'npm run build');
+    assert.strictEqual(describeStep({ action: 'search_workspace', query: 'useTodos' }).target, 'useTodos');
+    assert.strictEqual(describeStep({ action: 'list_files' }).target, '');
+  });
+
+  it('carries the reason the model gave for the step', () => {
+    const row = describeStep({ action: 'read_file', path: 'README.md', thought: 'extracting project structure' });
+    assert.strictEqual(row.status, 'extracting project structure');
+  });
+
+  it('collapses a multi-line reason so one step stays one row', () => {
+    const row = describeStep({ action: 'read_file', path: 'a.js', thought: 'first line\n\nsecond   line' });
+    assert.strictEqual(row.status, 'first line second line');
+  });
+
+  it('cuts a long reason but keeps the whole of it for the tooltip', () => {
+    const long = `I need to check ${'a lot of things '.repeat(20)}`;
+    const row = describeStep({ action: 'read_file', path: 'a.js', thought: long });
+
+    assert.ok(row.status.length <= 110, `the row would not fit on one line (${row.status.length})`);
+    assert.match(row.status, /…$/);
+    assert.ok(row.full.length > row.status.length, 'the full reason was lost');
+  });
+
+  it('reports no status at all when the model gave no reason', () => {
+    assert.strictEqual(describeStep({ action: 'read_file', path: 'a.js' }).status, '');
+    assert.strictEqual(describeStep({ action: 'read_file', path: 'a.js', thought: '   ' }).status, '');
+  });
+
+  it('survives an action object with nothing in it', () => {
+    const row = describeStep({});
+    assert.strictEqual(row.verb, '');
+    assert.strictEqual(row.target, '');
+    assert.strictEqual(row.status, '');
+  });
+});
+
 describe('thinking indicator lines', () => {
   /** @type {any} */
   let mod;

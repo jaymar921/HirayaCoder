@@ -60,11 +60,81 @@ export function appendImages(body, images) {
 }
 
 /**
- * The collapsible step trace inside an assistant message.
+ * What each tool call is called, in the language of the thing it does.
  *
- * Collapsed by default: a fifteen-step session would otherwise bury the answer the
- * user actually asked for. The summary line carries enough to decide whether to open
- * it.
+ * The trace used to print the tool name verbatim — `read_file`, `run_script`. That is
+ * the identifier the model is required to emit, and showing it to the user leaks an
+ * implementation detail into the one surface that is supposed to explain the run. A
+ * step reading "Reading src/App.jsx" needs no glossary.
+ *
+ * A Map rather than an object literal, because the key is model output. A plain
+ * `ACTION_VERBS[name]` lookup reaches the prototype, so a model emitting the action
+ * `"constructor"` gets `Function` back — truthy, so it survives the `||` fallback — and
+ * the panel renders a function's source as the name of a step. A Map has no prototype
+ * keys to find.
+ */
+const ACTION_VERBS = new Map([
+  ['read_file', 'Reading'],
+  ['write_file', 'Editing'],
+  ['list_files', 'Listing'],
+  ['search_workspace', 'Searching'],
+  ['run_script', 'Running'],
+  ['run_tests', 'Testing'],
+  ['delete_file', 'Deleting'],
+  ['create_folder', 'Creating folder'],
+  ['delete_folder', 'Removing folder'],
+]);
+
+/** Longest status message shown before it is cut; the title carries the rest. */
+const MAX_STATUS_CHARS = 110;
+
+/**
+ * One step as the three things the panel shows: what, to what, and why.
+ *
+ * Split out from the rendering because this is the part with decisions in it, and the
+ * webview's DOM assembly is not reachable from the unit suite — see the header of
+ * `test/unit/webviewComponents.test.js`. Building the nodes from this is trivial and
+ * uninteresting; choosing the words is not.
+ *
+ * @param {{action: string, path?: string, command?: string, query?: string, thought?: string}} action
+ * @returns {{verb: string, target: string, status: string, full: string}}
+ */
+export function describeStep(action) {
+  const name = String((action && action.action) || '');
+  // Collapsed rather than trimmed: a `thought` arrives as free text from the model and
+  // routinely contains newlines, which would break a single-line row into several.
+  const full = String((action && action.thought) || '').replace(/\s+/g, ' ').trim();
+
+  return {
+    verb: ACTION_VERBS.get(name) || name,
+    target: String((action && (action.path || action.command || action.query)) || ''),
+    status: full.length > MAX_STATUS_CHARS ? `${full.slice(0, MAX_STATUS_CHARS - 1)}…` : full,
+    full,
+  };
+}
+
+/**
+ * The live step panel inside an assistant message.
+ *
+ * ## Why it opens while the run is happening
+ *
+ * It used to be collapsed always, on the reasoning that a fifteen-step session would
+ * bury the answer. That is right once there *is* an answer and wrong until then. The
+ * 0.7.0 sessions measured 42 seconds per step on a 4B model and 88 minutes for one
+ * task — so for minutes at a time the panel showed a single thinking indicator, and
+ * the user's first sight of a run going wrong was the summary at the end. The steps
+ * are the only evidence available while it is still worth interrupting.
+ *
+ * So it opens when the first step arrives and collapses on `finish`, unless the user
+ * has touched it — `_userToggled` exists to make sure a panel someone deliberately
+ * opened is never shut on them.
+ *
+ * ## Why each row carries a status message
+ *
+ * A row is three things: what is being done, what it is being done to, and why. The
+ * "why" is the model's own stated reason for the step, which the loops already capture
+ * as `thought` and which nothing was showing. Without it a trace of eight reads of the
+ * same file looks identical to eight reads of different ones.
  */
 export class TraceView {
   constructor() {
@@ -81,13 +151,24 @@ export class TraceView {
     this.count = 0;
     /** @type {Map<number, HTMLElement>} */
     this.rows = new Map();
+    /** Set once the user opens or closes it themselves; we stop deciding after that. */
+    this._userToggled = false;
+    // The `toggle` event is the obvious hook and the wrong one: it also fires when
+    // `open` is assigned in code, and it fires asynchronously, so a "this was us" flag
+    // set around the assignment is not reliably cleared before it arrives. A click on
+    // the summary is unambiguous — nothing but a person produces one.
+    this.summary.addEventListener('click', () => {
+      this._userToggled = true;
+    });
   }
 
   /**
    * @param {number} step
-   * @param {{action: string, path?: string, command?: string, query?: string}} action
+   * @param {{action: string, path?: string, command?: string, query?: string, thought?: string}} action
    */
   addAction(step, action) {
+    const described = describeStep(action);
+
     const row = document.createElement('div');
     row.className = 'step is-active';
 
@@ -97,18 +178,44 @@ export class TraceView {
 
     const name = document.createElement('span');
     name.className = 'step-action';
-    name.textContent = action.action;
+    name.textContent = described.verb;
 
     const target = document.createElement('span');
     target.className = 'step-target';
-    target.textContent = action.path || action.command || action.query || '';
+    target.textContent = described.target;
 
     row.appendChild(n);
     row.appendChild(name);
     row.appendChild(target);
+
+    // The model's stated reason for the step. Model output — data, never markup.
+    if (described.status) {
+      const status = document.createElement('span');
+      status.className = 'step-status';
+      status.textContent = described.status;
+      status.title = described.full;
+      row.appendChild(status);
+    }
+
     this.list.appendChild(row);
     this.rows.set(step, row);
     this.count = Math.max(this.count, step);
+    // Opened on the first step rather than at construction: a conversational turn
+    // builds a TraceView and never adds to it, and an empty open panel reads as a
+    // promise of work that is not coming.
+    if (!this._userToggled) this.el.open = true;
+    this._retitle();
+  }
+
+  /**
+   * The run is over: stop showing the panel expanded, and stop marking a step active.
+   *
+   * A step left `is-active` after a cancelled or failed run keeps the accent on a step
+   * that is not running, which is the one thing the accent is for.
+   */
+  finish() {
+    for (const row of this.rows.values()) row.classList.remove('is-active');
+    if (!this._userToggled) this.el.open = false;
     this._retitle();
   }
 

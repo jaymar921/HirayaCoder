@@ -348,10 +348,29 @@ select.control {
   overflow-wrap: anywhere;
 }
 
+/* The model's stated reason for the step. Muted and italic so a row reads as
+   "Reading src/App.jsx" first and explains itself second, and truncated with an
+   ellipsis rather than wrapping — a run of eight steps should stay eight lines. */
+.step-status {
+  color: var(--muted);
+  font-style: italic;
+  font-size: var(--fs-xs);
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.step-status::before {
+  content: '— ';
+}
+
 .step-result {
   margin-left: auto;
   flex: none;
   font-size: var(--fs-xs);
+  padding-left: var(--sp-2);
 }
 
 .step-result.ok {
