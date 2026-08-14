@@ -4,6 +4,10 @@
   <img src="https://raw.githubusercontent.com/jaymar921/HirayaCoder/main/docs/assets/icon-128.png" width="96" height="96" alt="HirayaCoder icon" />
 </p>
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/jaymar921/HirayaCoder/main/docs/images/hero-offline-agent.png" width="900" alt="HirayaCoder v0.6.1 — your AI pair programmer, fully offline. A VS Code chat panel showing the agent reading two files, writing two files, and asking for approval before running npm run build." />
+</p>
+
 *A local Filipino-inspired AI coder that brings imagination and speed to your VS Code workflow.*
 
 **HirayaCoder is a free AI coding assistant that runs entirely on your own computer.**
@@ -128,6 +132,10 @@ There is a longer, friendlier walkthrough in
 ---
 
 ## Using it day to day
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/jaymar921/HirayaCoder/main/docs/images/capabilities.png" width="900" alt="What HirayaCoder does: nothing leaves your machine, you approve every change, agentic on every model, big requests become a checklist, it knows your machine, and it learns your project. Three modes — Agent, Plan, and Ask." />
+</p>
 
 ### The three modes
 

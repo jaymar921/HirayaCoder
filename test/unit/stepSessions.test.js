@@ -299,4 +299,51 @@ describe('step sessions', function () {
     const firstStep = client.prompts.slice(1, 3).join('\n');
     assert.ok(firstStep.includes('useTodos.js'), 'the step was not given the note about the file it had to import');
   });
+
+  // The macOS 0.6.0 run, reduced. Item one was "scaffold the project": `npx create-vite`
+  // exited 0, `npm install` exited 0, the project was on disk — and because a
+  // scaffolder's output never passes through `write_file`, the guard saw an empty change
+  // set, failed the step, and skipped the five items after it. The user's report was a
+  // page of text about a scaffold that had worked.
+  it('does not write off a step whose work was done by a command', async () => {
+    const modes = new PermissionModes({ initial: { autoEdit: true, autoApproveScripts: true } });
+    const client = scriptedClient([
+      '1. Set up the project toolchain\n2. Write src/App.jsx',
+      // Allow-listed, present wherever these tests run, and fast — this stands in for
+      // the scaffolder. What matters is that it succeeds and writes nothing itself.
+      json({ action: 'run_script', command: 'node --version' }),
+      json({ action: 'done', summary: 'toolchain ready' }),
+      json({
+        action: 'write_file',
+        path: 'src/App.jsx',
+        code: 'export default function App() {\n  return <h1>Todo</h1>;\n}\n',
+      }),
+      json({ action: 'done', summary: 'app written' }),
+    ]);
+
+    const agent = new AgentSession({
+      client,
+      model: 'qwen3.5:4b',
+      capability: TIER_TODO,
+      gate: new PermissionGate({
+        workspaceRoot: root,
+        modes,
+        auditLog: new AuditLog(root),
+        confirm: async () => true,
+      }),
+      workspaceRoot: root,
+      thinkingCapacity: 'medium',
+      sessionId: '1',
+      stepSessions: true,
+    });
+
+    const result = await agent.run('Set up the toolchain, then write App.jsx', { mode: 'agent' });
+
+    assert.deepStrictEqual(
+      result.todos.map((item) => item.status),
+      ['done', 'done'],
+      'the command-only step was written off, which stopped the run'
+    );
+    assert.ok(!/Stopped at step 1/.test(result.summary), result.summary);
+  });
 });

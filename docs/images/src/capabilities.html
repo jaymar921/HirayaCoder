@@ -1,0 +1,152 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  :root {
+    --bg: #0b1220;
+    --panel: #101826;
+    --line: rgba(148, 163, 184, 0.16);
+    --fg: #e8ecf1;
+    --muted: #94a3b8;
+    --sunrise-a: #ff9a3c;
+    --sunrise: linear-gradient(115deg, #ff9a3c, #ff5f6d);
+    --ok: #4ade80;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1280px; height: 720px; }
+  body {
+    background: var(--bg); color: var(--fg); overflow: hidden; position: relative;
+    font-family: "Segoe UI", -apple-system, system-ui, sans-serif;
+  }
+  .glow { position: absolute; border-radius: 50%; filter: blur(100px); }
+  .glow-a { width: 640px; height: 640px; right: -200px; top: -300px; background: #ff7a45; opacity: 0.16; }
+  .glow-b { width: 560px; height: 560px; left: -240px; bottom: -280px; background: #2b6cb0; opacity: 0.26; }
+
+  .wrap { position: relative; z-index: 1; height: 100%; padding: 44px 56px; display: flex; flex-direction: column; }
+
+  header { display: flex; align-items: center; gap: 14px; margin-bottom: 26px; }
+  .brand-name { font-size: 22px; font-weight: 700; letter-spacing: -0.2px; }
+  .ver { font-size: 12px; font-weight: 700; padding: 4px 10px; border-radius: 999px; color: #1b1205; background: var(--sunrise); }
+  .head-right { margin-left: auto; font-size: 13.5px; color: var(--muted); }
+  .head-right b { color: var(--fg); font-weight: 600; }
+
+  h1 { font-size: 40px; letter-spacing: -1.1px; line-height: 1.1; font-weight: 700; margin-bottom: 10px; }
+  h1 .grad { background: var(--sunrise); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .lede { font-size: 16px; color: var(--muted); margin-bottom: 26px; max-width: 860px; line-height: 1.5; }
+
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .card {
+    border: 1px solid var(--line); border-radius: 13px; padding: 17px 18px;
+    background: linear-gradient(180deg, rgba(148,163,184,0.075), rgba(148,163,184,0.03));
+  }
+  .card .ic {
+    width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center;
+    background: rgba(255,154,60,0.14); margin-bottom: 11px;
+  }
+  .card h3 { font-size: 15px; font-weight: 700; margin-bottom: 6px; letter-spacing: -0.1px; }
+  .card p { font-size: 12.8px; line-height: 1.5; color: var(--muted); }
+  .card p b { color: var(--fg); font-weight: 600; }
+  .card code { font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px; color: var(--sunrise-a); }
+
+  .strip {
+    margin-top: auto; display: flex; align-items: center; gap: 26px;
+    border-top: 1px solid var(--line); padding-top: 20px;
+  }
+  .modes { display: flex; gap: 9px; }
+  .mode { font-size: 12.5px; padding: 7px 14px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+  .mode.on { background: var(--sunrise); color: #1b1205; border-color: transparent; font-weight: 700; }
+  .foot { margin-left: auto; font-size: 13px; color: var(--muted); text-align: right; line-height: 1.5; }
+  .foot b { color: var(--fg); }
+</style>
+</head>
+<body>
+  <div class="glow glow-a"></div>
+  <div class="glow glow-b"></div>
+
+  <div class="wrap">
+    <header>
+      <svg width="38" height="38" viewBox="0 0 128 128">
+        <defs>
+          <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#FF7A45"/><stop offset="55%" stop-color="#FFB020"/><stop offset="100%" stop-color="#2B6CB0"/>
+          </linearGradient>
+        </defs>
+        <rect width="128" height="128" rx="24" fill="#101826"/>
+        <g transform="translate(64,50)">
+          <circle r="14" fill="url(#g)"/>
+          <g stroke="url(#g)" stroke-width="4" stroke-linecap="round">
+            <line x1="0" y1="-26" x2="0" y2="-34"/><line x1="0" y1="26" x2="0" y2="34"/>
+            <line x1="-26" y1="0" x2="-34" y2="0"/><line x1="26" y1="0" x2="34" y2="0"/>
+            <line x1="-18" y1="-18" x2="-24" y2="-24"/><line x1="18" y1="-18" x2="24" y2="-24"/>
+            <line x1="-18" y1="18" x2="-24" y2="24"/><line x1="18" y1="18" x2="24" y2="24"/>
+          </g>
+        </g>
+        <g fill="none" stroke="#E8ECF1" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M40 92 L28 100 L40 108"/><path d="M88 92 L100 100 L88 108"/>
+        </g>
+      </svg>
+      <div class="brand-name">HirayaCoder</div>
+      <div class="ver">v0.6.1</div>
+      <div class="head-right">for <b>Visual Studio Code</b> &nbsp;·&nbsp; powered by <b>Ollama</b></div>
+    </header>
+
+    <h1>An agent that <span class="grad">does the work</span> — and shows you every step.</h1>
+    <p class="lede">
+      Not autocomplete. HirayaCoder plans, reads, edits, and runs your project across many files,
+      then reports what actually happened — checked against what changed on disk, never against its own account of itself.
+    </p>
+
+    <div class="grid">
+      <div class="card">
+        <div class="ic"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#ff9a3c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>
+        <h3>Nothing leaves your machine</h3>
+        <p>Loopback-only by design — a non-local Ollama endpoint is <b>rejected outright</b>. No telemetry, no account, no cloud fallback.</p>
+      </div>
+
+      <div class="card">
+        <div class="ic"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#ff9a3c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></div>
+        <h3>You approve every change</h3>
+        <p>Writes and deletes arrive as one reviewable diff. Commands run only from an <b>allow-list you control</b>, confined to your workspace.</p>
+      </div>
+
+      <div class="card">
+        <div class="ic"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#ff9a3c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h8l-1 8 10-12h-8z"/></svg></div>
+        <h3>Agentic on every model</h3>
+        <p>Native tool-calling on 7B+, and a constrained one-action-per-turn loop that keeps <b>even a 1B model</b> doing real multi-file work.</p>
+      </div>
+
+      <div class="card">
+        <div class="ic"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#ff9a3c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l2 2 4-4"/><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M8 4V2h8v2"/></svg></div>
+        <h3>Big requests become a checklist</h3>
+        <p>Multi-part work is split into steps, run one at a time, and each step is <b>verified against what it actually wrote</b> before it can close.</p>
+      </div>
+
+      <div class="card">
+        <div class="ic"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#ff9a3c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg></div>
+        <h3>Knows your machine</h3>
+        <p><span style="color:#4ade80">New in 0.6.1.</span> OS, toolchain, and shell rules are detected and stated up front — so the agent never guesses <code>mkdir -p</code> vs <code>md</code>.</p>
+      </div>
+
+      <div class="card">
+        <div class="ic"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#ff9a3c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 8v4l3 2"/></svg></div>
+        <h3>It learns your project</h3>
+        <p>Session memory, an audit log, and per-model adaptation — a model that trips the same guard twice gets the correction, <b>locally</b>.</p>
+      </div>
+    </div>
+
+    <div class="strip">
+      <div class="modes">
+        <div class="mode on">Agent</div>
+        <div class="mode">Plan</div>
+        <div class="mode">Ask</div>
+      </div>
+      <div style="font-size:12.8px;color:#94a3b8;line-height:1.5;max-width:430px">
+        Three modes. In <b style="color:#e8ecf1">Plan</b> and <b style="color:#e8ecf1">Ask</b> the write tools are
+        <b style="color:#e8ecf1">structurally absent</b> — not merely refused.
+      </div>
+      <div class="foot"><b>Free and open source</b> &nbsp;·&nbsp; MIT<br />Search <b>&ldquo;HirayaCoder&rdquo;</b> in the Extensions view</div>
+    </div>
+  </div>
+</body>
+</html>

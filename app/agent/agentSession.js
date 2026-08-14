@@ -31,6 +31,7 @@ const promptRouter = require('../core/promptRouter');
 const intentRouter = require('../core/intentRouter');
 const toolRegistry = require('./toolRegistry');
 const contextBuilder = require('../core/contextBuilder');
+const environmentProfile = require('../core/environmentProfile');
 const projectOverview = require('../core/projectOverview');
 const reactLoop = require('./reactLoop');
 const nativeToolLoop = require('./nativeToolLoop');
@@ -70,7 +71,7 @@ class ChangeSet {
   constructor() {
     /** @type {Map<string, FileChange>} */
     this.files = new Map();
-    /** @type {Array<{command: string, exitCode: number | null, ok: boolean}>} */
+    /** @type {Array<{command: string, exitCode: number | null, ok: boolean, revision?: number}>} */
     this.commands = [];
     /**
      * How many records this set has taken, ever.
@@ -118,7 +119,23 @@ class ChangeSet {
    */
   recordCommand(entry) {
     this.revision += 1;
-    this.commands.push(entry);
+    // Stamped like a file change, and for the same question: `stepGuard` asks what *this
+    // step* did, and until 0.6.1 the commands half of the set could not answer it.
+    this.commands.push({ ...entry, revision: this.revision });
+  }
+
+  /**
+   * The commands run since a given revision.
+   *
+   * The counterpart to `since`, which reads the files half only. A step that scaffolds a
+   * project writes no files through the agent at all, so this is the only record that it
+   * did anything — see `stepGuard.ranSomething`.
+   *
+   * @param {number} revision
+   * @returns {Array<{command: string, ok: boolean}>}
+   */
+  commandsSince(revision) {
+    return this.commands.filter((entry) => (entry.revision || 0) > revision);
   }
 
   /** @returns {FileChange[]} */
@@ -460,6 +477,18 @@ class AgentSession {
     this.stepSessions = options.stepSessions === true;
 
     /**
+     * The machine this session is running on, detected once.
+     *
+     * Held on the session rather than detected inside `promptRouter` per call: a
+     * six-item TODO run in step mode routes once per step, and the answer cannot change
+     * between them. Injected in tests to assert the Windows and POSIX prompts without
+     * needing the matching machine.
+     *
+     * @type {import('../core/environmentProfile').EnvironmentProfile}
+     */
+    this.environment = options.environment || environmentProfile.detect();
+
+    /**
      * Earlier turns of this chat, set per `run` call.
      *
      * Held on the session rather than threaded through every private method: the
@@ -519,6 +548,7 @@ class AgentSession {
         thinkingCapacity: this.thinkingCapacity,
         memory: await this._renderMemory(),
         earnedHints: await this._earnedHints(mode),
+        environment: this.environment,
         intent: intent.intent,
         // "Read the README" should not be able to reach `run_script`, whatever the
         // planner decides in between. See `intentRouter.isReadOnlyRequest`.
@@ -857,6 +887,9 @@ class AgentSession {
           item: item.text,
           stopReason: outcome.stopReason,
           changed: changeSet.since(itemRevisionBefore),
+          // A scaffold step's whole output is a command's side effects, which never pass
+          // through `write_file` and so never appear above.
+          commands: changeSet.commandsSince(itemRevisionBefore),
           steps: outcome.steps,
         });
 
@@ -969,6 +1002,7 @@ class AgentSession {
         thinkingCapacity: this.thinkingCapacity,
         memory: await this._renderMemory({ about }),
         earnedHints: await this._earnedHints(activeRoute.mode),
+        environment: this.environment,
         intent: 'task',
       });
     } catch (err) {

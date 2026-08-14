@@ -5,6 +5,114 @@ All notable changes to HirayaCoder are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] — unreleased
+
+A macOS run of the same React TODO spec on the 0.6.0 build, `ornith:9b`, high thinking
+capacity, step sessions on. Eight steps, four of them refused, and the run stopped at
+item one of six reporting *"nothing was written"* — for a step whose two commands had
+both exited 0 with the scaffolded project sitting on disk. Four separate faults stacked
+up to produce that, and none of them were the model being small.
+
+### Added — the agent is told what machine it is on
+
+Three of the four refusals were the model reaching for shell syntax it had no way to know
+was unavailable: `mkdir -p todo-glass-app && cd todo-glass-app && npm create vite@latest .`,
+then `mkdir -p todo-glass-app`, then `cd todo-glass-app && npm install`. `mkdir -p` is
+POSIX; the same model on Windows proposes `md`. Both are wrong here for the same reason —
+there is no shell, and `mkdir` is not on the allow-list — but nothing in the prompt said
+which OS this was, and nothing said the shell was absent either. The model was guessing at
+the platform *and* at the execution model, and a guess wrong on both is refused three
+times before the step dies.
+
+`core/environmentProfile` detects the machine — OS, release, architecture, Node version —
+and states it in the system prompt as fact, alongside the sentence that matters more:
+there is no shell on any platform, `cwd` is how you run somewhere else, and `create_folder`
+/ `list_files` / `read_file` / `write_file` are what replace the shell utilities. Detected
+per session from `os.platform()`, never read back from disk, so a workspace synced between
+two machines never reports the other one's OS.
+
+- Carried on the tool-using routes only. Every line of it is about performing an action,
+  and Ask mode has no tools; a Plan prompt gets the platform facts without the lines
+  naming tools Plan mode structurally does not have.
+- Positioned by a `{environment}` placeholder in both prompt files, and appended when the
+  placeholder is absent — a customised prompt file cannot leave the model guessing at the
+  platform by not knowing about it.
+- Written to `.hirayacoder/environment.json` for the user to read. Nothing in the prompt
+  path reads it back; it is there so a session's records say which machine produced them.
+  Every benchmark folder in this repo had its OS reconstructed from the shape of the
+  commands the model tried.
+
+### Added — `.hirayacoder/` is ignored by git from the first session
+
+`.hirayacoder/` holds the audit log, the outcome ledger, full session transcripts, and
+per-session memory. It has never been added to a workspace's `.gitignore`, and in every
+benchmark workspace it sits untracked beside a scaffolded project whose `.gitignore`
+lists `node_modules` and nothing else. A user who stages everything commits their whole
+conversation history.
+
+`core/workspaceBootstrap` now runs at activation: an existing `.gitignore` is **appended
+to**, never rewritten; nothing is appended if any line already covers `.hirayacoder` in
+any form, including a `!.hirayacoder` negation, which is a decision to respect rather than
+overrule; a missing one is created holding that single entry and nothing else, since
+guessing at `node_modules` and `dist` for a project whose language nobody has looked at is
+how a helpful default becomes a wrong one. Idempotent, and every failure is logged and
+swallowed — a session must still start on a read-only checkout.
+
+### Fixed — a scaffolder was refused for the absence of the project it creates
+
+`npm create vite@latest todo-glass-app -- --template react` was refused with
+`NO_PACKAGE_JSON`: *"there is no package.json in the workspace root or any folder above
+it."* That guard is right about `npm install`, which climbs out of the workspace and
+installs into whatever manifest it finds above — that is how a dependency once landed in
+this extension's own `package.json`. It is exactly wrong about `npm create`, `npm init`,
+and `npm exec`, where the missing manifest is the point.
+
+This was the first failure of the run and it cascaded: step one was "scaffold the
+project", the only command that does it was refused, and the model spent its remaining
+attempts on `mkdir -p` and `cd … &&` trying to satisfy a precondition that was never
+real. `npm create` / `init` / `exec` / `x`, `yarn create` / `init` / `dlx`, and `pnpm
+create` / `init` / `dlx` are now exempt. Everything that acts on an existing project is
+guarded exactly as before.
+
+### Fixed — `cd folder && command` is now taken, not refused for a fourth time
+
+0.6.0 added `cwd`, documented it in both system prompts, and made the refusal name it
+outright: *"If you were chaining `cd folder && …`, drop the `cd` and pass the folder as
+'cwd' instead."* The model sent `cd todo-glass-app && npm install`, was told exactly
+that, and sent the identical line again. Two of the eight steps in the run went on it.
+
+That is the third wording of the same instruction, and a small model reaching for `cd x
+&& y` is not failing to understand the rule — it is producing the only phrasing it has
+for "run this over there". The folder and the command are both in the string,
+unambiguously, and the extension was throwing them away to ask for them back. `run_script`
+now rewrites that one shape into the two arguments it already takes.
+
+Nothing is relaxed. Exactly one shape is accepted — a single leading `cd` into one
+relative folder, one `&&`, and a remainder with no operator left in it — and a second
+`&&`, a pipe, a redirect, `cd ..`, an absolute path, or a quoted path is left untouched
+and refused as before. The rewritten command goes through pre-flight, the permission
+gate, the allow-list, and the tokenizer; the folder goes through `pathGuard` like every
+other `cwd`; the confirmation prompt and the audit log show what will actually run. The
+model is told about the rewrite in the observation every time, against its own input,
+which teaches better than the sentence in the system prompt did.
+
+### Fixed — a step that ran a command was scored as having done nothing
+
+The step that ended the run had already succeeded. `npx create-vite` exit 0, `npm
+install` exit 0, twenty seconds of it, eleven files and a `node_modules` on disk. The
+guard failed it anyway, stopped the run, and skipped the five remaining items, because a
+scaffolder's output never passes through `write_file`: `ChangeSet.recordCommand` appends
+to `commands`, `ChangeSet.since` reads `files`, and the two never met. A step whose entire
+job is "scaffold the project" could not pass.
+
+`ChangeSet` now stamps commands with the same revision counter it stamps file changes
+with, `commandsSince` is its counterpart to `since`, and `stepGuard.verify` accepts a
+command that succeeded as evidence the step did work — reported as such, so a later step
+knows the agent wrote nothing itself before it assumes a file is there. The principle is
+unchanged: judged from evidence the extension holds, never from the model's account. A
+process it spawned and whose exit code it read is exactly that; it was being read from
+the wrong half of the change set.
+
 ## [0.6.0] — unreleased
 
 Machine B, a full model round on the 0.5.3 build: every model was given the same

@@ -600,6 +600,9 @@ class ChatTab {
       // about this conversation.
       ledger: this.app.ledger,
       adaptation: this.app.settings.adaptation,
+      // Detected once at activation and shared, like the ledger and for the same reason:
+      // the operating system is a fact about the machine, not about this conversation.
+      environment: this.app.environment,
       stepSessions: this.stepSessions,
       images: images.map((image) => image.base64),
     });

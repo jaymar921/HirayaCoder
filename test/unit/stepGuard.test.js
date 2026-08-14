@@ -52,6 +52,42 @@ describe('stepGuard', () => {
       assert.match(verdict.detail, /no work at all/);
     });
 
+    // The macOS 0.6.0 run: `npx create-vite` exit 0, `npm install` exit 0, twenty
+    // seconds of it, the project on disk — and the step was written off as "nothing was
+    // written", which stopped the run and skipped the five remaining items. A
+    // scaffolder's output never passes through write_file, so the files half of the
+    // change set is empty and the commands half is the only record that anything
+    // happened.
+    it('passes a step whose work was done by a command that succeeded', () => {
+      const verdict = stepGuard.verify(
+        evidence({
+          item: 'Scaffold the Vite React project and install dependencies',
+          commands: [
+            { command: 'npx create-vite@latest todo-glass-app -- --template react', ok: true },
+            { command: 'npm install', ok: true },
+          ],
+        })
+      );
+
+      assert.strictEqual(verdict.ok, true);
+      assert.strictEqual(verdict.reason, 'ran');
+      assert.match(verdict.detail, /npm install/);
+      // Said out loud rather than passed silently: a later step needs to know the agent
+      // wrote nothing itself before it assumes a file is there.
+      assert.match(verdict.detail, /no files were written directly/);
+    });
+
+    it('still fails a step whose commands all failed', () => {
+      const verdict = stepGuard.verify(
+        evidence({
+          item: 'Scaffold the Vite React project',
+          commands: [{ command: 'npm install', ok: false }],
+        })
+      );
+      assert.strictEqual(verdict.ok, false);
+      assert.strictEqual(verdict.reason, 'no-change');
+    });
+
     it('names the blocking error when the step tried and was refused', () => {
       const verdict = stepGuard.verify(
         evidence({

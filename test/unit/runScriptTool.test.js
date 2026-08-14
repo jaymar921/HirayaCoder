@@ -453,3 +453,88 @@ describe('the allow-list', () => {
     }
   });
 });
+
+/**
+ * `cd folder && command` taken as the two arguments it already is.
+ *
+ * 0.6.0 added `cwd`, documented it in both prompts, and made the refusal name it. The
+ * macOS benchmark model sent `cd todo-glass-app && npm install` anyway, was told to use
+ * `cwd`, and sent the identical line again. The folder and the command are both in the
+ * string; the extension was throwing them away to ask for them back.
+ */
+describe('runScript.unchainCd', () => {
+  const { unchainCd } = runScript;
+
+  it('splits the folder off the command', () => {
+    assert.deepStrictEqual(unchainCd('cd todo-glass-app && npm install', ''), {
+      command: 'npm install',
+      cwd: 'todo-glass-app',
+    });
+  });
+
+  it('handles the shapes a model actually writes', () => {
+    assert.deepStrictEqual(unchainCd('cd ./app && npm run build', ''), { command: 'npm run build', cwd: 'app' });
+    assert.deepStrictEqual(unchainCd('cd packages/web/ && npm test', ''), {
+      command: 'npm test',
+      cwd: 'packages/web',
+    });
+  });
+
+  it('composes with a cwd the model also supplied, the way cd would', () => {
+    assert.deepStrictEqual(unchainCd('cd src && npm test', 'app'), { command: 'npm test', cwd: 'app/src' });
+  });
+
+  it('refuses rather than rewrites anything that is not the one simple shape', () => {
+    // Two commands after one `cd`: which of them the user is approving is not
+    // answerable, so it keeps the refusal it has always had.
+    assert.strictEqual(unchainCd('cd app && npm install && npm run build', ''), null);
+    assert.strictEqual(unchainCd('cd app && npm test | tee out.txt', ''), null);
+    assert.strictEqual(unchainCd('cd app && npm test > out.txt', ''), null);
+    assert.strictEqual(unchainCd('cd .. && npm install', ''), null);
+    assert.strictEqual(unchainCd('cd ../sibling && npm install', ''), null);
+    assert.strictEqual(unchainCd('cd /etc && npm install', ''), null);
+    assert.strictEqual(unchainCd('cd app &&', ''), null);
+    assert.strictEqual(unchainCd('cd app', ''), null);
+    // Not a rewrite target at all — no `cd` to unchain.
+    assert.strictEqual(unchainCd('npm install', ''), null);
+    assert.strictEqual(unchainCd('npm install && npm test', ''), null);
+  });
+
+  it('does not let a quoted path smuggle a second command through', () => {
+    assert.strictEqual(unchainCd('cd "my app" && npm install', ''), null);
+    assert.strictEqual(unchainCd('cd $(whoami) && npm install', ''), null);
+    assert.strictEqual(unchainCd('cd `pwd` && npm install', ''), null);
+  });
+});
+
+describe('runScript with a chained cd', () => {
+  it('runs the rewritten command and says so', async () => {
+    /** @type {any} */
+    let requested = null;
+    const context = {
+      sessionId: '1',
+      mode: 'agent',
+      gate: {
+        async requestScript(request) {
+          requested = request;
+          return { allowed: true, decision: 'approved' };
+        },
+        async runScript() {
+          return { ok: true, code: 0, stdout: 'added 42 packages', stderr: '', timedOut: false, durationMs: 12 };
+        },
+      },
+    };
+
+    const result = await runScript({ command: 'cd todo-glass-app && npm install' }, context);
+
+    // The gate — and therefore the confirmation prompt and the audit log — sees the
+    // command that will actually run, not the one the model typed.
+    assert.strictEqual(requested.command, 'npm install');
+    assert.strictEqual(requested.cwd, 'todo-glass-app');
+    assert.strictEqual(result.ok, true);
+    // And the model is told, every time. A tool that quietly substitutes one command
+    // for another makes a failure impossible to read.
+    assert.match(result.observation, /cd todo-glass-app && npm install/);
+    assert.match(result.observation, /"cwd": "todo-glass-app"/);
+  });
+});

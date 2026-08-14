@@ -303,6 +303,16 @@ The parts that decide what the agent is *allowed* to do.
   explains itself so the model can correct and retry.
 - **An append-only audit log** of every action, decision, and permission mode, at
   `.hirayacoder/audit.log` (**Show Audit Log**).
+- **A stated environment.** The operating system, its release, the architecture, and the
+  Node version are detected at session start and put in the system prompt as fact, along
+  with the note that no shell exists on any platform. A model that has to guess whether
+  `mkdir -p` or `md` is the right spelling has already lost the step; both are wrong here
+  for the same reason. Written to `.hirayacoder/environment.json` so a session's records
+  say which machine produced them.
+- **A workspace prepared before the first turn.** `.hirayacoder/` holds transcripts,
+  memory, and the audit log, so it is added to the workspace's `.gitignore` at startup —
+  appended to an existing file, never rewritten, and skipped entirely if any line already
+  covers it.
 - **Honest summaries.** What actually failed is appended to the model's own account from
   the step record, so a claim that a declined delete succeeded is contradicted in place.
 

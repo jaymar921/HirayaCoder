@@ -175,4 +175,29 @@ describe('scriptPreflight — npm climbing out of the workspace', () => {
     assert.strictEqual(preflight({ command: 'node src/main.js', workspaceRoot: root }), null);
     assert.strictEqual(preflight({ command: 'git status', workspaceRoot: root }), null);
   });
+
+  // The macOS 0.6.0 run died on the first step of the first item: the only command that
+  // creates a project was refused for the absence of the project it was about to create.
+  it('lets a scaffolder run in the empty workspace it is there to fill', () => {
+    for (const command of [
+      'npm create vite@latest todo-glass-app -- --template react',
+      'npm init -y',
+      'npm exec create-vite todo-glass-app',
+      'yarn create vite todo-glass-app',
+      'pnpm dlx create-vite todo-glass-app',
+    ]) {
+      assert.strictEqual(preflight({ command, workspaceRoot: root }), null, command);
+    }
+  });
+
+  it('still refuses the commands that would climb out of the workspace', () => {
+    // The guard this preserves: `npm install` with no manifest walks upwards and
+    // installs into whatever it finds, which is how a dependency once landed in the
+    // extension's own package.json. Creating a project is the exception; acting on one
+    // that is not there is not.
+    for (const command of ['npm install lucide-react', 'npm run build', 'yarn add react']) {
+      const refusal = preflight({ command, workspaceRoot: root });
+      assert.strictEqual(refusal && refusal.code, 'NO_PACKAGE_JSON', command);
+    }
+  });
 });
