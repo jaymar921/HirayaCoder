@@ -208,6 +208,71 @@ function nextStepAfterRefusal(code, command) {
 }
 
 /**
+ * Rewrite `cd folder && command` into the `cwd` this tool already takes.
+ *
+ * ## Why this is a rewrite and not another refusal message
+ *
+ * 0.6.0 added `cwd`, documented it in both system prompts, and made the refusal name it
+ * explicitly: *"If you were chaining `cd folder && …`, drop the `cd` and pass the folder
+ * as 'cwd' instead."* On the macOS benchmark run the model sent `cd todo-glass-app &&
+ * npm install` anyway, was told that, and sent `cd todo-glass-app && npm install` again.
+ * Two of the eight steps in the run went on it, and the step that was scaffolding the
+ * project died there.
+ *
+ * That is the third iteration of the same instruction, and the conclusion is that a
+ * small model reaching for `cd x && y` is not failing to understand the rule — it is
+ * producing the only phrasing it has for "run this over there", under a decoding
+ * distribution that a sentence in the system prompt does not move. The information the
+ * refusal wanted is *already in the command*: the folder and the command are both right
+ * there, unambiguously, and the extension is throwing them away to ask for them again.
+ *
+ * ## What this deliberately does not do
+ *
+ * It is not a shell, and it is not the beginning of one. Exactly one shape is accepted —
+ * a single leading `cd` into one relative folder, joined by one `&&`, followed by a
+ * remainder with no operator of any kind left in it. Anything else (a second `&&`, a
+ * pipe, a redirect, `cd ..`, an absolute path, a quoted path with a space) is left
+ * untouched and refused downstream exactly as before.
+ *
+ * Nothing here relaxes a guard. The rewritten command goes through `preflight`, the
+ * permission gate, the binary allow-list, and `tokenize` — which would still refuse it
+ * if any operator survived — and the folder goes through `pathGuard` like every other
+ * `cwd`. The user's confirmation prompt shows the rewritten form, which is what will
+ * actually run.
+ *
+ * @param {string} command
+ * @param {string} cwd  The `cwd` already supplied, if any.
+ * @returns {{command: string, cwd: string} | null} null when the shape does not match.
+ */
+function unchainCd(command, cwd) {
+  // One `cd`, one relative folder, one `&&`, and a remainder. The folder is restricted
+  // to the characters a project directory actually uses, which is also what keeps a
+  // quoted path, a variable, or a second command out of it. A leading `./` is the one
+  // decoration allowed, because models write it constantly.
+  const match = /^\s*cd\s+(?:\.\/)?([A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*)\/?\s*&&\s*(.+)$/.exec(String(command || ''));
+  if (!match) return null;
+
+  const folder = match[1];
+  const rest = match[2].trim();
+
+  // `cd ..`, `cd .`, and anything climbing through a parent is refused rather than
+  // rewritten: `pathGuard` would reject the resulting `cwd` anyway, and a refusal that
+  // names the real problem beats a rewrite that produces one.
+  if (!rest || folder.split('/').some((segment) => segment === '.' || segment === '..')) return null;
+  // A remainder that still contains an operator was never the simple case. Chaining two
+  // commands after one `cd` is a genuine ambiguity — which of them the user is approving
+  // is not answerable — so it keeps the refusal it has always had.
+  if (/[;&|<>`$(){}\n\r]/.test(rest)) return null;
+
+  return {
+    command: rest,
+    // A `cwd` the model also supplied is the folder the `cd` is relative to, which is
+    // how `cd` behaves and how the two would compose in a real shell.
+    cwd: cwd ? `${cwd.replace(/\/+$/, '')}/${folder}` : folder,
+  };
+}
+
+/**
  * Turn a completed run into an observation.
  *
  * @param {string} command
@@ -287,12 +352,35 @@ function describeServerProbe(command, result, budget, cwd) {
  * @returns {Promise<import('../toolRegistry').ToolResult>}
  */
 module.exports = async function runScript(args, context) {
-  const command = String(args.command || '').trim();
+  let command = String(args.command || '').trim();
   if (!command) {
     return { ok: false, observation: 'run_script needs a "command" to run.' };
   }
 
-  const cwd = String(args.cwd || '').trim();
+  let cwd = String(args.cwd || '').trim();
+
+  // `cd folder && command` says the same thing this tool's two arguments say. Taken
+  // rather than refused — see `unchainCd` for why a fourth wording of the refusal was
+  // not the answer.
+  const unchained = unchainCd(command, cwd);
+  /**
+   * Told to the model on whatever the outcome turns out to be.
+   *
+   * Stated every time rather than silently absorbed: the command that ran is not the
+   * command the model sent, and a tool that quietly substitutes one for the other makes
+   * a failure impossible to read. It doubles as the correction — the shape the model
+   * should have sent, shown against its own input, which teaches better than the same
+   * sentence sitting in the system prompt did.
+   */
+  let rewriteNote = '';
+  if (unchained) {
+    const original = command;
+    ({ command, cwd } = unchained);
+    logger.info(`run_script rewrote "${original}" as "${command}" in "${cwd}".`);
+    rewriteNote =
+      `\n(You sent \`${original}\`. There is no shell, so \`cd\` and \`&&\` cannot work — ` +
+      `it was run as {"command": "${command}", "cwd": "${cwd}"}. Send that shape yourself next time.)`;
+  }
 
   // Before the user is asked anything: a command that provably cannot work is answered
   // from the filesystem instead of costing a click, a subprocess, and a page of npm
@@ -302,7 +390,7 @@ module.exports = async function runScript(args, context) {
     logger.info(`run_script pre-flight refused "${command}": ${blocked.code}`);
     return {
       ok: false,
-      observation: `\`${command}\` was not run: ${blocked.reason}`,
+      observation: `\`${command}\` was not run: ${blocked.reason}${rewriteNote}`,
       error: blocked.code,
       detail: { command, cwd: cwd || undefined, reason: blocked.code, attempts: 0 },
     };
@@ -322,7 +410,9 @@ module.exports = async function runScript(args, context) {
   if (!decision.allowed) {
     return {
       ok: false,
-      observation: `\`${command}\` was not run: ${decision.reason}${nextStepAfterRefusal(decision.code, command)}`,
+      observation:
+        `\`${command}\` was not run: ${decision.reason}` +
+        `${nextStepAfterRefusal(decision.code, command)}${rewriteNote}`,
       error: decision.code,
     };
   }
@@ -352,7 +442,9 @@ module.exports = async function runScript(args, context) {
       logger.warn(`run_script could not start "${command}": ${code || 'unknown'}`);
       return {
         ok: false,
-        observation: `\`${command}\` could not be started: ${/** @type {Error} */ (err).message}${nextStepAfterRefusal(code, command)}`,
+        observation:
+          `\`${command}\` could not be started: ${/** @type {Error} */ (err).message}` +
+          `${nextStepAfterRefusal(code, command)}${rewriteNote}`,
         error: code,
       };
     }
@@ -392,9 +484,10 @@ module.exports = async function runScript(args, context) {
     // just how often — "this model hits MISSING_DEPENDENCY eleven times a week" is a
     // fixable observation, "37 failed steps" is not.
     error: startedCleanly || result.ok || !diagnosis ? undefined : diagnosis.reason,
-    observation: startedCleanly
-      ? describeServerProbe(command, result, budget, cwd)
-      : describeRun(command, result, budget, cwd, { diagnosis, attempts }),
+    observation:
+      (startedCleanly
+        ? describeServerProbe(command, result, budget, cwd)
+        : describeRun(command, result, budget, cwd, { diagnosis, attempts })) + rewriteNote,
     detail: {
       command,
       cwd: cwd || undefined,
@@ -417,4 +510,5 @@ module.exports.looksLikeStartupFailure = looksLikeStartupFailure;
 module.exports.PROBE_MS = PROBE_MS;
 module.exports.nextStepAfterRefusal = nextStepAfterRefusal;
 module.exports.toolForRefusedCommand = toolForRefusedCommand;
+module.exports.unchainCd = unchainCd;
 module.exports.TOOL_INSTEAD_OF = TOOL_INSTEAD_OF;

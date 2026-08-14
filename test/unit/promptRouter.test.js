@@ -276,3 +276,77 @@ describe('toolRegistry mode filtering', () => {
     assert.strictEqual(toolRegistry.get('rm_rf', 'agent'), null);
   });
 });
+
+/**
+ * The machine, stated rather than left for the model to infer.
+ *
+ * On the macOS 0.6.0 run the model was guessing at the platform *and* at the execution
+ * model, and a guess that is wrong on both is refused three times before the step dies.
+ * The extension knew the answer to the first before the first token was generated.
+ */
+describe('promptRouter — environment', () => {
+  const environmentProfile = require('../../app/core/environmentProfile');
+
+  /**
+   * @param {'agent'|'plan'|'ask'} mode
+   * @param {string} platform
+   * @param {object} capability
+   */
+  const routeOn = (mode, platform, capability = TIER_B) =>
+    promptRouter.route({
+      mode,
+      capability,
+      thinkingCapacity: 'medium',
+      memory: '- earlier fact',
+      environment: environmentProfile.detect({ platform }),
+    });
+
+  it('tells both tiers which operating system this is', () => {
+    for (const capability of [TIER_A, TIER_B]) {
+      assert.match(routeOn('agent', 'darwin', capability).systemPrompt, /macOS/);
+      assert.match(routeOn('agent', 'win32', capability).systemPrompt, /Windows/);
+    }
+  });
+
+  it('says the shell utilities are unavailable, whichever platform it is', () => {
+    for (const platform of ['darwin', 'linux', 'win32']) {
+      const prompt = routeOn('agent', platform).systemPrompt;
+      assert.match(prompt, /mkdir -p/, platform);
+      assert.match(prompt, /"cwd"/, platform);
+    }
+  });
+
+  it('lands where the template asks for it rather than at the end', () => {
+    // Both prompt files carry `{environment}` above the memory block. Substituted in
+    // place, so a customised file controls the position; appended when the placeholder
+    // is gone, so a customised file cannot drop the platform facts by omission.
+    const prompt = routeOn('agent', 'darwin').systemPrompt;
+    assert.ok(!prompt.includes('{environment}'), 'the placeholder was left unsubstituted');
+    assert.ok(prompt.indexOf('Operating system:') < prompt.indexOf('earlier fact'));
+
+    const appended = promptRouter.withEnvironment('a prompt with no placeholder', environmentProfile.detect());
+    assert.match(appended, /^a prompt with no placeholder\n\nEnvironment/);
+  });
+
+  it('names no mutating tool in a Plan prompt', () => {
+    // Plan mode's guarantee is that the write tools are absent, not refused. A block
+    // telling the model how to run a command would be the one place in the prompt
+    // saying otherwise.
+    const prompt = routeOn('plan').systemPrompt;
+    for (const name of MUTATING) {
+      assert.ok(!prompt.includes(name), `Plan prompt mentions ${name}`);
+    }
+    assert.match(prompt, /macOS|Windows|Linux/);
+  });
+
+  it('leaves the loopless routes alone', () => {
+    // Every line of the block is about performing an action, and Ask has no tools to
+    // perform one with.
+    assert.ok(!routeOn('ask').systemPrompt.includes('Operating system:'));
+  });
+
+  it('detects the machine itself when no profile is passed', () => {
+    const prompt = routeFor('agent').systemPrompt;
+    assert.match(prompt, /Operating system:/);
+  });
+});

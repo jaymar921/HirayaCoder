@@ -36,6 +36,46 @@ const NODE_RUNNERS = new Set(['npm', 'yarn', 'pnpm']);
 const IMPLICIT_SCRIPTS = new Set(['test', 'start', 'install', 'stop', 'restart']);
 
 /**
+ * Subcommands that exist to *create* a project rather than to act on one.
+ *
+ * The manifest check below exists because `npm install` with no `package.json` climbs
+ * out of the workspace and installs into whatever it finds above. These do not: `npm
+ * create vite@latest todo-glass-app` downloads `create-vite` and runs it against a
+ * folder it makes itself, `npm init` writes a manifest into the current directory, and
+ * `npm exec` / `npm x` are `npx` under another name — which was never guarded at all,
+ * since `npx` is not a package manager by `packageManagerOf`.
+ *
+ * Refusing them was the first failure of the macOS 0.6.0 benchmark and it cascaded
+ * through the whole run: step one was "scaffold the project", the only command that
+ * does it was refused for the absence of the very thing it was about to produce, and
+ * the model spent its remaining attempts on `mkdir -p` and `cd … &&` trying to satisfy
+ * a precondition that was never real.
+ *
+ * The rule this keeps: refuse only when being wrong is impossible. "npm cannot install
+ * into a project that does not exist" is certain. "npm cannot create a project where
+ * there is no project" is the opposite of certain — it is the one case where the
+ * missing manifest is the point.
+ */
+const PROJECT_CREATING_SUBCOMMANDS = new Map([
+  ['npm', new Set(['create', 'init', 'exec', 'x'])],
+  ['yarn', new Set(['create', 'init', 'dlx'])],
+  ['pnpm', new Set(['create', 'init', 'dlx'])],
+]);
+
+/**
+ * Is this command about to create a project rather than act on an existing one?
+ *
+ * @param {string} runner
+ * @param {string} command
+ * @returns {boolean}
+ */
+function createsProject(runner, command) {
+  const subcommand = (String(command || '').trim().split(/\s+/)[1] || '').toLowerCase();
+  const known = PROJECT_CREATING_SUBCOMMANDS.get(runner);
+  return Boolean(known && known.has(subcommand));
+}
+
+/**
  * @typedef {object} PreflightRefusal
  * @property {string} code    Machine-readable, matching the runner's refusal codes.
  * @property {string} reason  What is wrong and what to do, addressed to the model.
@@ -146,6 +186,10 @@ function preflight({ command, cwd, workspaceRoot }) {
   const runner = packageManagerOf(command);
   if (!runner || !workspaceRoot) return null;
 
+  // A scaffolder makes the project this module would otherwise insist already exists.
+  // Nothing below has anything useful to say about one, so it is left to run.
+  if (createsProject(runner, command)) return null;
+
   /** @type {string} */
   let directory;
   try {
@@ -219,6 +263,8 @@ module.exports = {
   parseRun,
   packageManagerOf,
   manifestDirectoryWithin,
+  createsProject,
   NODE_RUNNERS,
   IMPLICIT_SCRIPTS,
+  PROJECT_CREATING_SUBCOMMANDS,
 };

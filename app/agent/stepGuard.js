@@ -46,7 +46,40 @@ const { namedFiles } = require('./stepBrief');
  * @property {Array<{kind: string, path: string}>} changed
  *   Files this step created, edited, or deleted — this step's, not the session's.
  * @property {import('./agentSession').AgentStep[]} steps
+ * @property {Array<{command: string, ok: boolean}>} [commands]
+ *   Commands this step ran. See `ranSomething` for why a step that only ran commands is
+ *   not a step that did nothing.
  */
+
+/**
+ * Did this step do its work through a command rather than through `write_file`?
+ *
+ * ## The step this was missing
+ *
+ * A scaffold step writes no files *through the agent*. `npx create-vite todo-glass-app`
+ * writes eleven of them and `npm install` writes several thousand, and the extension
+ * sees none of it: `ChangeSet.recordCommand` appends to `commands`, `ChangeSet.since`
+ * reads `files`, and the two never meet. So a step whose entire job is "scaffold the
+ * project" arrived here with an empty `changed` array and was judged to have produced
+ * "no work at all".
+ *
+ * That is what ended the macOS 0.6.0 benchmark run. Both commands the step needed had
+ * already succeeded — `npx create-vite` exit 0, `npm install` exit 0, twenty seconds of
+ * it, the project sitting on disk — and the run stopped with *"nothing was written"*
+ * and skipped the five remaining items. The user's report of the session was a wall of
+ * text about a scaffold that had in fact worked.
+ *
+ * The guard's principle is unchanged: judge from evidence the extension holds itself,
+ * never from the model's account. A process the extension spawned, whose exit code it
+ * read, is exactly that kind of evidence — it was simply being read from the wrong half
+ * of the change set.
+ *
+ * @param {StepEvidence} evidence
+ * @returns {boolean}
+ */
+function ranSomething(evidence) {
+  return (evidence.commands || []).some((entry) => entry && entry.ok);
+}
 
 /**
  * @typedef {object} Verdict
@@ -115,6 +148,19 @@ function verify(evidence) {
   const failedSteps = (evidence.steps || []).filter((step) => step.result && step.result.ok === false);
 
   if (changed.length === 0) {
+    // A command that succeeded is work, and a scaffolder's output never passes through
+    // `write_file`. Reported rather than passed silently: the step is not failed, but
+    // "the agent wrote nothing itself" is the one thing a later step needs to know
+    // before it assumes a file is there.
+    if (ranSomething(evidence)) {
+      const ran = evidence.commands.filter((entry) => entry.ok).map((entry) => `\`${entry.command}\``);
+      return {
+        ok: true,
+        reason: 'ran',
+        detail: `no files were written directly, but ${ran.join(' and ')} ran and succeeded`,
+      };
+    }
+
     // The distinction the user sees: a step that tried and was refused reads differently
     // from one that never attempted anything, and only the first is worth naming a cause
     // for.

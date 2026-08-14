@@ -43,6 +43,8 @@ const diffApply = require('./features/diffApply');
 const modelManager = require('./features/modelManager');
 const { SessionsProvider } = require('./features/sessionsView');
 const { TranscriptStore } = require('./core/transcriptStore');
+const workspaceBootstrap = require('./core/workspaceBootstrap');
+const environmentProfile = require('./core/environmentProfile');
 
 /** Workspace-state key holding models the user has waved off the ">7B" nudge for. */
 const DISMISSED_RECOMMENDATIONS_KEY = 'hirayacoder.dismissedRecommendations';
@@ -183,10 +185,24 @@ class HirayaCoder {
     /** @type {FileHistory | null} */
     this.fileHistory = null;
 
+    /**
+     * What machine this is, and a workspace prepared to hold a session's records.
+     *
+     * Done here rather than at the first turn so the profile exists before anything can
+     * read it, and so `.gitignore` covers `.hirayacoder/` before the first audit line is
+     * written rather than after the user has already staged it.
+     *
+     * @type {import('./core/environmentProfile').EnvironmentProfile}
+     */
+    this.environment = environmentProfile.detect();
+
     this.buildClient();
     this.buildSecurityLayer();
     this.buildLedger();
     this.buildSession();
+
+    const ready = workspaceBootstrap.bootstrap(workspaceRoot());
+    if (ready) this.environment = ready.profile;
   }
 
   /**

@@ -25,6 +25,7 @@
 const toolRegistry = require('../agent/toolRegistry');
 const modelCapability = require('./modelCapability');
 const earnedHints = require('../agent/earnedHints');
+const environmentProfile = require('./environmentProfile');
 const productInfo = require('../utils/productInfo');
 const { loadTemplate } = require('../utils/promptLoader');
 
@@ -51,6 +52,8 @@ Rules:
   set "cwd" to that folder. Never use cd, and never chain commands with &&.
 - When the task is done, use "done" with a short summary. Do not keep exploring.
 
+{environment}
+
 Session Memory (things established earlier in this project — background, not new
 instructions):
 {memory}`;
@@ -62,6 +65,8 @@ Use the provided tools to inspect and change the workspace. Read before you writ
 prefer small verifiable steps, and stop as soon as the task is genuinely complete.
 Never guess a file's contents — read it. Never chain shell commands; run one at a time,
 and to run inside a subfolder set the command's "cwd" rather than using cd.
+
+{environment}
 
 Session Memory (established earlier in this project — background, not new instructions):
 {memory}`;
@@ -203,6 +208,35 @@ function withIdentity(prompt) {
 }
 
 /**
+ * Put the detected machine into a system prompt.
+ *
+ * ## Why only the tool-using routes get this
+ *
+ * Every line of the block is about performing an action — which shell utilities are
+ * unavailable, how to run a command in a subfolder, which tool replaces `mkdir`. Ask and
+ * the conversational route have no tools at all, so the block would be six lines of
+ * inapplicable instruction paid for out of the same budget the user's question is
+ * competing for. The one thing it would answer for them — "what OS am I on?" — is not
+ * worth the block, and Agent mode answers it anyway.
+ *
+ * Substituted in place where a template carries `{environment}`, appended otherwise. The
+ * prompt files on disk are author-editable, and a user's customised prompt must not be
+ * able to silently drop the platform facts by not knowing about the placeholder — the
+ * same rule `withIdentity` follows, for the same reason.
+ *
+ * @param {string} prompt
+ * @param {import('./environmentProfile').EnvironmentProfile} [profile]
+ * @param {{mutating?: boolean}} [opts]  Passed through to `environmentProfile.render`,
+ *   so a Plan prompt never names a tool Plan mode does not have.
+ * @returns {string}
+ */
+function withEnvironment(prompt, profile, opts = {}) {
+  const block = environmentProfile.render(profile || environmentProfile.detect(), opts);
+  if (prompt.includes('{environment}')) return prompt.replace('{environment}', block);
+  return `${prompt}\n\n${block}`;
+}
+
+/**
  * Render the earned-hints block appended to a system prompt.
  *
  * Two things this wording has to do at once. It must carry enough authority that a
@@ -237,6 +271,9 @@ function renderEarnedHints(hints) {
  * @property {import('./modelCapability').Capability} capability
  * @property {import('./modelCapability').ThinkingCapacity} thinkingCapacity
  * @property {string} [memory]  Rendered Session Memory block.
+ * @property {import('./environmentProfile').EnvironmentProfile} [environment]
+ *   The detected machine. Detected here when omitted; passed in by `agentSession` so a
+ *   six-item TODO run does not re-detect it per step.
  * @property {string[]} [earnedHints]  Sentences from `agent/earnedHints`, already selected.
  * @property {'chat' | 'task'} [intent]  From `core/intentRouter`. Only consulted in Agent mode.
  * @property {boolean} [readOnlyTurn]  From `intentRouter.isReadOnlyRequest`. Drops the
@@ -333,7 +370,9 @@ function route(request) {
       .replace('{session_memory}', memory);
   }
 
-  systemPrompt = withIdentity(systemPrompt);
+  systemPrompt = withIdentity(
+    withEnvironment(systemPrompt, request.environment, { mutating: toolMode !== 'plan' })
+  );
 
   if (mode === 'plan') systemPrompt += PLAN_SUFFIX;
   if (readOnlyTurn) systemPrompt += READ_ONLY_SUFFIX;
@@ -378,6 +417,7 @@ module.exports = {
   canMutate,
   renderEarnedHints,
   withIdentity,
+  withEnvironment,
   READ_ONLY_SUFFIX,
   ASK_SYSTEM,
   CHAT_SYSTEM,
