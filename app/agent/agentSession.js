@@ -41,6 +41,9 @@ const earnedHints = require('./earnedHints');
 const stepBrief = require('./stepBrief');
 const stepGuard = require('./stepGuard');
 const answerCheck = require('./answerCheck');
+const commonSense = require('../core/commonSense');
+const clarification = require('./clarification');
+const { ErrorRecovery } = require('./errorRecovery');
 const { TodoList } = require('./todoList');
 
 /**
@@ -499,9 +502,89 @@ class AgentSession {
      */
     this.conversation = [];
 
+    /**
+     * How a question reaches the user, and their answer comes back.
+     *
+     * Null is the ordinary state for a benchmark, a test, or any caller that has no
+     * panel — and every path that would raise a question checks first and settles for
+     * guidance instead. A run must never block on an answer that nothing can give.
+     *
+     * @type {((request: import('./clarification').Clarification) =>
+     *   Promise<import('./clarification').ClarificationAnswer | null>) | null}
+     */
+    this.onClarify = typeof options.onClarify === 'function' ? options.onClarify : null;
+
+    /**
+     * What has failed this run, and what the user has already said about it.
+     *
+     * Rebuilt per `run` rather than per session: "you have tried this three times" is a
+     * claim about one turn, and a new message is a new chance.
+     *
+     * @type {ErrorRecovery}
+     */
+    this._recovery = new ErrorRecovery({ canAsk: false });
+
+    /**
+     * Set when the user answers a mid-run question with something the loop cannot
+     * express — skip this item, or stop altogether. Read by `_runWithTodos` once the
+     * loop it was raised inside has returned.
+     *
+     * @type {'' | 'skip' | 'stop'}
+     */
+    this._interrupt = '';
+
+    /** What the user said mid-run, for the summary. @type {string[]} */
+    this._userGuidance = [];
+
+    /**
+     * The checklist currently running, so an answer given inside a loop can adjust it.
+     *
+     * Null except between `_runWithTodos` building the list and reporting it.
+     *
+     * @type {TodoList | null}
+     */
+    this._todos = null;
+
     /** @type {AbortController | null} */
     this._controller = null;
     this.running = false;
+  }
+
+  /**
+   * Put a question to the user and wait for the answer.
+   *
+   * Returns the resolved effect, or null when there was nobody to ask — callers treat
+   * that as "carry on as you were", never as a refusal.
+   *
+   * @param {import('./clarification').Clarification} request
+   * @param {(event: object) => void} emit
+   * @returns {Promise<{effect: import('./clarification').ClarificationEffect, guidance: string, label: string} | null>}
+   * @private
+   */
+  async _ask(request, emit) {
+    if (!this.onClarify) return null;
+
+    emit({ type: 'clarification', request });
+    logger.info(`Pausing to ask: ${request.question}`);
+
+    /** @type {import('./clarification').ClarificationAnswer | null} */
+    let answer = null;
+    try {
+      answer = await this.onClarify(request);
+    } catch (err) {
+      // A question that could not be shown must not take the run down with it. The
+      // model is mid-item with a step budget and a change set; failing closed here
+      // means carrying on without the answer, not discarding the work.
+      logger.warn(`Could not ask the user: ${/** @type {Error} */ (err).message}`);
+      return null;
+    }
+
+    const resolved = clarification.resolve(request, answer);
+    emit({ type: 'clarification-answered', id: request.id, label: resolved.label });
+    logger.info(`The user answered "${resolved.label}" (${resolved.effect}).`);
+
+    if (resolved.guidance) this._userGuidance.push(resolved.guidance);
+    return resolved;
   }
 
   /** Stop the session after the action in flight completes. */
@@ -524,10 +607,24 @@ class AgentSession {
   async run(task, options = {}) {
     const mode = options.mode || 'agent';
     const emit = options.onEvent || (() => {});
+    // Held on the session so `_execute` can raise a question from inside a loop it was
+    // not handed the emitter for. Cleared in the `finally` below with everything else
+    // that is per-turn.
+    this._emit = emit;
+    /** The TODO item in flight, so a question can say what it is about. @type {string} */
+    this._currentItem = '';
     this.conversation = Array.isArray(options.conversation) ? options.conversation : [];
     this._controller = new AbortController();
     this.running = true;
     this._startedAt = Date.now();
+    // Per turn, not per session: three failures ago was a different request, and a run
+    // that opened already out of patience would ask about a wall the user may have
+    // taken down in between.
+    this._recovery = new ErrorRecovery({ canAsk: Boolean(this.onClarify) });
+    this._interrupt = '';
+    this._userGuidance = [];
+    /** What was read differently from what was typed, for the summary. @type {string[]} */
+    this._interpretations = [];
     // Snapshotted rather than measured per call: the client already totals every
     // request it makes, so the difference across a session is the time spent waiting on
     // Ollama — including the planning and TODO-splitting passes, which happen outside
@@ -535,6 +632,26 @@ class AgentSession {
     this._modelMsAtStart = this._modelMsSoFar();
 
     try {
+      // Read before routed. A request naming a file that is one letter away from a real
+      // one is not ambiguous to a person, and a small model handed it literally creates
+      // the misspelled file and reports success — so the reading happens here, before
+      // anything downstream treats the name as given. Agent mode only: Plan and Ask
+      // produce words rather than files, so a wrong name costs a sentence.
+      if (mode === 'agent') {
+        task = await this._interpretRequest(task, options, emit);
+        if (this._interrupt === 'stop') {
+          const stopped = {
+            summary: 'Stopped before starting, at your request.',
+            steps: [],
+            changeSet: new ChangeSet(),
+            stopReason: 'cancelled',
+            mode,
+          };
+          emit({ type: 'done', summary: stopped.summary });
+          return stopped;
+        }
+      }
+
       // Only Agent mode is routed by intent — Plan and Ask are the user saying what they
       // want, and second-guessing an explicit choice is not this classifier's job.
       const intent = mode === 'agent' ? intentRouter.classify(task) : { intent: 'task', reason: 'mode was chosen' };
@@ -546,7 +663,12 @@ class AgentSession {
         mode,
         capability: this.capability,
         thinkingCapacity: this.thinkingCapacity,
-        memory: await this._renderMemory(),
+        // Selected against what was asked rather than by recency. A session's memory
+        // file outlives the subject that filled it, so on any turn but the first the
+        // most recent notes are about the *previous* request; the notes bearing on this
+        // one are further back. Recall is never worse for it — a message that matches
+        // nothing falls back to the same recency window this used to take.
+        memory: await this._renderMemory({ about: task }),
         earnedHints: await this._earnedHints(mode),
         environment: this.environment,
         intent: intent.intent,
@@ -653,11 +775,12 @@ class AgentSession {
 
       /** @type {SessionResult} */
       const result = {
-        summary: appendUnverifiedNote(
-          appendUnfinishedNote(checkedSummary, outcome.steps),
-          outcome,
-          changeSet
-        ),
+        summary:
+          appendUnverifiedNote(
+            appendUnfinishedNote(checkedSummary, outcome.steps),
+            outcome,
+            changeSet
+          ) + this._describeInterventions(),
         steps: outcome.steps,
         changeSet,
         stopReason: outcome.stopReason,
@@ -672,7 +795,86 @@ class AgentSession {
     } finally {
       this.running = false;
       this._controller = null;
+      this._emit = null;
+      this._currentItem = '';
+      // Also cleared on the paths that leave `_runWithTodos` early — a cancel, or a
+      // throw — where the line at the end of it is never reached.
+      this._todos = null;
     }
+  }
+
+  /**
+   * Read the request the way a person would before handing it to the model.
+   *
+   * Returns the task to actually run, which is usually the one that came in. See
+   * `core/commonSense` for what is checked and why the line between fixing something
+   * and asking about it is drawn where it is.
+   *
+   * Never throws: an interpretation that fails leaves the request exactly as the user
+   * typed it, which is the behaviour every version before 0.7.0 had.
+   *
+   * @param {string} task
+   * @param {object} options
+   * @param {(event: object) => void} emit
+   * @returns {Promise<string>}
+   * @private
+   */
+  async _interpretRequest(task, options, emit) {
+    let files = [];
+    try {
+      files = await this._workspaceFiles(null);
+    } catch (err) {
+      logger.debug(`Could not list the workspace to read the request against: ${/** @type {Error} */ (err).message}`);
+      return task;
+    }
+
+    /** @type {import('../core/commonSense').Interpretation} */
+    let reading;
+    try {
+      reading = commonSense.interpret({
+        task,
+        files,
+        conversation: this.conversation,
+        editorPath: options.editor ? options.editor.path : '',
+        canAsk: Boolean(this.onClarify),
+      });
+    } catch (err) {
+      logger.warn(`Could not read the request: ${/** @type {Error} */ (err).message}`);
+      return task;
+    }
+
+    if (reading.kind === 'repaired') {
+      this._interpretations.push(reading.note);
+      emit({ type: 'interpretation', note: reading.note });
+      // Into memory as well as the summary. A user who names the same file the same
+      // wrong way twice in one session should not have it re-derived from scratch, and
+      // the note is composed rather than model-written so it is safe to keep.
+      if (this.memory) {
+        try {
+          await this.memory.append(reading.note);
+        } catch (err) {
+          logger.debug(`Could not record the reading: ${/** @type {Error} */ (err).message}`);
+        }
+      }
+      return reading.task;
+    }
+
+    if (reading.kind === 'ask' && reading.clarification) {
+      const resolved = await this._ask(reading.clarification, emit);
+      if (!resolved) return task;
+      if (resolved.effect === 'stop') {
+        this._interrupt = 'stop';
+        return task;
+      }
+      // Appended rather than substituted. The user answered a question about their own
+      // request, so what they said is an addition to it — replacing the text would
+      // discard the half the question was not about.
+      const note = `You asked about this and the user said: ${resolved.guidance}`;
+      this._interpretations.push(note);
+      return `${task}\n\n${note}`;
+    }
+
+    return task;
   }
 
   /**
@@ -727,6 +929,10 @@ class AgentSession {
     }
 
     const todos = new TodoList(items);
+    // Reachable from `_recover`, which runs inside a loop this method is awaiting and
+    // has no other way to reach the checklist. Cleared in the `finally` below so a
+    // later turn cannot write into a list that has already been reported.
+    this._todos = todos;
     emit({ type: 'todo', items: todos.items.map((item) => item.text) });
     logger.info(`Running ${todos.items.length} TODO item(s) one at a time.`);
 
@@ -754,6 +960,8 @@ class AgentSession {
     /** Set when a step failed twice and the run is stopping deliberately. */
     let stopNotice = '';
     let cancelled = false;
+    /** Set when the user, asked mid-run, chose to stop. Not the same as cancelling. */
+    let stoppedByUser = false;
 
     while (todos.current() && remainingSteps > 0) {
       if (this._controller.signal.aborted) {
@@ -763,6 +971,8 @@ class AgentSession {
 
       const item = todos.current();
       const position = todos.position();
+      // So a question raised from inside this item's loop can say what it is about.
+      this._currentItem = item.text;
       // The snapshot rides along with the event because the UI has no other way to
       // learn the list changed: it holds the items it was given at `todo` time and
       // nothing else, so an index alone would leave it guessing at the other rows.
@@ -838,7 +1048,7 @@ class AgentSession {
         // the oldest one in the file by the time the step runs. See
         // `memoryStore.readRelevant`.
         const context = await this._buildContext(itemTask, itemRoute, options.editor, {
-          recallAbout: this.stepSessions ? item.text : '',
+          recallAbout: item.text,
         });
 
         // Each item runs a fresh loop, and a loop numbers its steps from its own
@@ -895,10 +1105,19 @@ class AgentSession {
 
         attemptResult = { outcome, verdict, attempts: attempt };
 
+        // The user was asked mid-item and said stop. Distinct from a cancel: they made
+        // a decision about this run rather than abandoning it, and the summary says so.
+        if (this._interrupt === 'stop') {
+          stoppedByUser = true;
+          break;
+        }
         if (outcome.stopReason === 'cancelled') {
           cancelled = true;
           break;
         }
+        // Asked mid-item and told to skip. The retry below is exactly what they
+        // declined, so it does not happen.
+        if (this._interrupt === 'skip') break;
         if (verdict.ok || attempt === maxAttempts) break;
 
         // About to be written off, so it gets one more run with the diagnosis stated —
@@ -932,8 +1151,31 @@ class AgentSession {
       }
 
       const changedPaths = produced.map((change) => change.path);
+
+      // The user was asked about this item and chose to leave it. That is a decision,
+      // not a failure, and recording it as one would put a `[!]` against a row the user
+      // themselves closed — and would then feed "an earlier step failed" to every item
+      // after it.
+      if (this._interrupt === 'skip') {
+        this._interrupt = '';
+        todos.skipCurrent('you asked me to skip this one');
+        emit({
+          type: 'todo-item-done',
+          index: position,
+          status: 'skipped',
+          text: item.text,
+          items: snapshotTodos(todos),
+        });
+        continue;
+      }
+
       todos.finishCurrent(status, outcomeText, itemStepCount, { changedPaths, attempts });
       emit({ type: 'todo-item-done', index: position, status, text: item.text, items: snapshotTodos(todos) });
+
+      if (stoppedByUser) {
+        todos.skipRemaining('you stopped the run here');
+        break;
+      }
 
       if (cancelled) {
         todos.skipRemaining('the session was cancelled');
@@ -968,7 +1210,14 @@ class AgentSession {
     const summary =
       `${progress.done} of ${progress.total} item(s) completed.${caveat}\n\n${todos.describe()}` +
       (stopNotice ? `\n\n${stopNotice}` : '') +
+      // What the user was asked and what they said, before the per-item detail. A run
+      // that only succeeded because they answered a question should say so — otherwise
+      // the checklist reads as though the model worked it out on its own.
+      this._describeInterventions(todos) +
       (summaries.length > 0 ? `\n\nDetail:\n${summaries.join('\n')}` : '');
+
+    // The list is reported now, so nothing may write into it afterwards.
+    this._todos = null;
 
     return {
       summary: appendUnfinishedNote(summary, allSteps),
@@ -981,11 +1230,66 @@ class AgentSession {
   }
 
   /**
+   * What the run had to be told, and by whom, for the end of the summary.
+   *
+   * Three separate things end up here and they are not interchangeable: what was read
+   * differently from what the user typed, what the user said when asked mid-run, and
+   * what kept failing regardless. A summary that reports only the checklist hides all
+   * three — and the third is the one a user most needs, because a run that ends "4 of 4
+   * completed" after hitting the same error eleven times is technically true and
+   * actively misleading.
+   *
+   * @param {TodoList} [todos]
+   * @returns {string} Empty when the run needed none of it.
+   * @private
+   */
+  _describeInterventions(todos) {
+    const blocks = [];
+
+    if (this._interpretations && this._interpretations.length > 0) {
+      blocks.push(`How I read the request:\n${this._interpretations.map((note) => `- ${note}`).join('\n')}`);
+    }
+
+    if (this._userGuidance && this._userGuidance.length > 0) {
+      blocks.push(`What you told me when I asked:\n${this._userGuidance.map((note) => `- ${note}`).join('\n')}`);
+    }
+
+    if (todos) {
+      const changed = todos.describeChanges();
+      if (changed) blocks.push(changed);
+    }
+
+    const stuck = this._recovery ? this._recovery.persistent() : [];
+    if (stuck.length > 0) {
+      const lines = stuck
+        .slice(0, 3)
+        .map((entry) => `- ${entry.action} failed ${entry.count} times: ${entry.headline}`);
+      blocks.push(`What kept going wrong:\n${lines.join('\n')}`);
+    }
+
+    return blocks.length > 0 ? `\n\n${blocks.join('\n\n')}` : '';
+  }
+
+  /**
    * The route for one step, with its memory block recalled against that step.
    *
-   * Returns the session's own route untouched unless step sessions are on, so the
-   * ordinary TODO path keeps the single system prompt it has always had and pays for
-   * nothing it does not use.
+   * ## Why every item gets this, not only a briefed step
+   *
+   * Until 0.7.0 this returned the session's route untouched unless step sessions were
+   * on, so a six-item run shared one memory block — selected by recency, before the
+   * list existed, against the whole request. That is the wrong block for every item
+   * after the first. The React benchmark shows the failure exactly: the item that had
+   * to assemble `App.jsx` ran sixth, and the notes naming `useTodos.js` and
+   * `TodoInput.jsx` — the two files it needed to import — were by then the oldest in
+   * the file and the first to fall out of a five-entry recency window. The note that
+   * survived was about the README.
+   *
+   * Recall by subject is never worse than recall by recency: an item whose text
+   * matches nothing gets exactly the recency window it would have had (see
+   * `memoryStore.readRelevant`). What it costs is one extra prompt assembly per item,
+   * which is string work against an already-loaded file — no inference, no disk.
+   *
+   * Returns the session's own route untouched when there is no memory to select from.
    *
    * @param {import('../core/promptRouter').Route} activeRoute
    * @param {string} about    The step's text.
@@ -993,7 +1297,7 @@ class AgentSession {
    * @private
    */
   async _routeForStep(activeRoute, about) {
-    if (!this.stepSessions || !this.memory) return activeRoute;
+    if (!this.memory || !about) return activeRoute;
 
     try {
       return promptRouter.route({
@@ -1004,6 +1308,13 @@ class AgentSession {
         earnedHints: await this._earnedHints(activeRoute.mode),
         environment: this.environment,
         intent: 'task',
+        // Carried, not recomputed. This route replaces the session's for the whole
+        // step, so dropping the flag would hand the mutating tools back to a turn the
+        // router had already decided was a look-only request — and now that every item
+        // rebuilds its route, that would be the default path rather than an
+        // experimental one. The decision belongs to the session's route; this only
+        // re-renders the memory block underneath it.
+        readOnlyTurn: activeRoute.readOnlyTurn,
       });
     } catch (err) {
       // A step must never fail to start because its recall could not be assembled.
@@ -1421,12 +1732,15 @@ class AgentSession {
    * has always received without anyone calling it a tool. Looking up the handler under
    * a read-only mode is how that read is performed; it is not a grant.
    *
-   * @param {import('../core/promptRouter').Route} activeRoute
+   * @param {import('../core/promptRouter').Route | null} activeRoute
+   *   Null when the read happens before a route exists — `_interpretRequest` needs the
+   *   listing to decide whether a filename in the request resolves, and that decision
+   *   comes before routing. Treated as read-only, which is what such a read is.
    * @returns {Promise<string[]>}
    * @private
    */
   async _workspaceFiles(activeRoute) {
-    const loopless = activeRoute.strategy === 'none' || activeRoute.strategy === 'chat';
+    const loopless = !activeRoute || activeRoute.strategy === 'none' || activeRoute.strategy === 'chat';
     // 'plan' is the read-only mode. Substituted only to resolve the handler; the gate
     // below still audits the read under the mode the user is actually in.
     const lookupMode = loopless ? 'plan' : activeRoute.mode;
@@ -1702,6 +2016,11 @@ class AgentSession {
     // action passes through regardless of which tier produced it.
     this._recordStep(action, result, activeRoute, Boolean(tool.mutating), ms);
 
+    // Same reason, and the reason this is the right place for it: a failure that
+    // repeats has to be counted across the whole turn, and only this method sees every
+    // action from both loop tiers.
+    if (!result.ok) result = await this._recover(action, result);
+
     // The one line that reconstructs a session afterwards: what was asked for, what
     // happened, and how long it took. Debug rather than info, because a run is dozens
     // of these — but when a user reports "it said it edited the file and it did not",
@@ -1711,6 +2030,100 @@ class AgentSession {
       `Step: ${action.action}${target ? ` ${target}` : ''}${action.cwd ? ` (in ${action.cwd})` : ''} → ` +
         `${result.ok ? 'ok' : `failed${result.error ? ` [${result.error}]` : ''}`} in ${ms}ms`
     );
+    return result;
+  }
+
+  /**
+   * Decide what a failed action gets told, and whether the user gets asked.
+   *
+   * Returns the result the loop will see — usually the same one with a sentence added.
+   * The observation is the only channel back to the model on a Tier B loop, so that is
+   * where the guidance has to go; there is no side band it would read.
+   *
+   * @param {object} action
+   * @param {import('./toolRegistry').ToolResult} result
+   * @returns {Promise<import('./toolRegistry').ToolResult>}
+   * @private
+   */
+  async _recover(action, result) {
+    /** @type {import('./errorRecovery').Failure} */
+    const failure = {
+      action: String(action.action || ''),
+      path: action.path,
+      command: action.command,
+      error: result.error,
+      observation: String(result.observation || ''),
+      // `runScript` appends its own "What went wrong: …" sentence when a rule matched,
+      // and a second explanation saying the same thing differently is noise in a
+      // context window that has none spare. `detail.reason` is set exactly when that
+      // happened — see `tools/runScript`.
+      diagnosed: Boolean(result.detail && result.detail.reason),
+      item: this._currentItem || '',
+    };
+
+    /** @type {import('./errorRecovery').RecoveryDecision} */
+    let decision;
+    try {
+      decision = this._recovery.observe(failure);
+    } catch (err) {
+      logger.warn(`Could not assess the failure: ${/** @type {Error} */ (err).message}`);
+      return result;
+    }
+
+    if (decision.note && this.memory) {
+      try {
+        await this.memory.append(decision.note);
+      } catch (err) {
+        logger.debug(`Could not record the failure: ${/** @type {Error} */ (err).message}`);
+      }
+    }
+
+    if (decision.kind === 'ask' && decision.clarification) {
+      const resolved = await this._ask(decision.clarification, this._emit || (() => {}));
+      if (resolved) {
+        const note = this._recovery.recordAnswer(failure, resolved.guidance || resolved.label);
+        if (this.memory) {
+          try {
+            await this.memory.append(note);
+          } catch (err) {
+            logger.debug(`Could not record the answer: ${/** @type {Error} */ (err).message}`);
+          }
+        }
+
+        if (resolved.effect === 'stop') {
+          this._interrupt = 'stop';
+          // Aborting is what actually stops a loop mid-item; the flag alone is only
+          // read once the loop has returned, which could be several steps later.
+          if (this._controller) this._controller.abort();
+          return { ...result, observation: `${result.observation}\n\nThe user stopped the run here.` };
+        }
+        if (resolved.effect === 'skip') {
+          this._interrupt = 'skip';
+        }
+
+        // The user has just said what this step is actually supposed to do, so the
+        // checklist should say it too. Not cosmetic: the item's text is what the retry
+        // is briefed on, what `stepGuard` checks the changed files against, and what
+        // the summary reads back — leaving it as the model's original wording means
+        // the one authoritative statement of the step is the only place their
+        // correction does not reach.
+        if (resolved.effect === 'instruct' && this._todos && resolved.guidance) {
+          this._todos.replaceCurrent(`${this._todos.current().text} — ${resolved.guidance}`);
+        }
+
+        return {
+          ...result,
+          observation: `${result.observation}\n\n${resolved.guidance || resolved.label}`,
+        };
+      }
+      // Nobody answered. Fall through to guidance rather than blocking.
+      return result;
+    }
+
+    if (decision.kind === 'guidance' && decision.guidance) {
+      return { ...result, observation: `${result.observation}\n\n${decision.guidance}` };
+    }
+
     return result;
   }
 

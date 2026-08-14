@@ -50,7 +50,12 @@
  * once you squint. Each rule states the fix in the imperative, naming a concrete next
  * command wherever there is one.
  *
- * @type {Array<{reason: string, pattern: RegExp, summary: string, fix: string, retryable?: boolean}>}
+ * `fix` may be a function of the match when the sentence has to name what the error
+ * named. "Something is undefined" is not actionable to a 1B model; "`addTodo` is used
+ * in that file but never defined or imported" is the same information with the one
+ * detail that makes it a next move.
+ *
+ * @type {Array<{reason: string, pattern: RegExp, summary: string | ((m: RegExpExecArray) => string), fix: string | ((m: RegExpExecArray) => string), retryable?: boolean, fixFirst?: boolean}>}
  */
 const RULES = [
   {
@@ -136,6 +141,97 @@ const RULES = [
     fix:
       'Tailwind 4 split the PostCSS plugin out. Install `@tailwindcss/postcss`, then change postcss.config.js to ' +
       'use `"@tailwindcss/postcss": {}` in place of `tailwindcss: {}`. Then run the command again.',
+    fixFirst: true,
+  },
+  // ── Undefined symbols ────────────────────────────────────────────────────────
+  //
+  // The single most common way code written by a small model fails at runtime, and
+  // until 0.7.0 none of it matched a rule: the model got a stack trace, the generic
+  // "the error points at a file" fallback, and no mention of the name that was
+  // actually missing. It then rewrote the file from memory and produced the same
+  // error, which is the loop these rules exist to break.
+  //
+  // Ordered after MODULE_SYSTEM, which claims the one `is not defined` that is really
+  // a module-system mismatch (`module is not defined in ES module scope`) and has a
+  // completely different fix.
+  {
+    reason: 'UNDEFINED_SYMBOL',
+    pattern: /ReferenceError:\s*(\w+) is not defined/,
+    summary: (m) => `${m[1]} is used but never defined`,
+    fix: (m) =>
+      `\`${m[1]}\` is used in that file but is never defined or imported there. Open the file the error names and ` +
+      `either import \`${m[1]}\` from the file that exports it, or define it. If you meant a name that already ` +
+      'exists, check the spelling matches exactly — it is case-sensitive. Then run the command again.',
+    fixFirst: true,
+  },
+  {
+    reason: 'UNDEFINED_SYMBOL',
+    pattern: /NameError: name '([^']+)' is not defined/,
+    summary: (m) => `${m[1]} is used but never defined`,
+    fix: (m) =>
+      `\`${m[1]}\` is used in that file but is never defined or imported there. Open the file the error names and ` +
+      `either add the import for \`${m[1]}\`, or define it above where it is used. Then run the command again.`,
+    fixFirst: true,
+  },
+  {
+    reason: 'UNDEFINED_SYMBOL',
+    // javac prints the location, then `symbol: variable foo` on a later line.
+    pattern: /cannot find symbol[\s\S]{0,300}?symbol:\s*(?:variable|method|class)\s+(\w+)/,
+    summary: (m) => `${m[1]} does not exist where it is used`,
+    fix: (m) =>
+      `javac cannot find \`${m[1]}\`. Either it is spelled differently where it is declared, or the class that ` +
+      'declares it is not imported, or it was never written. Open the file and line the error names, check that ' +
+      'name against where you defined it, and fix whichever side is wrong. Then compile again.',
+    fixFirst: true,
+  },
+  {
+    reason: 'UNDEFINED_PROPERTY',
+    // Node ≥16 phrasing, then the older one. Both name the property being read.
+    pattern: /Cannot read properties of (undefined|null) \(reading '([^']+)'\)|Cannot read property '([^']+)' of (undefined|null)/,
+    summary: (m) => `something was ${m[1] || m[4]} when '${m[2] || m[3]}' was read from it`,
+    fix: (m) => {
+      const property = m[2] || m[3];
+      const value = m[1] || m[4];
+      return (
+        `The value that \`${property}\` was read from is ${value} at that point — the property is fine, the thing ` +
+        `holding it does not exist yet. Open the file and line the error names and work out why it is ${value}: a ` +
+        'function that returned nothing, a prop or argument never passed in, state read before it was set, or an ' +
+        `import that did not resolve. Fix the source of the ${value}, not the line that read it. Then run it again.`
+      );
+    },
+    fixFirst: true,
+  },
+  {
+    reason: 'UNDEFINED_PROPERTY',
+    pattern: /AttributeError: '(\w+)' object has no attribute '([^']+)'/,
+    summary: (m) => `a ${m[1]} has no attribute '${m[2]}'`,
+    fix: (m) =>
+      `\`${m[2]}\` was read from a \`${m[1]}\`, which does not have it.` +
+      (m[1] === 'NoneType'
+        ? ' NoneType means the value is None — something returned None where an object was expected, so fix whatever produced the None rather than the line that used it.'
+        : ` Either the attribute is spelled differently on that class, or the object is not the type you expected. Open the file the error names and check what \`${m[1]}\` actually defines.`) +
+      ' Then run it again.',
+    fixFirst: true,
+  },
+  {
+    reason: 'NOT_A_FUNCTION',
+    pattern: /TypeError: ([\w.]+) is not a function/,
+    summary: (m) => `${m[1]} is not a function`,
+    fix: (m) =>
+      `\`${m[1]}\` is being called, but what is there is not a function — commonly a wrong import shape ` +
+      '(default vs named), a typo, or a value that is undefined. Open the file the error names, check how ' +
+      `\`${m[1]}\` is imported against how the other file exports it, and fix whichever side is wrong. ` +
+      'Then run the command again.',
+    fixFirst: true,
+  },
+  {
+    reason: 'NULL_DEREFERENCE',
+    pattern: /NullPointerException/,
+    summary: 'something was null when it was used',
+    fix:
+      'A value was null where an object was expected. Open the file and line named in the stack trace, find which ' +
+      'reference is null there, and fix what should have set it — initialise the field, pass the argument, or ' +
+      'check for null before using it. Then run it again.',
     fixFirst: true,
   },
   {
@@ -246,11 +342,15 @@ function matchRules(result) {
   if (!text.trim()) return null;
 
   for (const rule of RULES) {
-    if (rule.pattern.test(text)) {
+    // `exec` rather than `test` so a rule whose sentence names what the error named
+    // has the capture groups to name it with. None of these patterns are global, so
+    // there is no `lastIndex` to reset between calls.
+    const match = rule.pattern.exec(text);
+    if (match) {
       return {
         reason: rule.reason,
-        summary: rule.summary,
-        fix: rule.fix,
+        summary: typeof rule.summary === 'function' ? rule.summary(match) : rule.summary,
+        fix: typeof rule.fix === 'function' ? rule.fix(match) : rule.fix,
         retryable: Boolean(rule.retryable),
         fixFirst: Boolean(rule.fixFirst),
       };

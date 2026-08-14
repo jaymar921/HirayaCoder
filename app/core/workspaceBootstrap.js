@@ -42,9 +42,9 @@
  */
 
 const fs = require('fs');
-const path = require('path');
 
 const logger = require('../utils/logger');
+const pathGuard = require('../security/pathGuard');
 const environmentProfile = require('./environmentProfile');
 
 /** The entry written into `.gitignore`. Trailing slash: it is always a directory. */
@@ -89,7 +89,17 @@ function alreadyIgnored(contents) {
  */
 function ensureGitignore(workspaceRoot) {
   if (!workspaceRoot) return 'failed';
-  const file = path.join(workspaceRoot, '.gitignore');
+
+  // Every other write in the extension resolves through pathGuard, which has a
+  // realpath stage precisely because a lexically-clean path can still be a symlink
+  // pointing outside the workspace. This one used to skip it. See SAST-0.6.1 §2.
+  let file;
+  try {
+    file = pathGuard.assertRealPathSync(pathGuard.resolvePath(workspaceRoot, '.gitignore')).absolute;
+  } catch (err) {
+    logger.warn(`Refusing to touch .gitignore: ${/** @type {Error} */ (err).message}`);
+    return 'failed';
+  }
 
   try {
     if (!fs.existsSync(file)) {

@@ -2,7 +2,7 @@
   "name": "hirayacoder",
   "displayName": "HirayaCoder",
   "description": "A fully offline, privacy-first AI coding agent powered by your local Ollama instance. Agentic on every model — even 1B.",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "publisher": "jaymar921",
   "author": {
     "name": "jaymar921",
@@ -424,8 +424,12 @@
     "eslint": "^9.34.0",
     "eslint-plugin-no-unsanitized": "^4.1.2",
     "eslint-plugin-security": "^3.0.1",
-    "mocha": "^11.7.1",
+    "mocha": "^11.8.0",
     "sinon": "^21.0.0"
+  },
+  "overrides": {
+    "diff": "^9.0.0",
+    "serialize-javascript": "^7.1.0"
   },
   "dependencies": {}
 }

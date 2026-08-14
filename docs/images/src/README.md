@@ -32,9 +32,12 @@ and no screenshot is written.
 
 ## When these need updating
 
-- **The version badge**, on every release. It appears once per file, as `v0.6.1`.
-- **The "New in …" line** on the *Knows your machine* card, whenever a release changes
-  what that card is claiming.
+- **The version badge**, on every release. It appears once per file, as `v0.7.0`.
+- **The "New in …" line**, whenever a release changes what a card is claiming. It moves
+  to whichever card the release actually changed rather than staying put — it sat on
+  *Knows your machine* for 0.6.1 and moved to *Big requests become a checklist* for
+  0.7.0, which is the card that stopped being true as written. Only ever one card
+  carries it; two "New in" tags read as a changelog rather than as a highlight.
 - **The mock chat transcript** in the hero, if the panel's real layout changes enough that
   the picture stops being an honest one. It is a mock, not a screenshot — but it should
   never show something the extension does not do.

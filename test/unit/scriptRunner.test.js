@@ -145,6 +145,43 @@ describe('scriptRunner.requiresExplicitApproval', () => {
     assert.strictEqual(requiresExplicitApproval(tokenize('git status')), null);
     assert.strictEqual(requiresExplicitApproval(tokenize('git commit -m wip')), null);
   });
+
+  // SAST-0.6.1 §1. `npx` was allow-listed, `npm_config_yes` suppressed its own
+  // "Ok to proceed?", and nothing here asked — so auto-approve ran arbitrary remote
+  // code with no click. Every spelling of "fetch a package and run it" is covered.
+  it('forces confirmation for every spelling of npx', () => {
+    for (const command of [
+      'npx create-vite@latest todo-glass-app -- --template react',
+      'npx cowsay hello',
+      'npm exec create-vite',
+      'npm x create-vite',
+      'npm create vite@latest',
+      'yarn dlx create-vite',
+      'yarn create vite',
+      'pnpm dlx create-vite',
+      'pnpm create vite',
+    ]) {
+      const reason = requiresExplicitApproval(tokenize(command));
+      assert.ok(reason, `${command} should require a click`);
+      assert.match(reason, /downloads and runs a package from the internet/);
+    }
+  });
+
+  it('confirms an initializer but not a bare init, which touches no network', () => {
+    assert.ok(requiresExplicitApproval(tokenize('npm init vite')));
+    assert.ok(requiresExplicitApproval(tokenize('npm init -y react-app')));
+    // Bare `npm init` writes a package.json into the current directory and fetches
+    // nothing. A click for that is a click trained away.
+    assert.strictEqual(requiresExplicitApproval(tokenize('npm init')), null);
+    assert.strictEqual(requiresExplicitApproval(tokenize('npm init -y')), null);
+    assert.strictEqual(requiresExplicitApproval(tokenize('npm init --yes')), null);
+  });
+
+  it('does not let the npx rules swallow ordinary package-manager work', () => {
+    assert.strictEqual(requiresExplicitApproval(tokenize('npm run build')), null);
+    assert.strictEqual(requiresExplicitApproval(tokenize('yarn install')), null);
+    assert.strictEqual(requiresExplicitApproval(tokenize('pnpm test')), null);
+  });
 });
 
 describe('scriptRunner.resolveBinary', () => {

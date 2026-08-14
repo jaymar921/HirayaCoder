@@ -671,3 +671,84 @@ select.control {
   clip: rect(0 0 0 0);
   white-space: nowrap;
 }
+
+/*
+  The agent asking the user something.
+
+  Bordered and inset rather than accented: the run is stopped while this is up, and
+  the thing that needs to catch the eye is the *recommended option* inside it, not the
+  container. Giving the card the sunrise as well would put two competing marks in one
+  small area and leave neither meaning anything.
+*/
+.clarify {
+  margin: var(--sp-3) 0 0;
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.clarify-question {
+  margin: 0;
+  font-weight: 600;
+}
+
+.clarify-context {
+  margin: var(--sp-1) 0 0;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+
+.clarify-options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+
+/*
+  Stacked, full width, and tall enough for two lines. A row of side-by-side buttons
+  truncates the labels — which are file paths often enough that the truncated part is
+  the part that distinguishes them.
+*/
+.clarify-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  height: auto;
+  padding: var(--sp-2) var(--sp-3);
+  text-align: left;
+  white-space: normal;
+}
+
+.clarify-label {
+  font-weight: 600;
+}
+
+/*
+  Inherits colour rather than using --muted, because on the recommended option this
+  detail sits on the sunrise gradient where the muted grey is unreadable.
+*/
+.clarify-detail {
+  font-size: var(--fs-xs);
+  opacity: 0.85;
+}
+
+.clarify-free {
+  display: flex;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+
+.clarify-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.clarify-chosen {
+  margin: var(--sp-3) 0 0;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}

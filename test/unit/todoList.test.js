@@ -143,3 +143,47 @@ describe('TodoList', () => {
     assert.match(todos.render(), /\[x\] 1\. One/);
   });
 });
+
+describe('TodoList — changed by the user mid-run', () => {
+  it('rewords the active item and keeps what it was', () => {
+    const todos = new TodoList(['Do the thing', 'Two']);
+    assert.strictEqual(todos.replaceCurrent('Do the specific thing'), true);
+
+    assert.strictEqual(todos.current().text, 'Do the specific thing');
+    // The summary has to be able to say what it was, or a user cannot tell that their
+    // answer is why it succeeded.
+    assert.match(todos.describeChanges(), /Do the thing.*Do the specific thing/);
+  });
+
+  it('ignores a reword that changes nothing', () => {
+    const todos = new TodoList(['One', 'Two']);
+    assert.strictEqual(todos.replaceCurrent('One'), false);
+    assert.strictEqual(todos.replaceCurrent('   '), false);
+    assert.strictEqual(todos.changes.length, 0);
+  });
+
+  it('skips one item without giving up on the rest', () => {
+    const todos = new TodoList(['One', 'Two', 'Three']);
+    const next = todos.skipCurrent('you asked me to skip this one');
+
+    assert.strictEqual(todos.items[0].status, 'skipped');
+    assert.strictEqual(next.text, 'Two');
+    assert.strictEqual(todos.items[2].status, 'pending', 'skipping one must not abandon the others');
+  });
+
+  it('says nothing about a list that ran as planned', () => {
+    const todos = new TodoList(['One', 'Two']);
+    todos.finishCurrent('done');
+    assert.strictEqual(todos.describeChanges(), '');
+  });
+
+  it('reports every change it made, in order', () => {
+    const todos = new TodoList(['One', 'Two']);
+    todos.replaceCurrent('One, precisely');
+    todos.skipCurrent('you asked me to skip this one');
+
+    const described = todos.describeChanges();
+    assert.match(described, /Item 1 reworded/);
+    assert.match(described, /Item 1 dropped/);
+  });
+});

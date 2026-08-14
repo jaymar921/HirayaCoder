@@ -577,17 +577,30 @@ class MemoryStore {
     /** @type {Set<number>} */
     const picked = new Set();
 
-    // Related first, newest of them first, so a long history does not fill the window
-    // with the earliest thing it ever matched.
-    for (let index = this.entries.length - 1; index >= 0 && picked.size < limit; index -= 1) {
+    // How many of the subject's own tokens each entry shares. Counted rather than
+    // treated as a yes/no, because "any one token matches" puts a note that mentions
+    // `src` level with the note that names `src/hooks/useTodos.js` and the identifier
+    // inside it — and on a recall window of five, the weak match displacing the strong
+    // one is the whole failure this selector exists to prevent.
+    /** @type {Array<{index: number, score: number}>} */
+    const scored = [];
+    for (let index = this.entries.length - 1; index >= 0; index -= 1) {
       // eslint-disable-next-line security/detect-object-injection -- numeric loop index.
       const words = recallTokens(this.entries[index]);
+      let score = 0;
       for (const word of words) {
-        if (wanted.has(word)) {
-          picked.add(index);
-          break;
-        }
+        if (wanted.has(word)) score += 1;
       }
+      if (score > 0) scored.push({ index, score });
+    }
+
+    // Strongest first; newest breaks a tie, so a long history does not fill the window
+    // with the earliest thing it ever matched. `scored` is already newest-first, and
+    // `sort` is stable, so the tie-break needs no comparator of its own.
+    scored.sort((a, b) => b.score - a.score);
+    for (const { index } of scored) {
+      if (picked.size >= limit) break;
+      picked.add(index);
     }
 
     // Then recency, for the remainder.

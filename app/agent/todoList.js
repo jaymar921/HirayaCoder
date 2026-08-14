@@ -65,6 +65,19 @@ class TodoList {
     /** @type {TodoItem[]} */
     this.items = items.slice(0, MAX_ITEMS).map((text) => ({ text: String(text).trim(), status: 'pending' }));
     if (this.items.length > 0) this.items[0].status = 'active';
+
+    /**
+     * Every change made to the list after it was planned, in order.
+     *
+     * The list is the one thing in a run that both the user and the model treat as
+     * settled — it is shown once, ticked off as it goes, and read back in the summary.
+     * So when it changes mid-run because the user was asked something, that has to be
+     * visible: a checklist that quietly grew an item reads afterwards as a model that
+     * did work nobody asked for.
+     *
+     * @type {Array<{kind: 'reworded' | 'dropped', detail: string, at: number}>}
+     */
+    this.changes = [];
   }
 
   /** @returns {boolean} */
@@ -131,6 +144,58 @@ class TodoList {
   remaining(opts = {}) {
     const wanted = opts.includeActive ? ['pending', 'active'] : ['pending'];
     return this.items.filter((item) => wanted.includes(item.status)).map((item) => item.text);
+  }
+
+  /**
+   * Restate the active item.
+   *
+   * The original text is kept in the change log rather than overwritten in place: the
+   * summary has to be able to say what the item *was*, or a user reading it afterwards
+   * cannot tell that their answer is why it succeeded.
+   *
+   * @param {string} text
+   * @returns {boolean}
+   */
+  replaceCurrent(text) {
+    const active = this.current();
+    const wanted = String(text || '').trim();
+    if (!active || !wanted || wanted === active.text) return false;
+
+    this.changes.push({ kind: 'reworded', detail: `"${active.text}" → "${wanted}"`, at: this.position() });
+    logger.info(`Checklist item ${this.position()} reworded: ${active.text} → ${wanted}`);
+    active.text = wanted;
+    return true;
+  }
+
+  /**
+   * Close the active item as skipped and move on, leaving the rest of the list alone.
+   *
+   * Distinct from `skipRemaining`, which gives up on everything. This is the user
+   * saying "not that one" — the run continues.
+   *
+   * @param {string} reason
+   * @returns {TodoItem | null} The next item.
+   */
+  skipCurrent(reason) {
+    const active = this.current();
+    if (!active) return null;
+    this.changes.push({ kind: 'dropped', detail: active.text, at: this.position() });
+    return this.finishCurrent('skipped', reason);
+  }
+
+  /**
+   * What changed about the list after it was planned, in plain language.
+   *
+   * @returns {string} Empty when the list ran as planned.
+   */
+  describeChanges() {
+    if (this.changes.length === 0) return '';
+    const lines = this.changes.map((change) =>
+      change.kind === 'reworded'
+        ? `- Item ${change.at} reworded: ${change.detail}`
+        : `- Item ${change.at} dropped: ${change.detail}`
+    );
+    return `The checklist changed while it ran:\n${lines.join('\n')}`;
   }
 
   /** Mark every remaining item as skipped — used when the session is cut short. */

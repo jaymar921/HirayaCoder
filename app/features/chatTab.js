@@ -77,6 +77,16 @@ class ChatTab {
      */
     this._detachedAt = null;
 
+    /**
+     * The question this tab is currently blocked on, if any.
+     *
+     * The run holding the other end of `resolve` cannot proceed until it is called, so
+     * every path that removes the card has to settle it — see `_cancelClarification`.
+     *
+     * @type {{id: string, resolve: (answer: object | null) => void} | null}
+     */
+    this._pendingClarification = null;
+
     /** @type {vscode.WebviewPanel | null} */
     this.panel = null;
     /** @type {AgentSession | null} */
@@ -246,6 +256,8 @@ class ChatTab {
         return this._attachImage();
       case 'detach':
         return this._detach(message);
+      case 'clarify':
+        return this._answerClarification(message);
       default:
         logger.warn(`Ignored unknown webview message: ${String(type)}`);
         return undefined;
@@ -255,6 +267,84 @@ class ChatTab {
   /** @private */
   _post(message) {
     if (this.panel) this.panel.webview.postMessage(message);
+  }
+
+  /**
+   * Put a question to the user and wait for the card to come back answered.
+   *
+   * ## The two ways this must not hang
+   *
+   * A run is blocked while this promise is pending, so every way out of the panel has
+   * to resolve it. Closing the tab disposes the panel, which fires `onDidDispose` and
+   * settles this as cancelled (see `_retire`); pressing Stop aborts the session, which
+   * lands in the same place. Without both, a user who closes a tab mid-question leaves
+   * an agent session pinned on a promise nothing will ever resolve — holding its lane
+   * in the turn queue against every other tab.
+   *
+   * Only one question can be outstanding at a time, which is a property of the caller:
+   * `agentSession` asks and awaits inside a single loop step. A second arriving while
+   * one is pending is a bug, so the first is cancelled rather than silently dropped.
+   *
+   * @param {import('../agent/clarification').Clarification} request
+   * @returns {Promise<import('../agent/clarification').ClarificationAnswer | null>}
+   * @private
+   */
+  _askUser(request) {
+    if (!this.panel) return Promise.resolve(null);
+
+    if (this._pendingClarification) {
+      logger.warn('A second question arrived while one was still open; cancelling the first.');
+      this._pendingClarification.resolve({ id: this._pendingClarification.id, cancelled: true });
+    }
+
+    return new Promise((resolve) => {
+      this._pendingClarification = { id: request.id, resolve };
+      this._post({ type: 'clarify', request });
+    });
+  }
+
+  /**
+   * The user answered — or the card was dismissed.
+   *
+   * @param {object} message
+   * @private
+   */
+  _answerClarification(message) {
+    const pending = this._pendingClarification;
+    if (!pending) {
+      logger.warn('An answer arrived with no question outstanding; ignoring it.');
+      return;
+    }
+    // Ids are matched so a stale card from a previous turn cannot answer the current
+    // question. The webview is trusted to render, never to decide what it is replying to.
+    if (message.id && message.id !== pending.id) {
+      logger.warn('An answer arrived for a question that is no longer open; ignoring it.');
+      return;
+    }
+
+    this._pendingClarification = null;
+    pending.resolve({
+      id: pending.id,
+      optionId: typeof message.optionId === 'string' ? message.optionId : undefined,
+      text: typeof message.text === 'string' ? message.text : undefined,
+      cancelled: message.cancelled === true,
+    });
+  }
+
+  /**
+   * Settle any outstanding question as cancelled.
+   *
+   * Called from every path that takes the panel away from the user mid-run. Safe to
+   * call when nothing is pending.
+   *
+   * @private
+   */
+  _cancelClarification() {
+    if (!this._pendingClarification) return;
+    logger.info('A question was still open when the session ended; treating it as cancelled.');
+    const pending = this._pendingClarification;
+    this._pendingClarification = null;
+    pending.resolve({ id: pending.id, cancelled: true });
   }
 
   /** @private */
@@ -605,6 +695,10 @@ class ChatTab {
       environment: this.app.environment,
       stepSessions: this.stepSessions,
       images: images.map((image) => image.base64),
+      // How the session reaches the user when it is stuck or the request was
+      // ambiguous. Bound to this tab, so the question appears in the conversation it
+      // came from rather than in whichever tab happens to be focused.
+      onClarify: (request) => this._askUser(request),
     });
 
     try {
@@ -633,6 +727,9 @@ class ChatTab {
       logger.error(`Chat turn failed: ${message}`);
       this._post({ type: 'error', message });
     } finally {
+      // A turn that threw, or finished while a question was somehow still open, must
+      // not leave the card up with nothing behind it.
+      this._cancelClarification();
       this.session = null;
       this._starting = false;
       this._queueAbort = null;
@@ -682,6 +779,19 @@ class ChatTab {
           type: 'status',
           text: `Retrying step ${event.index}: ${String(event.reason || 'it did not land').slice(0, 120)}`,
         });
+      // The card itself is posted by `_askUser`, which needs the promise. This only
+      // moves the status line, so a run that is waiting on someone does not look like a
+      // run that has hung.
+      case 'clarification':
+        return this._post({ type: 'status', text: 'Waiting for your answer…' });
+      case 'clarification-answered':
+        return this._post({ type: 'status', text: `You chose: ${String(event.label || '').slice(0, 80)}` });
+      // How the request was read, when that differed from what was typed. Shown as it
+      // happens rather than only in the summary — a user watching the agent open
+      // `main.js` after they typed `mian.js` should not have to wait until the end to
+      // find out why.
+      case 'interpretation':
+        return this._post({ type: 'status', text: String(event.note || '').slice(0, 160) });
       default:
         return undefined;
     }
@@ -712,6 +822,11 @@ class ChatTab {
     if (panel && this.panel && panel !== this.panel) return;
     this.panel = null;
 
+    // Before anything else. The run below is allowed to continue in the background, and
+    // a background run blocked on a card that no longer exists would hold its lane in
+    // the turn queue forever — the one way this feature could wedge the whole extension.
+    this._cancelClarification();
+
     if (!this.session) {
       // Nothing has started. A closed tab must not keep the lane: without this, a tab
       // closed while queued would hold its place and every other tab would sit behind a
@@ -736,6 +851,9 @@ class ChatTab {
 
   /** Stop whatever this tab is doing, queued or running. */
   cancel() {
+    // A session waiting on an answer is not watching its abort signal — it is parked on
+    // a promise. Settling the question is what lets it reach the signal at all.
+    this._cancelClarification();
     if (this._queueAbort) this._queueAbort.abort();
     if (this.session) this.session.cancel();
   }

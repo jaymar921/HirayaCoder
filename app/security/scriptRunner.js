@@ -64,12 +64,70 @@ const DEFAULT_ALLOWED_BINARIES = [
 ];
 
 /**
+ * Reason attached to every rule that fetches a package and executes it.
+ *
+ * Kept as one constant because the six spellings below are the same act, and a user
+ * reading the prompt should not have to work out that `npm x` and `pnpm dlx` are `npx`.
+ */
+const REMOTE_PACKAGE_REASON = 'this downloads and runs a package from the internet';
+
+/**
+ * Does this subcommand name a package to go and fetch?
+ *
+ * `exec`, `x`, `dlx`, and `create` always do. `init` is the exception that earns the
+ * argument check: bare `npm init` writes a `package.json` into the current directory
+ * and touches no network at all, while `npm init vite` downloads `create-vite` and runs
+ * it. Confirming the first would be a click for nothing, which is how confirmation
+ * prompts get trained away.
+ *
+ * @param {string[]} args
+ * @returns {boolean}
+ */
+function fetchesRemotePackage(args) {
+  const subcommand = String(args[0] || '').toLowerCase();
+  if (['exec', 'x', 'dlx', 'create'].includes(subcommand)) return true;
+  // An initializer is the first argument that is not a flag.
+  if (subcommand === 'init') return args.slice(1).some((a) => !a.startsWith('-'));
+  return false;
+}
+
+/**
  * Allow-listed programs whose *subcommands* still demand an explicit click, even
  * when auto-approve-scripts is on. Each rule is [binary, subcommand-matcher, why].
  *
  * @type {Array<{binary: string, match: (args: string[]) => boolean, reason: string}>}
  */
 const ALWAYS_CONFIRM = [
+  {
+    // Every argument form of `npx` ends in "fetch a package and execute it", including
+    // the ones that hit the local `node_modules/.bin` first — the fallback is still a
+    // registry download. There is no subcommand to discriminate on, so the rule is the
+    // binary.
+    //
+    // This is the finding the 0.6.1 SAST pass carried forward: `npx` was on the default
+    // allow-list, `NON_INTERACTIVE_ENV` sets `npm_config_yes` which suppresses npx's own
+    // "Ok to proceed?", and nothing here asked. Under auto-approve that ran arbitrary
+    // remote code with no click, in an extension whose headline claim is that it works
+    // fully offline. Observed on a live 0.6.0 run, auto-approved and logged as routine.
+    binary: 'npx',
+    match: () => true,
+    reason: REMOTE_PACKAGE_REASON,
+  },
+  {
+    binary: 'npm',
+    match: fetchesRemotePackage,
+    reason: REMOTE_PACKAGE_REASON,
+  },
+  {
+    binary: 'yarn',
+    match: fetchesRemotePackage,
+    reason: REMOTE_PACKAGE_REASON,
+  },
+  {
+    binary: 'pnpm',
+    match: fetchesRemotePackage,
+    reason: REMOTE_PACKAGE_REASON,
+  },
   {
     binary: 'git',
     match: (args) => ['push', 'remote', 'clone', 'fetch', 'pull', 'submodule'].includes(args[0]),
@@ -521,6 +579,7 @@ module.exports = {
   ScriptRunnerError,
   DEFAULT_ALLOWED_BINARIES,
   ALWAYS_CONFIRM,
+  fetchesRemotePackage,
   SHELL_METACHARACTERS,
   DEFAULT_TIMEOUT_MS,
   MAX_OUTPUT_CHARS,
