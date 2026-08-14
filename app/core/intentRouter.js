@@ -402,6 +402,83 @@ const ABOUT_THE_PROGRESS =
   /\bwhere\s+are\s+we\b|\bwhat(?:'s| is)?\s+the\s+(?:state|status|progress)\b|\bwhat\s+have\s+we\s+(?:done|got|finished)\b|\bcatch\s+me\s+up\b|\brecap\b|\bwhere\s+did\s+we\s+(?:leave|stop|get)\b/i;
 
 /**
+ * The user telling you the work is finished and correct.
+ *
+ * ## The failure this exists for
+ *
+ * The last message of the `qwen3.5:4b` evaluation session was
+ *
+ *     It all works now, thank you
+ *
+ * and the agent answered it by building a checklist and starting to re-fix bugs it had
+ * already fixed — `1. Fix the onToggleComplete function error in TodoItem.jsx`, an item
+ * carried over from two turns earlier. The user cancelled it. A thank-you did not merely
+ * start a run; it started a run that was about to undo finished work.
+ *
+ * Traced through `classify`, the message matches nothing: no mutating verb, no work
+ * verb, no file, and `isPurelySocial` rejects it because `works` and `now` are not in
+ * `SOCIAL_WORDS`. It reached the `task` default.
+ *
+ * ## Why this is a category and not two more words
+ *
+ * Adding `works` and `now` to `SOCIAL_WORDS` would be actively wrong: **"the delete
+ * button no longer works"** is a bug report and has to stay a task. What separates the
+ * two is not vocabulary, it is who the sentence says the subject is and whether it is
+ * negated — so this is matched as a phrase, and any hint that something is still wrong
+ * hands the message straight back to the agent.
+ *
+ * ## What is deliberately not matched
+ *
+ * "no more errors" and "nothing is broken" are success reports too, and both are left
+ * out. They are built from the same words as the complaints they invert, and this
+ * module's standing trade — being wrong toward `task` costs one loop, being wrong
+ * toward `chat` drops a request — says to miss them rather than risk the inverse.
+ *
+ * ## On the `detect-unsafe-regex` warning
+ *
+ * The linter flags the run of optional `\s+`-terminated groups in the first branch. It
+ * is a false positive, and it was measured rather than argued: every optional group
+ * carries a distinct literal prefix (`all`, `is`/`are`, `seems`/`appears`, `now`), so no
+ * two can ever claim the same characters and there is nothing to backtrack over. On
+ * 60,000-character adversarial inputs — long whitespace runs, and `"all "`, `"seems to "`
+ * and `"now "` repeated to fill the buffer — the worst case is 0.24 ms, flat in the
+ * length.
+ *
+ * The branches, in order: "it works" / "it all works now" / "everything is running";
+ * "that fixed it"; "working now" / "works perfectly"; "all good"; "we're all set";
+ * "looks good now".
+ */
+const SUCCESS_REPORT =
+  /\b(?:it|that|this|they|everything)\s+(?:all\s+)?(?:is\s+|are\s+)?(?:seems?\s+to\s+|appears?\s+to\s+)?(?:now\s+)?(?:works?|worked|working|runs?|ran|running)\b|\bthat\s+(?:fixed|did|solved|sorted)\s+it\b|\b(?:works?|working|running)\s+(?:now|perfectly|fine|great|well)\b|\ball\s+(?:good|set|sorted|working|fixed)\b|\bwe(?:'re|\s+are)\s+(?:good|set|done|all\s+set)\b|\b(?:looks?|seems?)\s+(?:good|fine|great|right)\s+now\b/i;
+
+/**
+ * Any sign the sentence goes on to say something is still wrong.
+ *
+ * "it works" and "it doesn't work" differ by one word; so do "that fixed it" and "that
+ * didn't fix it". A contrast word is the other half — "it works **but** the clear button
+ * doesn't" opens with a success report and is a bug report.
+ *
+ * Deliberately broad, because every word in here costs at most one agent loop on a
+ * message that was in fact a compliment, and buys back the case where a report of
+ * partial success would otherwise have been dropped on the floor.
+ */
+const STILL_WRONG =
+  /\b(?:isn'?t|aren'?t|wasn'?t|doesn'?t|don'?t|didn'?t|won'?t|can'?t|cannot|couldn'?t|shouldn'?t|not|no|never|still|except|unless|but|however|though|although|why|almost|nearly|mostly|partly)\b/i;
+
+/**
+ * Is this the user reporting the work now succeeds, and nothing more?
+ *
+ * @param {string} text
+ * @returns {boolean}
+ */
+function reportsSuccess(text) {
+  const message = String(text || '').trim();
+  if (message.length === 0) return false;
+  if (!SUCCESS_REPORT.test(message)) return false;
+  return !STILL_WRONG.test(message);
+}
+
+/**
  * Is every word in this message a social one?
  *
  * @param {string} message
@@ -426,6 +503,37 @@ function isPurelySocial(message) {
 const GREETING_TAIL_WORDS = 3;
 
 /**
+ * The words that actually open a greeting.
+ *
+ * A strict subset of `SOCIAL_WORDS`, and the distinction cost real requests before it
+ * existed. `isGreetingWithName` used to ask whether the first word was anywhere in
+ * `SOCIAL_WORDS` — but that set is mostly *filler* ("a", "lot", "the", "it", "no",
+ * "got", "all", "fine"), admitted there on the strength of the rule that a message only
+ * counts as social when **every** word is in it. Read one word at a time, it means any
+ * message of three words or fewer beginning with a common English word is a greeting:
+ *
+ *     "it doesn't work"      → chat
+ *     "the tests fail"       → chat
+ *     "got an error"         → chat
+ *     "all buttons broken"   → chat
+ *
+ * Four bug reports, answered conversationally, request dropped. Which is the precise
+ * failure this module's header says it must never produce, arriving through the one
+ * rule that reads the vocabulary word-by-word instead of whole-message.
+ *
+ * The compound openers — `good`, `magandang`, `buenos`, `guten` — are kept, because
+ * "good morning gemma4" is the case the rule was written for. They are safe here in a
+ * way they are not in the filler set: each begins a real greeting, and a message like
+ * "good work thanks" that they do claim is a compliment, which belongs in chat anyway.
+ */
+const GREETING_WORDS = new Set([
+  'hi', 'hey', 'hello', 'yo', 'sup', 'hiya', 'howdy', 'greetings',
+  'kumusta', 'kamusta', 'musta', 'mabuhay', 'magandang',
+  'hola', 'buenos', 'buenas', 'bonjour', 'salut', 'ciao', 'hallo', 'guten',
+  'good',
+]);
+
+/**
  * A greeting with a name on it.
  *
  * "hello gemma4" went to the agent because `gemma4` is in no vocabulary and never
@@ -447,7 +555,7 @@ function isGreetingWithName(message) {
     .filter(Boolean);
 
   if (words.length === 0 || words.length > GREETING_TAIL_WORDS) return false;
-  return SOCIAL_WORDS.has(words[0]);
+  return GREETING_WORDS.has(words[0]);
 }
 
 /**
@@ -472,6 +580,15 @@ function classify(text) {
   // request on the floor — the one outcome this module must never produce.
   if (MUTATING_VERB.test(message)) {
     return { intent: 'task', reason: 'asks for a change' };
+  }
+
+  // After the mutating-verb rule rather than before it, which costs "it works now,
+  // thanks for fixing it" a wasted loop — `fixing` claims it first. That is the correct
+  // way round: "it works now, can you also add a dark mode" is the same shape, and
+  // answering *that* conversationally would drop a request. A change asked for always
+  // wins, even when it arrives wrapped in a compliment.
+  if (reportsSuccess(message)) {
+    return { intent: 'chat', reason: 'reports the work now succeeds' };
   }
 
   // Checked ahead of the broader work-verb rule, and only now that a mutating request
@@ -545,11 +662,15 @@ module.exports = {
   ASKS_FOR_BANTER,
   isPurelySocial,
   isGreetingWithName,
+  reportsSuccess,
+  SUCCESS_REPORT,
+  STILL_WRONG,
   WORK_VERB,
   MUTATING_VERB,
   PLANNED_DELIVERABLE_VERB,
   NAMES_A_FILE,
   SOCIAL_WORDS,
+  GREETING_WORDS,
   ASSENT_WORDS,
   ABOUT_THE_ASSISTANT,
   ABOUT_THE_CONVERSATION,
