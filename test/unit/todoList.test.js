@@ -145,36 +145,6 @@ describe('TodoList', () => {
 });
 
 describe('TodoList — changed by the user mid-run', () => {
-  it('adds an item after the one being worked on, not at the end', () => {
-    // A step the current item turned out to need is a step the ones after it need too.
-    const todos = new TodoList(['One', 'Two', 'Three']);
-    assert.strictEqual(todos.insertAfterCurrent(['One and a half']), 1);
-
-    assert.deepStrictEqual(
-      todos.items.map((item) => item.text),
-      ['One', 'One and a half', 'Two', 'Three']
-    );
-  });
-
-  it('leaves the new item pending and the current one active', () => {
-    const todos = new TodoList(['One', 'Two']);
-    todos.insertAfterCurrent(['Extra']);
-    assert.strictEqual(todos.current().text, 'One');
-    assert.strictEqual(todos.items[1].status, 'pending');
-  });
-
-  it('refuses to push the list past the ceiling a small model can hold', () => {
-    const todos = new TodoList(['1', '2', '3', '4', '5', '6']);
-    assert.strictEqual(todos.insertAfterCurrent(['7']), 0);
-    assert.strictEqual(todos.items.length, 6);
-  });
-
-  it('adds only as many as there is room for', () => {
-    const todos = new TodoList(['1', '2', '3', '4', '5']);
-    assert.strictEqual(todos.insertAfterCurrent(['6', '7', '8']), 1);
-    assert.strictEqual(todos.items.length, 6);
-  });
-
   it('rewords the active item and keeps what it was', () => {
     const todos = new TodoList(['Do the thing', 'Two']);
     assert.strictEqual(todos.replaceCurrent('Do the specific thing'), true);
@@ -210,12 +180,10 @@ describe('TodoList — changed by the user mid-run', () => {
   it('reports every change it made, in order', () => {
     const todos = new TodoList(['One', 'Two']);
     todos.replaceCurrent('One, precisely');
-    todos.insertAfterCurrent(['One and a half']);
     todos.skipCurrent('you asked me to skip this one');
 
     const described = todos.describeChanges();
-    assert.match(described, /reworded/);
-    assert.match(described, /Added at position 2: One and a half/);
-    assert.match(described, /dropped/);
+    assert.match(described, /Item 1 reworded/);
+    assert.match(described, /Item 1 dropped/);
   });
 });

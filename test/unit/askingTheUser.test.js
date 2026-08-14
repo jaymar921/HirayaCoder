@@ -247,4 +247,100 @@ describe('asking the user', () => {
       assert.doesNotMatch(result.summary, /What kept going wrong/);
     });
   });
+
+  describe('the checklist, when the user changes it mid-run', () => {
+    const TIER_A = { tier: 'A', strategy: 'react', label: 'Agentic', model: 'test', canPlanTodos: true };
+
+    /**
+     * A session whose model can hold a checklist, so `_runWithTodos` is the path taken.
+     *
+     * @param {object} opts
+     */
+    function planningSession(opts) {
+      const session = makeSession(opts);
+      session.capability = TIER_A;
+      return session;
+    }
+
+    /**
+     * The planner replies with a numbered list, then each item runs its own loop.
+     *
+     * @param {string[]} items
+     * @param {string[]} rest
+     */
+    function withPlan(items, rest) {
+      return scriptedClient([items.map((text, index) => `${index + 1}. ${text}`).join('\n'), ...rest]);
+    }
+
+    const failing = () => json({ action: 'run_script', command: 'node src/broken.js' });
+
+    it('records a skip as the user’s decision, not as a failed step', async () => {
+      const client = withPlan(
+        ['Update src/broken.js', 'Update README.md'],
+        [
+          failing(),
+          failing(),
+          json({ action: 'write_file', path: 'README.md', code: '# Updated\n' }),
+          json({ action: 'done', summary: 'readme updated' }),
+        ]
+      );
+
+      const session = planningSession({
+        client,
+        onClarify: async (request) => {
+          const skip = request.options.find((option) => option.effect === 'skip');
+          return { id: request.id, optionId: skip.id };
+        },
+      });
+
+      const result = await run(session, 'update src/broken.js and update README.md');
+
+      assert.strictEqual(result.todos[0].status, 'skipped', 'a step the user closed must not read as failed');
+      assert.match(result.summary, /you asked me to skip this one/);
+      // And the rest of the list still ran.
+      assert.notStrictEqual(result.todos[1].status, 'skipped');
+    });
+
+    it('rewords the running item to carry what the user said', async () => {
+      const client = withPlan(
+        ['Update src/broken.js', 'Update README.md'],
+        [
+          failing(),
+          failing(),
+          json({ action: 'done', summary: 'gave up' }),
+          json({ action: 'write_file', path: 'README.md', code: '# Updated\n' }),
+          json({ action: 'done', summary: 'readme updated' }),
+        ]
+      );
+
+      const session = planningSession({
+        client,
+        onClarify: async (request) => ({ id: request.id, text: 'the entry point is src/main.js' }),
+      });
+
+      const result = await run(session, 'update src/broken.js and update README.md');
+
+      // The item's text is what a retry is briefed on, what stepGuard checks against,
+      // and what the summary reads back.
+      assert.match(result.todos[0].text, /the entry point is src\/main\.js/);
+      assert.match(result.summary, /The checklist changed while it ran/);
+      assert.match(result.summary, /reworded/);
+    });
+
+    it('leaves the checklist alone when nothing was asked', async () => {
+      const client = withPlan(
+        ['Update README.md', 'Update src/main.js'],
+        [
+          json({ action: 'write_file', path: 'README.md', code: '# One\n' }),
+          json({ action: 'done', summary: 'readme' }),
+          json({ action: 'write_file', path: 'src/main.js', code: 'export function main() {\n  return 2;\n}\n' }),
+          json({ action: 'done', summary: 'main' }),
+        ]
+      );
+      const session = planningSession({ client });
+
+      const result = await run(session, 'update README.md and update src/main.js');
+      assert.doesNotMatch(result.summary, /The checklist changed/);
+    });
+  });
 });

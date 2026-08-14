@@ -536,6 +536,15 @@ class AgentSession {
     /** What the user said mid-run, for the summary. @type {string[]} */
     this._userGuidance = [];
 
+    /**
+     * The checklist currently running, so an answer given inside a loop can adjust it.
+     *
+     * Null except between `_runWithTodos` building the list and reporting it.
+     *
+     * @type {TodoList | null}
+     */
+    this._todos = null;
+
     /** @type {AbortController | null} */
     this._controller = null;
     this.running = false;
@@ -788,6 +797,9 @@ class AgentSession {
       this._controller = null;
       this._emit = null;
       this._currentItem = '';
+      // Also cleared on the paths that leave `_runWithTodos` early — a cancel, or a
+      // throw — where the line at the end of it is never reached.
+      this._todos = null;
     }
   }
 
@@ -917,6 +929,10 @@ class AgentSession {
     }
 
     const todos = new TodoList(items);
+    // Reachable from `_recover`, which runs inside a loop this method is awaiting and
+    // has no other way to reach the checklist. Cleared in the `finally` below so a
+    // later turn cannot write into a list that has already been reported.
+    this._todos = todos;
     emit({ type: 'todo', items: todos.items.map((item) => item.text) });
     logger.info(`Running ${todos.items.length} TODO item(s) one at a time.`);
 
@@ -1199,6 +1215,9 @@ class AgentSession {
       // the checklist reads as though the model worked it out on its own.
       this._describeInterventions(todos) +
       (summaries.length > 0 ? `\n\nDetail:\n${summaries.join('\n')}` : '');
+
+    // The list is reported now, so nothing may write into it afterwards.
+    this._todos = null;
 
     return {
       summary: appendUnfinishedNote(summary, allSteps),
@@ -2080,6 +2099,16 @@ class AgentSession {
         }
         if (resolved.effect === 'skip') {
           this._interrupt = 'skip';
+        }
+
+        // The user has just said what this step is actually supposed to do, so the
+        // checklist should say it too. Not cosmetic: the item's text is what the retry
+        // is briefed on, what `stepGuard` checks the changed files against, and what
+        // the summary reads back — leaving it as the model's original wording means
+        // the one authoritative statement of the step is the only place their
+        // correction does not reach.
+        if (resolved.effect === 'instruct' && this._todos && resolved.guidance) {
+          this._todos.replaceCurrent(`${this._todos.current().text} — ${resolved.guidance}`);
         }
 
         return {

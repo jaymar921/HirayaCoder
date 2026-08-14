@@ -206,7 +206,6 @@ function persist(workspaceRoot, profile = detect()) {
   let file;
   try {
     const resolved = pathGuard.resolvePath(workspaceRoot, PROFILE_PATH);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixed name under the workspace root
     fs.mkdirSync(path.dirname(resolved.absolute), { recursive: true });
     file = pathGuard.assertRealPathSync(resolved).absolute;
   } catch (err) {
@@ -215,7 +214,6 @@ function persist(workspaceRoot, profile = detect()) {
   }
 
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- guarded above
     fs.writeFileSync(file, `${JSON.stringify(profile, null, 2)}\n`, 'utf8');
   } catch (err) {
     logger.warn(`Could not write ${PROFILE_PATH}: ${/** @type {Error} */ (err).message}`);

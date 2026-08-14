@@ -163,4 +163,31 @@ describe('commonSense.interpret — a reference to nothing', () => {
     assert.strictEqual(commonSense.interpret({ task: 'fix the parser in src/main.js', files: FILES }).kind, 'ok');
     assert.strictEqual(commonSense.interpret({ task: 'update items in the list', files: FILES }).kind, 'ok');
   });
+
+  it('still matches when the message is padded with whitespace', () => {
+    const reading = commonSense.interpret({ task: '  fix it.  \n', files: FILES, editorPath: 'src/api.js' });
+    assert.strictEqual(reading.kind, 'repaired');
+  });
+});
+
+describe('commonSense — input that is trying to be expensive', () => {
+  // Both of these were measured super-linear before 0.7.0 bounded them: the dangling
+  // pattern at 1,660 ms on 50,000 trailing spaces, and the path scan at 3,089 ms on
+  // 50,000 characters of `a/a/a/…`. Neither is an attack — it is the user's own
+  // composer — but three seconds of frozen extension host is a bug either way.
+  const BUDGET_MS = 250;
+
+  it('reads a message with a huge whitespace tail in linear time', () => {
+    const task = `fix it${' '.repeat(50000)}X`;
+    const started = Date.now();
+    commonSense.interpret({ task, files: FILES });
+    assert.ok(Date.now() - started < BUDGET_MS, `took ${Date.now() - started}ms`);
+  });
+
+  it('scans a huge path-like paste in bounded time', () => {
+    const task = `update ${'a/'.repeat(25000)}${'a'.repeat(50)}!`;
+    const started = Date.now();
+    commonSense.referencedPaths(task);
+    assert.ok(Date.now() - started < BUDGET_MS, `took ${Date.now() - started}ms`);
+  });
 });

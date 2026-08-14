@@ -75,7 +75,7 @@ class TodoList {
      * visible: a checklist that quietly grew an item reads afterwards as a model that
      * did work nobody asked for.
      *
-     * @type {Array<{kind: 'inserted' | 'reworded' | 'dropped', detail: string, at: number}>}
+     * @type {Array<{kind: 'reworded' | 'dropped', detail: string, at: number}>}
      */
     this.changes = [];
   }
@@ -147,46 +147,6 @@ class TodoList {
   }
 
   /**
-   * Add items directly after the one being worked on.
-   *
-   * Used when the user, having been asked, says the work needs a step nobody planned
-   * for. They go *after* the active item rather than at the end, because a step the
-   * current one turned out to need is a step the ones after it need too.
-   *
-   * The `MAX_ITEMS` ceiling still applies — it is the number a small model can hold,
-   * and the user answering a question does not change that. Anything over the ceiling
-   * is refused rather than silently dropped, so the caller can say so.
-   *
-   * @param {string[]} texts
-   * @returns {number} How many were actually added.
-   */
-  insertAfterCurrent(texts) {
-    const index = this.items.findIndex((item) => item.status === 'active');
-    if (index === -1) return 0;
-
-    const room = MAX_ITEMS - this.items.length;
-    if (room <= 0) {
-      logger.warn(`Cannot add to the checklist: it is already at the ${MAX_ITEMS}-item ceiling.`);
-      return 0;
-    }
-
-    /** @type {TodoItem[]} */
-    const added = texts
-      .map((text) => String(text).trim())
-      .filter(Boolean)
-      .slice(0, room)
-      .map((text) => ({ text, status: /** @type {TodoStatus} */ ('pending') }));
-    if (added.length === 0) return 0;
-
-    this.items.splice(index + 1, 0, ...added);
-    for (const item of added) {
-      this.changes.push({ kind: 'inserted', detail: item.text, at: index + 1 });
-      logger.info(`Checklist gained an item after ${index + 1}: ${item.text}`);
-    }
-    return added.length;
-  }
-
-  /**
    * Restate the active item.
    *
    * The original text is kept in the change log rather than overwritten in place: the
@@ -230,16 +190,11 @@ class TodoList {
    */
   describeChanges() {
     if (this.changes.length === 0) return '';
-    const lines = this.changes.map((change) => {
-      switch (change.kind) {
-        case 'inserted':
-          return `- Added at position ${change.at + 1}: ${change.detail}`;
-        case 'reworded':
-          return `- Item ${change.at} reworded: ${change.detail}`;
-        default:
-          return `- Item ${change.at} dropped: ${change.detail}`;
-      }
-    });
+    const lines = this.changes.map((change) =>
+      change.kind === 'reworded'
+        ? `- Item ${change.at} reworded: ${change.detail}`
+        : `- Item ${change.at} dropped: ${change.detail}`
+    );
     return `The checklist changed while it ran:\n${lines.join('\n')}`;
   }
 
