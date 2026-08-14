@@ -31,9 +31,21 @@
 const logger = require('../utils/logger');
 const { parseAction, actionSchema } = require('../core/outputParser');
 const { truncateToTokens } = require('../utils/tokenBudget');
+const { WorkingSet, isRecon } = require('./workingSet');
 
 /** How many identical actions before the loop intervenes. */
 const REPEAT_LIMIT = 2;
+
+/**
+ * How many times a repeated read-only action is answered rather than fatal.
+ *
+ * One. The substitution's whole claim is that the model repeated itself because it had
+ * lost the result, so handing the result back should settle it. A model that repeats the
+ * same recon action *again*, with the content and an explicit instruction both in front
+ * of it, is not disoriented — it is stuck, and the honest end to that run is the stop
+ * the guard was already going to produce.
+ */
+const RECON_SUBSTITUTION_LIMIT = 1;
 
 /** How many consecutive unparseable turns before giving up. */
 const PARSE_FAILURE_LIMIT = 3;
@@ -368,11 +380,15 @@ async function run(options) {
   /** Status sentences this loop has shown the model, for the echo check below. */
   /** @type {Set<string>} */
   const notices = new Set();
+  /** What the agent is holding, rendered into every turn — see `agent/workingSet`. */
+  const workingSet = new WorkingSet();
 
   let observation = '';
   let summary = '';
   let stopReason = 'budget';
   let parseFailures = 0;
+  /** Recon repeats answered with their own result rather than a stop. */
+  let substitutions = 0;
   /** A `done` has already been sent back once for want of evidence. */
   let doneChallenged = false;
   // Two independent nudges. `hint` is about the task ("you have the file, now edit
@@ -424,6 +440,11 @@ async function run(options) {
     const sections = [
       options.context,
       renderTrace(steps, traceBudget),
+      // The trace above says which actions ran; this says what the agent is *holding*
+      // as a result. They read similarly and do different jobs — a trace line reading
+      // "3. read_file src/App.jsx → ok" is a history entry, and a model that has lost
+      // the file itself answers it by reading the file again. See `agent/workingSet`.
+      workingSet.render({ includeStruggles: budgets.promptTokenTarget >= 1800 }),
       observation ? `Result of your last action:\n${observation}` : '',
       hint,
       parseNudge,
@@ -539,6 +560,54 @@ async function run(options) {
     const repeats = (seen.get(key) || 0) + 1;
     seen.set(key, repeats);
 
+    // A repeated *reconnaissance* action does not end the session on the first strike.
+    //
+    // This is the single most expensive rule of the 0.7.0 round. Five of `qwen3.5:0.8b`'s
+    // seven sessions ended here, four of them at exactly two steps: list_files,
+    // list_files, list_files, session over, nothing written, seven times in a row. The
+    // model was not burning a budget or damaging anything — it was listing a directory,
+    // a read-only call costing five milliseconds, and the response was to end the user's
+    // whole run. Meanwhile a genuinely costly mistake, a wrong `npm install`, gets a
+    // diagnosis and another go.
+    //
+    // So a recon repeat gets one intervention first: the result it already had, handed
+    // back with the working set and an instruction naming the next move. It costs one
+    // turn, and it is the turn in which the model has both the content and a statement
+    // that it has the content. If it repeats *again* after that, the guard falls through
+    // and ends the run as before — a model ignoring the substitution twice is genuinely
+    // stuck, and the rung above this one is `errorRecovery` asking the user.
+    //
+    // Mutating and executing actions are untouched: repeating `run_script` can install
+    // packages and start servers, and "it was only a repeat" is no comfort there.
+    if (repeats > REPEAT_LIMIT && isRecon(action.action) && substitutions < RECON_SUBSTITUTION_LIMIT) {
+      substitutions += 1;
+      // Not charged against the repeat budget, so the model is not immediately over the
+      // line again on its next turn — but `substitutions` is capped, so this cannot
+      // become a way to loop forever.
+      seen.set(key, repeats - 1);
+      logger.info(`Substituting for a repeated recon action "${key}" rather than ending the session.`);
+
+      const previous = steps.find(
+        (entry) => entry.action && actionKey(entry.action) === key && entry.result && entry.result.ok
+      );
+      hint =
+        `STOP. You have already done ${action.action}${action.path ? ` on ${action.path}` : ''} and the result is ` +
+        'above — asking for it again returns the same thing and gets you no further. ' +
+        (activeRoute.allowedActions.has('write_file')
+          ? 'Your next action must change a file: send write_file with "path" and the COMPLETE file contents in "code". ' +
+            'If you genuinely cannot write anything yet, reply "done" and say what is blocking you.'
+          : 'Look at a different file, or reply "done" with what you have found.');
+      // The content, not just the assertion. The whole reason a hint alone failed is
+      // that it described something the model could no longer see.
+      if (previous && previous.result) {
+        observation = truncateToTokens(previous.result.observation, Math.floor(budgets.promptTokenTarget * 0.45), {
+          keep: 'both',
+        }).text;
+      }
+      emit({ type: 'repeat-substituted', action, step: steps.length });
+      continue;
+    }
+
     if (repeats > REPEAT_LIMIT) {
       logger.warn(`ReAct loop repeated "${key}" ${repeats} times; stopping.`);
       // Careful not to overclaim failure: the loop can repeat itself *after* doing
@@ -573,6 +642,7 @@ async function run(options) {
         }
       : await execute(action);
     steps.push({ action, result });
+    workingSet.record(action, result, steps.length);
     emit({ type: 'observation', step: steps.length, action, result });
 
     // A refused write changed nothing, so the corrected retry the hint just asked
