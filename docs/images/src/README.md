@@ -6,7 +6,7 @@ one-line change instead of a redesign.
 
 | Source | Output | Used in |
 |---|---|---|
-| `hero-offline-agent.html` | `../hero-offline-agent.png` | README hero, Marketplace listing |
+| `hero-offline-agent.html` | `../hero-offline-agent.png` | README hero, and the Marketplace listing once published |
 | `capabilities.html` | `../capabilities.png` | README feature section |
 | `live-session.html` | `../live-session.png` | README, "Watching a run happen" |
 | `knows-what-it-has.html` | `../knows-what-it-has.png` | README, "Small models that finish" |
@@ -52,3 +52,9 @@ writes nothing, so check the file timestamps rather than the exit code:
 - **The mock chat transcript** in the hero, if the panel's real layout changes enough that
   the picture stops being an honest one. It is a mock, not a screenshot — but it should
   never show something the extension does not do.
+- **The install route, on the day it reaches the Marketplace.** Both images currently say
+  this is a pre-release fetched from GitHub Releases, because it is:
+  `hero-offline-agent.html` in the CTA button and its note, `capabilities.html` in the
+  footer. Until that day the Marketplace must not be mentioned as a way to get it —
+  `capabilities.html` shipped a footer reading *Search "HirayaCoder" in the Extensions
+  view* through 0.7.0, which was an instruction that could not work.
