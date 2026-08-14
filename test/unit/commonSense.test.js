@@ -39,6 +39,29 @@ describe('commonSense.referencedPaths', () => {
   });
 });
 
+describe('commonSense.editDistance', () => {
+  it('charges a transposition one edit, not two', () => {
+    // The whole reason this is not plain Levenshtein. `mian` for `main` is the
+    // commonest way a filename gets mistyped, and at two edits it falls below the
+    // threshold on a seven-character name.
+    assert.strictEqual(commonSense.editDistance('mian', 'main'), 1);
+    assert.ok(commonSense.nameSimilarity('mian.js', 'main.js') >= commonSense.TYPO_THRESHOLD);
+  });
+
+  it('counts ordinary edits the ordinary way', () => {
+    assert.strictEqual(commonSense.editDistance('context', 'contxt'), 1);
+    assert.strictEqual(commonSense.editDistance('todo', 'todos'), 1);
+    assert.strictEqual(commonSense.editDistance('auth', 'math'), 2);
+    assert.strictEqual(commonSense.editDistance('same', 'same'), 0);
+  });
+
+  it('handles an empty side', () => {
+    assert.strictEqual(commonSense.editDistance('', 'abc'), 3);
+    assert.strictEqual(commonSense.editDistance('abc', ''), 3);
+    assert.strictEqual(commonSense.nameSimilarity('', ''), 0);
+  });
+});
+
 describe('commonSense.nearMatches', () => {
   it('finds the file a transposition was meant to name', () => {
     assert.deepStrictEqual(commonSense.nearMatches('mian.js', FILES), ['src/main.js']);

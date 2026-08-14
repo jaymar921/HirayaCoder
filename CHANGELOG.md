@@ -5,6 +5,184 @@ All notable changes to HirayaCoder are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] — unreleased
+
+Everything here follows from one observation: a small model that is stuck does not know
+it is stuck, and everything it does next makes the run worse. Across the 0.5.3 and 0.6.0
+rounds a model that had run out of ideas ended a run in one of three ways — resend the
+failing action until the step budget was gone, announce success it had not achieved, or
+abandon a task it was one decision away from finishing. All three cost the user more
+than a question would have.
+
+So 0.7.0 adds the three things that were missing between "the action failed" and "the
+run ended badly": a diagnosis for the failures nobody had written a rule for, an
+escalation ladder when the diagnosis does not take, and — last, not first — a way to ask
+the user.
+
+### Added — undefined symbols are now a diagnosis, not a stack trace
+
+The commonest way code written by a small model fails at runtime had no rule at all. The
+model got forty lines of stack trace, the generic "the error points at a file" fallback,
+and no mention of the name that was actually missing; it then rewrote the file from
+memory and produced the same error.
+
+Seven rules across JavaScript, Python and Java: `ReferenceError`, `NameError`, javac's
+`cannot find symbol`, reading a property of `undefined` or `null`, `AttributeError`,
+`x is not a function`, and `NullPointerException`. Each names the symbol the error named,
+because *"something is undefined"* is not actionable and *"`addTodo` is used in that file
+but never defined or imported there"* is the same information with the one detail that
+makes it a next move.
+
+- `scriptDiagnosis` rules may now compute their sentence from the match, which is what
+  makes naming the symbol possible. The matcher moved from `test` to `exec`, with a test
+  pinning that repeated calls agree.
+- The property-of-undefined rule says to fix *what produced the undefined*, not the line
+  that read it — a model told only "map failed" adds a `?.` and moves on.
+- `module is not defined in ES module scope` is still claimed by `MODULE_SYSTEM`, which
+  is a `ReferenceError` with a completely different fix.
+
+### Added — an escalation ladder, and the user at the end of it
+
+`agent/errorRecovery` covers what no rule matches, and what a rule matched twice.
+Failures are compared by signature — line numbers, addresses and absolute paths
+normalised out — so the same problem is recognised across attempts and across machines.
+
+| Seen | What happens |
+|---|---|
+| 1st, diagnosed | Nothing extra; the diagnosis already said it |
+| 1st, undiagnosed | Read the error literally; here is what to look at |
+| 2nd | Ask the user |
+
+Asking on the *second* failure rather than a rounder number is set against
+`reactLoop.REPEAT_LIMIT`, which is 2: the loop ends a run once the model has sent the
+same action twice, so a ladder waiting for a third would never reach its top rung and
+the run would end with the user never asked. The second failure is the last moment at
+which asking can still change the outcome.
+
+A refused write or a declined delete is **not** treated as being stuck. That is the
+permission model working, and escalating it would ask the user the same question twice,
+the second time with less context than the confirmation dialog had.
+
+### Added — the agent asks, with options rather than an open question
+
+`agent/clarification` is the shape of a mid-run question: two to four options, exactly
+one recommended, every option stating what it does to the queue, and free text always
+available. A question with seven options is a second task handed to the user; four
+unranked options move the decision without helping with it. When the same thing has
+failed twice, the recommendation is **skip**, because recommending another attempt would
+recommend the thing that has already not worked.
+
+The card renders in the chat panel and stays there once answered, as part of the record
+of the run.
+
+The property that mattered most while building this is the negative one, and it is
+tested from both sides: **a session with nothing to ask never blocks.** Closing the tab,
+pressing Stop, and a turn that throws all settle an outstanding question, so a run
+continuing in the background cannot hold its lane in the turn queue waiting on a card
+nobody can see.
+
+### Added — the request is read before the model sees it
+
+"Update mian.js" in a project containing `main.js` is not ambiguous to a person for even
+a moment. To a small model it is a path that does not resolve, and what happens next is
+the part that costs: it creates `mian.js`, reports the update done, and the user now has
+two files where they had one.
+
+`core/commonSense` decides from the evidence rather than from confidence:
+
+- **Exactly one near-match** — repaired, with both names stated in the summary and in
+  memory, so the user can see their request was altered and disagree with it.
+- **Two to four near-matches** — asked, offering them.
+- **No near-match** — nothing said. The file may simply not exist yet, and a check that
+  fired on those would be worse than no check.
+
+The verb governing a filename is read from the few words in front of it, so "update
+mian.js **to add** a header" is a typo rather than a creation. A right name in a wrong
+folder is left alone — nothing was misspelled, and the model has the workspace listing.
+"Fix it" as the first message of a session resolves to the open editor file, or asks.
+
+Comparison is Damerau-Levenshtein, not `memoryStore.similarity`: that one is Jaccard over
+whole words and scores `mian.js` against `main.js` at zero.
+
+### Changed — the checklist can change while it runs
+
+An answer that only reaches the model is half-applied. The item's text is what a retry is
+briefed on, what `stepGuard` checks the changed files against, and what the summary reads
+back — so a free-text answer now rewords the running item, and a skip closes it as the
+user's decision rather than as a failure. That distinction matters twice: a failed item
+puts a `[!]` against a row the user themselves closed, and it feeds "an earlier step
+failed" to every item after it.
+
+`TodoList` keeps a change log, and the summary reports three things it previously hid:
+how the request was read, what the user said when asked, and what kept failing anyway.
+A run that ends "4 of 4 completed" after hitting the same error eleven times is
+technically true and actively misleading.
+
+### Changed — memory is recalled by relevance on every turn
+
+`readRelevant` existed but only fired in experimental step sessions, so an ordinary
+six-item run shared one memory block, selected by recency, against the whole request
+before the list existed. That is the wrong block for every item after the first: on the
+React benchmark the item assembling `App.jsx` ran sixth, by which point the notes naming
+`useTodos.js` and `TodoInput.jsx` were the oldest in the file and the first to fall out
+of a five-entry window. The note that survived was about the README.
+
+Recall is now by subject on every turn, and ranked by **how much** of the subject each
+note shares rather than by whether any single token matched — a weak match displacing a
+strong one is the failure the selector exists to prevent. It is never worse than recency:
+a subject that matches nothing gets exactly the window it would have had.
+
+### Fixed — `_routeForStep` dropped `readOnlyTurn`
+
+Rebuilding a route per item exposed this. The step route replaced the session's for the
+whole step but did not carry the read-only flag, so the mutating tools came back for a
+turn the router had already decided was a look-only request. Latent while the path was
+experimental; carried through now that every item rebuilds its route.
+
+### Fixed — the three findings the 0.6.1 SAST pass deferred
+
+- **`npx` reached the network and never asked.** It was on the default allow-list,
+  `NON_INTERACTIVE_ENV` sets `npm_config_yes` which suppresses npx's own *"Ok to
+  proceed?"*, and it was absent from `ALWAYS_CONFIRM` — so under auto-approve it fetched
+  and ran arbitrary remote code with no click, in an extension whose headline claim is
+  that it works fully offline. A live 0.6.0 run has it in the audit log, auto-approved
+  and recorded as routine. All six spellings now confirm: `npx`, `npm exec`/`x`/`create`,
+  `yarn dlx`/`create`, `pnpm dlx`/`create`. Bare `npm init` is left alone — it writes a
+  manifest and touches no network, and a click for nothing is a click trained away.
+- **Two writes skipped `pathGuard`.** `ensureGitignore` and `environmentProfile.persist`
+  wrote through `path.join` directly, the only two writes in the extension that missed
+  the symlink check. Both now resolve through the guard, which gained a synchronous twin
+  for the activation path; the containment half is shared so the two cannot drift on the
+  part that decides.
+- **Dev-only advisories in the `mocha` tree.** mocha 11.8.0 with `overrides` pinning
+  `diff@9` and `serialize-javascript@7.1.0`, which is what actually clears them —
+  upstream mocha still asks for `diff@^7` and `serialize-javascript@^6`, and
+  `npm audit fix --force` would have moved sideways to 11.3.0 without fixing either.
+  `npm audit` now reports zero across the full tree rather than only under `--omit=dev`.
+  Verified serially, in parallel mode, and against a failing assertion.
+
+### Fixed — two regexes that were genuinely super-linear
+
+Both flagged by `eslint-plugin-security` in `core/commonSense`, and worth recording
+because the previous two passes reviewed and dismissed every warning of this class:
+
+- `DANGLING_REFERENCE` had `^\s*` and `\s*$` around an optional character — the classic
+  ambiguous shape. **68 ms at 10,000 trailing spaces, 1,660 ms at 50,000.** The caller
+  trims and the anchors are gone: 0 ms.
+- `PATH_TOKEN` matches linearly but is scanned with `/g`, so a string with no match gets
+  one scan per start position — **3,089 ms on 50,000 characters** of `a/a/a/…`. Input is
+  now bounded to 4,000 characters.
+
+Neither is an attack — it is the user's own composer — but three seconds of frozen
+extension host is a bug either way. Both are pinned by tests with a 250 ms budget.
+
+### Removed
+
+- `TodoList.insertAfterCurrent`, written for a user path that does not exist. An
+  unreachable method that mutates the one structure both the user and the model treat as
+  settled is worse than a slightly narrower feature.
+- `ErrorRecovery.hasAsked`, which had no caller.
+
 ## [0.6.1] — unreleased
 
 A macOS run of the same React TODO spec on the 0.6.0 build, `ornith:9b`, high thinking

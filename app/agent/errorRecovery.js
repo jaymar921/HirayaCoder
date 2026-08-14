@@ -288,17 +288,6 @@ class ErrorRecovery {
   }
 
   /**
-   * Has this run already given up on this failure and asked about it?
-   *
-   * @param {Failure} failure
-   * @returns {boolean}
-   */
-  hasAsked(failure) {
-    const known = this._seen.get(signatureOf(String(failure.action || 'action'), String(failure.observation || '')));
-    return Boolean(known && known.asked);
-  }
-
-  /**
    * Everything that failed more than once this run, worst first.
    *
    * Used by the session summary: a run that ended "3 of 4 items completed" is more

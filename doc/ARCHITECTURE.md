@@ -1,7 +1,7 @@
 # HirayaCoder — Architecture
 
-How the extension is put together and, more usefully, *why*. Roughly 13,000 lines of
-JavaScript across 46 modules in `app/`, with **no production dependencies** — the
+How the extension is put together and, more usefully, *why*. Roughly 22,000 lines of
+JavaScript across 73 modules in `app/`, with **no production dependencies** — the
 `dependencies` field in `package.json` is empty and the packaged `.vsix` contains no
 `node_modules` at all.
 
@@ -99,6 +99,7 @@ identical traffic regardless of tier. Swapping loops changes how an action is
 | `modelDiscovery.js` | Normalises `/api/tags`; falls back to `/api/show` only for incomplete entries. Caches by name+digest. |
 | `modelCapability.js` | Tier rule, budget matrix, `canPlanTodos`. Indexes budgets through a `Map` so a settings-supplied key cannot reach a prototype member. |
 | `intentRouter.js` | Decides, before routing, whether a message is conversation or work. Patterns only — no model call. `task` is the default and `chat` needs positive evidence, because a misread greeting costs one loop while a misread request is silently dropped. Consulted in Agent mode only. |
+| `commonSense.js` | Reads a request against the workspace before the model sees it. One near-match to a filename that does not exist is repaired with both names stated; two to four are asked about; none is left alone, because that is what creating a file looks like. Patterns and edit distance — no model call, for the same reason as `intentRouter`. |
 | `promptRouter.js` | Assembles the system prompt and the tool set for the current mode. Plan and Ask modes **omit** the mutating tools rather than refusing them later, and a conversational message in Agent mode gets the same treatment: no loop, no tools, one reply. |
 | `completionCheck.js` | Consulted when a loop is told the work is finished. Sends the model back **once** if nothing changed on a request that asked for a change, or if a file it just wrote still has an unimplemented function body. |
 | `contextBuilder.js` | Assembles the prompt under a token budget, by priority. Redacts on the way in. |
@@ -122,6 +123,25 @@ along the same line as everything else here: the brief decides what a step is *s
 its own item, what the earlier steps actually wrote, the files it names — and the guard
 decides what a step has *demonstrably done*, by comparing the change set against the
 step's own text. Neither consults the model's account of itself.
+
+`scriptDiagnosis.js`, `errorRecovery.js`, and `clarification.js` are what happens when a
+step does not work, and they are three modules rather than one because they answer three
+different questions. The diagnosis says *what this failure is* and is pure pattern
+matching over what a program printed. Recovery says *whether the model is learning from
+it*, by comparing failures across a turn on a normalised signature — line numbers and
+absolute paths removed, so the same problem is recognised across attempts and machines.
+Clarification says *what the user is asked* once the answer to the second question is no.
+
+The ladder is short on purpose: guidance on the first failure, the user on the second.
+Not a round number — `reactLoop.REPEAT_LIMIT` is 2, so the loop ends a run once the model
+has sent the same action twice, and a ladder that waited for a third would never reach
+its top rung. The second failure is the last moment at which asking can change anything.
+
+The rule that keeps this from becoming an agent that interviews its user: **the user is
+asked last, and only about something that has already failed with targeted guidance in
+between.** A session constructed without an `onClarify` handler — a benchmark, a detached
+tab — never asks at all and tops out at guidance, which is why no run can block on a
+question nobody can see.
 
 ### `app/security/` — the part that is allowed to say no
 
@@ -191,8 +211,8 @@ because a session with nothing on disk yet still owns its number.
 
 | Suite | Command | What it proves |
 |---|---|---|
-| Unit (573) | `npm run test:unit` | Logic, guards, parsing, permission decisions — against a stubbed `vscode`. |
-| Integration (12) | `npm run test:integration` | Activation, command registration, webview protocol, and a full turn to disk **in a real VS Code**, against a stub Ollama on loopback. |
+| Unit (1323) | `npm run test:unit` | Logic, guards, parsing, permission decisions — against a stubbed `vscode`. |
+| Integration (16) | `npm run test:integration` | Activation, command registration, webview protocol, and a full turn to disk **in a real VS Code**, against a stub Ollama on loopback. |
 | Live benchmark | `node tools/bench-agent.js <model>` | What a real model does to a real workspace. |
 | Build benchmark | `node tools/bench-build.js <model> --machine <A\|B\|C>` | Whether a model can build a project from an empty folder — add, read, run, and modify — in Java, JavaScript, and Python. Results land in `benchmarks/results/<machine>/`. |
 
