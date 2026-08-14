@@ -10,6 +10,7 @@ const {
   resolvePath,
   resolveForMutation,
   assertRealPath,
+  assertRealPathSync,
   isInside,
   matchProtectedPrefix,
 } = require('../../app/security/pathGuard');
@@ -228,5 +229,88 @@ describe('pathGuard.assertRealPath', () => {
       throw err;
     }
     await assert.doesNotReject(() => assertRealPath(resolvePath(root, 'alias.js')));
+  });
+});
+
+// The sync twin exists for `core/workspaceBootstrap`, which runs on a synchronous
+// activation path. These tests exist to keep the two from drifting: a difference in
+// verdict between them is the bug worth catching, so each case asserts both.
+describe('pathGuard.assertRealPathSync', () => {
+  /** @type {string} */
+  let tmp;
+
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hiraya-guard-sync-'));
+    fs.mkdirSync(path.join(tmp, 'workspace', 'src'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'workspace', 'src', 'app.js'), 'ok');
+    fs.mkdirSync(path.join(tmp, 'outside'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'outside', 'secret.txt'), 'top secret');
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  });
+
+  it('accepts a real file inside the workspace, like its async twin', async () => {
+    const root = path.join(tmp, 'workspace');
+    assert.doesNotThrow(() => assertRealPathSync(resolvePath(root, 'src/app.js')));
+    await assert.doesNotReject(() => assertRealPath(resolvePath(root, 'src/app.js')));
+  });
+
+  it('accepts a file that does not exist yet by checking its parent', async () => {
+    const root = path.join(tmp, 'workspace');
+    assert.doesNotThrow(() => assertRealPathSync(resolvePath(root, 'src/brand/new/file.js')));
+    await assert.doesNotReject(() => assertRealPath(resolvePath(root, 'src/brand/new/file.js')));
+  });
+
+  it('rejects a .gitignore that is a symlink pointing outside the workspace', async function () {
+    const root = path.join(tmp, 'workspace');
+    try {
+      fs.symlinkSync(path.join(tmp, 'outside', 'secret.txt'), path.join(root, '.gitignore'));
+    } catch (err) {
+      if (/** @type {NodeJS.ErrnoException} */ (err).code === 'EPERM') return this.skip();
+      throw err;
+    }
+
+    // This is the exact shape SAST-0.6.1 §2 described: lexically spotless, and only
+    // realpath resolution sees that appending to it writes outside the workspace.
+    const resolved = resolvePath(root, '.gitignore');
+    assert.throws(
+      () => assertRealPathSync(resolved),
+      (err) => err instanceof PathGuardError && err.code === 'SYMLINK_ESCAPE'
+    );
+    await assert.rejects(
+      () => assertRealPath(resolved),
+      (err) => err instanceof PathGuardError && err.code === 'SYMLINK_ESCAPE'
+    );
+  });
+
+  it('rejects a file created through a linked directory', async () => {
+    const root = path.join(tmp, 'workspace');
+    // Junctions work unprivileged on Windows and realpath resolves them identically,
+    // so this case gets real coverage on every platform rather than skipping.
+    const linkType = process.platform === 'win32' ? 'junction' : 'dir';
+    fs.symlinkSync(path.join(tmp, 'outside'), path.join(root, '.hirayacoder'), linkType);
+
+    const resolved = resolvePath(root, '.hirayacoder/environment.json');
+    assert.throws(
+      () => assertRealPathSync(resolved),
+      (err) => err instanceof PathGuardError && err.code === 'SYMLINK_ESCAPE'
+    );
+    await assert.rejects(
+      () => assertRealPath(resolved),
+      (err) => err instanceof PathGuardError && err.code === 'SYMLINK_ESCAPE'
+    );
+  });
+
+  it('accepts a symlink that stays inside the workspace', function () {
+    const root = path.join(tmp, 'workspace');
+    try {
+      fs.symlinkSync(path.join(root, 'src', 'app.js'), path.join(root, 'alias.js'));
+    } catch (err) {
+      if (/** @type {NodeJS.ErrnoException} */ (err).code === 'EPERM') return this.skip();
+      throw err;
+    }
+    assert.doesNotThrow(() => assertRealPathSync(resolvePath(root, 'alias.js')));
   });
 });

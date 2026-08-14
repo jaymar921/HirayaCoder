@@ -261,6 +261,23 @@ async function assertRealPath(resolved, opts = {}) {
   // eslint-disable-next-line security/detect-non-literal-fs-filename
   const realRoot = await fs.promises.realpath(resolved.root).catch(() => resolved.root);
 
+  return verifyRealContainment(resolved, real, realRoot, platform);
+}
+
+/**
+ * The containment half of the real-path check, shared by both twins.
+ *
+ * Split out so the sync and async forms cannot drift on the part that decides — the
+ * only thing they are allowed to differ on is how they reach the filesystem.
+ *
+ * @param {ResolvedPath} resolved
+ * @param {string} real
+ * @param {string} realRoot
+ * @param {string} platform
+ * @returns {ResolvedPath}
+ * @throws {PathGuardError}
+ */
+function verifyRealContainment(resolved, real, realRoot, platform) {
   if (!isInside(realRoot, real, platform)) {
     throw new PathGuardError(
       'SYMLINK_ESCAPE',
@@ -272,11 +289,69 @@ async function assertRealPath(resolved, opts = {}) {
   return resolved;
 }
 
+/**
+ * Synchronous twin of {@link assertRealPath}, with identical rules.
+ *
+ * It exists for `core/workspaceBootstrap`, which runs during activation on a call path
+ * that is synchronous all the way up to `this.environment` being read immediately after.
+ * Making that path async to reach the guard would have been a wider change than the
+ * check it was there to add.
+ *
+ * The 0.6.1 SAST pass found `ensureGitignore` and `environmentProfile.persist` writing
+ * to `path.join(workspaceRoot, …)` directly — the only two writes in the extension that
+ * skipped this module. Reaching it needs a workspace whose `.gitignore` is already a
+ * symlink pointing somewhere the user did not intend, which is a strange thing to
+ * arrange for yourself, but the inconsistency was real and this closes it.
+ *
+ * @param {ResolvedPath} resolved
+ * @param {object} [opts]
+ * @param {string} [opts.platform]
+ * @returns {ResolvedPath}
+ * @throws {PathGuardError}
+ */
+function assertRealPathSync(resolved, opts = {}) {
+  const platform = opts.platform || os.platform();
+  let probe = resolved.absolute;
+  let real = null;
+
+  for (;;) {
+    try {
+      // Resolving an attacker-influenced path is precisely this function's purpose;
+      // the result is containment-checked against the workspace root just below.
+      // eslint-disable-next-line security/detect-non-literal-fs-filename
+      real = fs.realpathSync(probe);
+      break;
+    } catch (err) {
+      const code = /** @type {NodeJS.ErrnoException} */ (err).code;
+      if (code !== 'ENOENT') {
+        throw new PathGuardError('REALPATH_FAILED', `Could not verify "${resolved.relative}": ${/** @type {Error} */ (err).message}`, resolved.relative);
+      }
+      const parent = path.dirname(probe);
+      if (parent === probe) {
+        throw new PathGuardError('REALPATH_FAILED', `Could not verify "${resolved.relative}".`, resolved.relative);
+      }
+      probe = parent;
+    }
+  }
+
+  let realRoot = resolved.root;
+  try {
+    // The workspace root comes from VS Code, never from model output.
+    // eslint-disable-next-line security/detect-non-literal-fs-filename
+    realRoot = fs.realpathSync(resolved.root);
+  } catch {
+    // Fall back to the lexical root, matching the async twin's `.catch()`.
+  }
+
+  return verifyRealContainment(resolved, real, realRoot, platform);
+}
+
 module.exports = {
   PathGuardError,
   resolvePath,
   resolveForMutation,
   assertRealPath,
+  assertRealPathSync,
   isInside,
   matchProtectedPrefix,
   DEFAULT_PROTECTED_PREFIXES,

@@ -44,6 +44,7 @@ const os = require('os');
 const path = require('path');
 
 const logger = require('../utils/logger');
+const pathGuard = require('../security/pathGuard');
 const { platformName } = require('../utils/platform');
 
 /** Where the profile is persisted, relative to the workspace root. */
@@ -198,9 +199,23 @@ function render(profile, opts = {}) {
 function persist(workspaceRoot, profile = detect()) {
   if (!workspaceRoot) return profile;
 
-  const file = path.join(workspaceRoot, ...PROFILE_PATH.split('/'));
+  // Routed through pathGuard for the symlink check, like every other write in the
+  // extension. The directory is created first so the realpath probe resolves the
+  // `.hirayacoder` link itself rather than the workspace root it would fall back to.
+  // See SAST-0.6.1 §2.
+  let file;
   try {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const resolved = pathGuard.resolvePath(workspaceRoot, PROFILE_PATH);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixed name under the workspace root
+    fs.mkdirSync(path.dirname(resolved.absolute), { recursive: true });
+    file = pathGuard.assertRealPathSync(resolved).absolute;
+  } catch (err) {
+    logger.warn(`Refusing to write ${PROFILE_PATH}: ${/** @type {Error} */ (err).message}`);
+    return profile;
+  }
+
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- guarded above
     fs.writeFileSync(file, `${JSON.stringify(profile, null, 2)}\n`, 'utf8');
   } catch (err) {
     logger.warn(`Could not write ${PROFILE_PATH}: ${/** @type {Error} */ (err).message}`);
