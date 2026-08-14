@@ -1,0 +1,228 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  :root {
+    --bg: #0b1220;
+    --panel: #101826;
+    --panel-2: #141d2e;
+    --line: rgba(148, 163, 184, 0.16);
+    --fg: #e8ecf1;
+    --muted: #94a3b8;
+    --sunrise-a: #ff9a3c;
+    --sunrise-b: #ff5f6d;
+    --sunrise: linear-gradient(115deg, #ff9a3c, #ff5f6d);
+    --ok: #4ade80;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1280px; height: 720px; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: "Segoe UI", -apple-system, system-ui, sans-serif;
+    overflow: hidden;
+    position: relative;
+  }
+  /* the spark, bled into the corner */
+  .glow {
+    position: absolute; border-radius: 50%; filter: blur(90px); opacity: 0.5;
+  }
+  .glow-a { width: 620px; height: 620px; left: -220px; top: -260px; background: #ff7a45; opacity: 0.22; }
+  .glow-b { width: 520px; height: 520px; right: -160px; bottom: -220px; background: #2b6cb0; opacity: 0.3; }
+
+  .wrap {
+    position: relative; z-index: 1;
+    height: 100%;
+    display: grid; grid-template-columns: 520px 1fr;
+    gap: 44px;
+    padding: 56px 56px 48px;
+    align-items: center;
+  }
+
+  .brand { display: flex; align-items: center; gap: 14px; margin-bottom: 26px; }
+  .brand svg { display: block; }
+  .brand-name { font-size: 26px; font-weight: 700; letter-spacing: -0.3px; }
+  .ver {
+    font-size: 13px; font-weight: 700; letter-spacing: 0.3px;
+    padding: 5px 11px; border-radius: 999px; color: #1b1205;
+    background: var(--sunrise);
+  }
+
+  h1 {
+    font-size: 54px; line-height: 1.06; letter-spacing: -1.6px; font-weight: 700;
+    margin-bottom: 18px;
+  }
+  h1 .grad {
+    background: var(--sunrise);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .sub { font-size: 19px; line-height: 1.5; color: var(--muted); margin-bottom: 30px; max-width: 460px; }
+  .sub b { color: var(--fg); font-weight: 600; }
+
+  .pills { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 30px; }
+  .pill {
+    font-size: 14px; padding: 8px 14px; border-radius: 999px;
+    border: 1px solid var(--line); background: rgba(148,163,184,0.06); color: var(--fg);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+  .dot.warm { background: var(--sunrise-a); }
+  .dot.cool { background: #60a5fa; }
+
+  .cta { display: flex; align-items: center; gap: 14px; }
+  .btn {
+    background: var(--sunrise); color: #1b1205; font-weight: 700; font-size: 15px;
+    padding: 13px 22px; border-radius: 10px;
+  }
+  .cta-note { font-size: 13.5px; color: var(--muted); line-height: 1.45; }
+
+  /* ---- product mock ---- */
+  .app {
+    border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
+    background: var(--panel); box-shadow: 0 30px 70px rgba(0,0,0,0.55);
+    height: 600px; display: flex; flex-direction: column;
+  }
+  .titlebar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 11px 14px; border-bottom: 1px solid var(--line); background: var(--panel-2);
+  }
+  .tl { width: 11px; height: 11px; border-radius: 50%; background: #3b465c; }
+  .tab {
+    margin-left: 10px; font-size: 12.5px; color: var(--muted);
+    padding: 4px 10px; border-radius: 6px; background: rgba(148,163,184,0.08);
+  }
+  .tab.on { color: var(--fg); background: rgba(255,154,60,0.14); }
+  .stat { margin-left: auto; font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 7px; }
+
+  .chat { padding: 18px; display: flex; flex-direction: column; gap: 13px; flex: 1; }
+  .msg { max-width: 88%; font-size: 13.5px; line-height: 1.55; padding: 11px 14px; border-radius: 12px; }
+  .me { align-self: flex-end; background: rgba(255,154,60,0.13); border: 1px solid rgba(255,154,60,0.3); }
+  .ai { background: rgba(148,163,184,0.08); border: 1px solid var(--line); }
+
+  .steps { display: flex; flex-direction: column; gap: 7px; margin-top: 3px; }
+  .step { display: flex; align-items: center; gap: 9px; font-size: 12.5px; color: var(--muted); }
+  .step .ic { width: 16px; height: 16px; border-radius: 4px; display: grid; place-items: center; font-size: 10px; color: #0b1220; background: var(--ok); font-weight: 800; }
+  .step.run .ic { background: var(--sunrise); }
+  .step code { font-family: Consolas, "Cascadia Mono", monospace; color: var(--fg); font-size: 12px; }
+
+  .approve {
+    margin-top: 4px; border: 1px solid rgba(255,154,60,0.35); border-radius: 10px;
+    background: rgba(255,154,60,0.07); padding: 12px 14px;
+  }
+  .approve .hd { font-size: 12px; color: var(--sunrise-a); font-weight: 700; letter-spacing: 0.4px; margin-bottom: 7px; }
+  .approve code { font-family: Consolas, monospace; font-size: 12.5px; color: var(--fg); }
+  .approve .row { display: flex; gap: 8px; margin-top: 11px; }
+  .mini { font-size: 11.5px; padding: 6px 12px; border-radius: 7px; border: 1px solid var(--line); color: var(--muted); }
+  .mini.primary { background: var(--sunrise); color: #1b1205; border-color: transparent; font-weight: 700; }
+
+  .composer {
+    border-top: 1px solid var(--line); padding: 13px 14px; display: flex; align-items: center; gap: 10px;
+    background: var(--panel-2);
+  }
+  .field { flex: 1; font-size: 13px; color: var(--muted); }
+  .send { width: 30px; height: 30px; border-radius: 8px; background: var(--sunrise); display: grid; place-items: center; color: #1b1205; font-weight: 800; font-size: 13px; }
+</style>
+</head>
+<body>
+  <div class="glow glow-a"></div>
+  <div class="glow glow-b"></div>
+
+  <div class="wrap">
+    <div>
+      <div class="brand">
+        <svg width="46" height="46" viewBox="0 0 128 128">
+          <defs>
+            <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#FF7A45"/><stop offset="55%" stop-color="#FFB020"/><stop offset="100%" stop-color="#2B6CB0"/>
+            </linearGradient>
+          </defs>
+          <rect width="128" height="128" rx="24" fill="#101826"/>
+          <g transform="translate(64,50)">
+            <circle r="14" fill="url(#g)"/>
+            <g stroke="url(#g)" stroke-width="4" stroke-linecap="round">
+              <line x1="0" y1="-26" x2="0" y2="-34"/><line x1="0" y1="26" x2="0" y2="34"/>
+              <line x1="-26" y1="0" x2="-34" y2="0"/><line x1="26" y1="0" x2="34" y2="0"/>
+              <line x1="-18" y1="-18" x2="-24" y2="-24"/><line x1="18" y1="-18" x2="24" y2="-24"/>
+              <line x1="-18" y1="18" x2="-24" y2="24"/><line x1="18" y1="18" x2="24" y2="24"/>
+            </g>
+          </g>
+          <g fill="none" stroke="#E8ECF1" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M40 92 L28 100 L40 108"/><path d="M88 92 L100 100 L88 108"/>
+          </g>
+        </svg>
+        <div class="brand-name">HirayaCoder</div>
+        <div class="ver">v0.6.1</div>
+      </div>
+
+      <h1>Your AI pair programmer,<br /><span class="grad">fully offline.</span></h1>
+
+      <p class="sub">
+        A real coding agent in VS Code — reads, writes, and runs your project — powered by
+        <b>your own Ollama models</b>. No account, no subscription, no internet.
+        <b>Nothing you write ever leaves your laptop.</b>
+      </p>
+
+      <div class="pills">
+        <div class="pill"><span class="dot"></span> 100% local</div>
+        <div class="pill"><span class="dot cool"></span> Free forever</div>
+        <div class="pill"><span class="dot warm"></span> Agentic on every model — even 1B</div>
+      </div>
+
+      <div class="cta">
+        <div class="btn">Install from the VS Code Marketplace</div>
+        <div class="cta-note">Requires Ollama<br />running locally</div>
+      </div>
+    </div>
+
+    <div class="app">
+      <div class="titlebar">
+        <div class="tl"></div><div class="tl"></div><div class="tl"></div>
+        <div class="tab on">HirayaCoder</div>
+        <div class="tab">Session 3</div>
+        <div class="stat"><span class="dot"></span> qwen2.5-coder:7b &nbsp;·&nbsp; Agent</div>
+      </div>
+
+      <div class="chat">
+        <div class="msg me">Add a dark mode toggle to the settings page and persist it.</div>
+
+        <div class="msg ai">
+          I&rsquo;ll read the settings page first, then add the toggle and wire it to localStorage.
+          <div class="steps">
+            <div class="step"><span class="ic">&#10003;</span> read <code>src/pages/Settings.jsx</code></div>
+            <div class="step"><span class="ic">&#10003;</span> read <code>src/hooks/useTheme.js</code></div>
+            <div class="step"><span class="ic">&#10003;</span> wrote <code>src/hooks/useTheme.js</code> <span style="color:#4ade80">+34 / -2</span></div>
+            <div class="step"><span class="ic">&#10003;</span> wrote <code>src/pages/Settings.jsx</code> <span style="color:#4ade80">+18 / -1</span></div>
+            <div class="step run"><span class="ic">&#9654;</span> running <code>npm run build</code> in <code>web/</code></div>
+          </div>
+        </div>
+
+        <div class="approve">
+          <div class="hd">APPROVAL REQUIRED</div>
+          <code>npm run build</code>
+          <div style="font-size:12px;color:#94a3b8;margin-top:6px;line-height:1.5">
+            Allow-listed program &nbsp;·&nbsp; no shell &nbsp;·&nbsp; confined to this workspace
+          </div>
+          <div class="row">
+            <div class="mini primary">Allow</div>
+            <div class="mini">Allow always</div>
+            <div class="mini">Deny</div>
+          </div>
+        </div>
+
+        <div class="msg ai" style="max-width:100%">
+          Build passed. Dark mode now persists across reloads.
+          <div class="steps" style="margin-top:8px">
+            <div class="step"><span class="ic">&#10003;</span> <code>2 files changed</code> &nbsp;·&nbsp; reviewed as one diff before saving</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="composer">
+        <div class="field">Ask HirayaCoder to build, fix, or explain something&hellip;</div>
+        <div class="send">&#9650;</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
