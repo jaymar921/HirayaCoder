@@ -593,7 +593,12 @@ describe('AgentSession', () => {
       const client = scriptedClient([
         json({ thought: 'look', action: 'read_file', path: 'src/app.js' }),
         json({ thought: 'look again', action: 'read_file', path: 'src/app.js' }),
+        // The third repeat is answered rather than fatal now — see `agent/workingSet`,
+        // which hands the content back once instead of ending a run over a read-only
+        // call. The fourth is what reaches the guard, so the script needs one more read
+        // than it did to arrive at the same stop this test is about.
         json({ thought: 'and again', action: 'read_file', path: 'src/app.js' }),
+        json({ thought: 'once more', action: 'read_file', path: 'src/app.js' }),
         // The follow-up planning call, once the loop has given up.
         '1. Add validation to src/app.js\n2. Remove src/old.js',
       ]);

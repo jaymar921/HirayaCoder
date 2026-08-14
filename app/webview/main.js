@@ -187,6 +187,10 @@ function finishAssistantMessage() {
     state.indicator.dispose();
     state.indicator = null;
   }
+  // Every way a turn can end comes through here — done, error, and cancellation — so
+  // this is the one place that reliably closes the live step panel and clears the
+  // accent off whichever step was running when it stopped.
+  if (state.trace) state.trace.finish();
 }
 
 const handlers = {

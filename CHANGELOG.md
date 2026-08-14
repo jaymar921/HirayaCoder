@@ -5,6 +5,100 @@ All notable changes to HirayaCoder are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] — unreleased
+
+0.7.0 gave the agent a way to notice it was stuck and a way to ask. Running it against a
+real build showed that noticing is not the problem — **being told is.**
+
+Two models were given the same brief on Machine B, a React + Vite + Tailwind TODO app.
+`qwen3.5:4b` finished it in 88 minutes. `qwen3.5:0.8b` never wrote a single file. Both
+failures trace to the same missing thing, and the counted version of what follows is in
+[`doc/SESSION-ANALYSIS-0.7.0.md`](doc/SESSION-ANALYSIS-0.7.0.md).
+
+### Added — the agent keeps a record of what it already has
+
+Every anti-repetition device in the loop was a *sentence*: "You now know what is in the
+project", "Do NOT do it again". They all fired, correctly, and both models did it again
+anyway — because the sentence describes something the model can no longer see. It is
+asked to take the loop's word for what it is holding, and reaching for the tool is the
+cheaper way to be sure.
+
+`agent/workingSet` keeps the record instead of asserting it — paths read, written,
+listed and deleted, commands run, and what last went wrong — and renders it back on
+every turn. It runs off the step trace, so a 0.8B model gets the same footing
+`stepBrief` gives a 4B one without the 2B checklist threshold that excluded it.
+
+- On Tier B it is part of the prompt the loop rebuilds each turn.
+- On Tier A it is advisory and *moved* rather than appended, so exactly one copy exists
+  and it is always the current one, always adjacent to the decision.
+- A file the agent wrote counts as a file it has. The "write `App.jsx`, immediately read
+  `App.jsx` back" pair was a measurable share of the 4B session's 73 reads.
+
+### Changed — a repeated listing no longer ends the run
+
+Five of the 0.8B model's seven sessions died on the repeat guard, four at exactly two
+steps: `list_files`, `list_files`, `list_files`, session over. That is a read-only call
+costing five milliseconds, answered by ending the user's whole run — while a genuinely
+expensive mistake, a wrong `npm install`, gets a diagnosis and another go.
+
+A repeated **read-only** action now gets one substitution: the result it already had,
+handed back with the working set and an instruction naming the next move. Repeat after
+that and the guard ends the run exactly as before, because a model ignoring the content
+and the instruction together is stuck rather than disoriented. `write_file`,
+`run_script` and the rest are untouched.
+
+### Added — the step trace is a live panel that says why
+
+At 42 seconds a step the panel used to sit silent for minutes, and the user's first
+sight of a run going wrong was the summary at the end.
+
+- It opens on the first step and folds away when the turn ends — unless the user has
+  clicked it, after which we stop deciding for them.
+- Each row carries the model's own stated reason for the step, which both loops already
+  captured as `thought` and nothing rendered. Without it, eight reads of one file look
+  exactly like eight reads of eight.
+- `read_file` is gone from the panel in favour of *Reading*. The identifier belongs to
+  the tool protocol, not to the surface whose job is to explain the run.
+
+### Fixed — a compliment no longer restarts finished work
+
+The last message of the 4B session was *"It all works now, thank you"*. The agent
+answered it by building a checklist and starting to re-fix bugs it had already fixed,
+carried over from two turns earlier. The user cancelled the run.
+
+The gap was a category, not two words: **the user reporting that the work succeeded.**
+Adding `works` to the social vocabulary would be wrong, because "the delete button no
+longer works" is a bug report. So a success report is matched as a phrase, and any sign
+the sentence goes on to say something is still wrong — `but`, `still`, a negation,
+`almost` — hands it back to the agent. It is checked *after* the mutating-verb rule, so
+"it works now, can you also add a dark mode" stays a task.
+
+### Fixed — four kinds of bug report were being answered as greetings
+
+Found while fixing the above, and live on `main` until now. `isGreetingWithName` tested
+the first word against the whole of `SOCIAL_WORDS`, which is mostly filler — `it`,
+`the`, `got`, `all` — admitted there on the strength of a rule that only holds for whole
+messages. Read one word at a time, it made any message of three words or fewer a
+greeting:
+
+| Message | Was | Now |
+|---|---|---|
+| `it doesn't work` | chat | task |
+| `the tests fail` | chat | task |
+| `got an error` | chat | task |
+| `all buttons broken` | chat | task |
+
+Four dropped requests, which is the one outcome `intentRouter`'s header says it must
+never produce. Greetings now match a dedicated `GREETING_WORDS` set.
+
+### Documentation
+
+- `doc/SESSION-ANALYSIS-0.7.0.md` — the counted analysis of both evaluation sessions.
+- Two new marketing images, `live-session.png` and `knows-what-it-has.png`, with their
+  HTML sources; the hero and capabilities images are regenerated for 0.8.0.
+- The README and the hero image now say plainly that this is a **pre-release** installed
+  from GitHub Releases, rather than offering a Marketplace button that does not exist.
+
 ## [0.7.0] — unreleased
 
 Everything here follows from one observation: a small model that is stuck does not know

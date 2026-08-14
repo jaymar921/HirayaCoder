@@ -110,11 +110,67 @@ describe('intentRouter.classify', () => {
       }
     });
 
+    it('answers a report that the work now succeeds instead of restarting it', () => {
+      // Verbatim from the last turn of the 0.7.0 `qwen3.5:4b` session. The agent
+      // answered it by building a checklist and starting to re-fix bugs it had already
+      // fixed, carried over from two turns earlier. The user cancelled the run.
+      assert.strictEqual(intentOf('It all works now, thank you'), 'chat');
+
+      for (const text of [
+        'it works now',
+        'it works',
+        "it's working now",
+        'that fixed it',
+        'everything is running',
+        'looks good now',
+        "we're all set",
+        'works perfectly',
+      ]) {
+        assert.strictEqual(intentOf(text), 'chat', `"${text}" was treated as work`);
+      }
+    });
+
+    it('does not read a complaint as a success report', () => {
+      // The pair this rule has to keep apart. Every one of these is a bug report built
+      // from the same words as the compliment above, and treating any of them as small
+      // talk would drop the request silently — the one outcome this module forbids.
+      for (const text of [
+        'the delete button no longer works',
+        "it doesn't work",
+        "it still doesn't work",
+        'it works but the clear button does nothing',
+        'it works, however the stats are wrong',
+        'why does it work only on the first todo',
+        'it almost works',
+        'it mostly works now',
+      ]) {
+        assert.strictEqual(intentOf(text), 'task', `"${text}" was treated as conversation`);
+      }
+    });
+
+    it('lets a change asked for beside a compliment win', () => {
+      // A compliment is not a reason to stop reading the rest of the sentence.
+      assert.strictEqual(intentOf('it works now, can you also add a dark mode'), 'task');
+      assert.strictEqual(intentOf('that fixed it — now delete the old file'), 'task');
+    });
+
     it('answers a greeting that has a name on it', () => {
       // "gemma4" is in no vocabulary and never could be — it is whatever the user has
       // installed. The model replied by asking for "the full task description".
       assert.strictEqual(intentOf('hello gemma4'), 'chat');
       assert.strictEqual(intentOf('hi claude'), 'chat');
+      assert.strictEqual(intentOf('good morning gemma4'), 'chat');
+    });
+
+    it('does not read a short bug report as a greeting with a name', () => {
+      // The rule tested the first word against the whole of SOCIAL_WORDS, which is
+      // mostly filler — "it", "the", "got", "all" are all in there, admitted on the
+      // strength of a whole-message rule. Read one word at a time it made any message
+      // of three words or fewer a greeting, and every one of these was answered
+      // conversationally with the request dropped.
+      for (const text of ['it doesn\'t work', 'the tests fail', 'got an error', 'all buttons broken']) {
+        assert.strictEqual(intentOf(text), 'task', `"${text}" was treated as a greeting`);
+      }
     });
 
     it('answers a question about where the work has got to', () => {

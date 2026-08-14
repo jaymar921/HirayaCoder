@@ -25,6 +25,7 @@
 const logger = require('../utils/logger');
 const { parseToolCalls, REQUIRED_FIELDS } = require('../core/outputParser');
 const { truncateToTokens } = require('../utils/tokenBudget');
+const { WorkingSet } = require('./workingSet');
 
 /**
  * Required arguments a native tool call arrived without.
@@ -144,6 +145,11 @@ async function run(options) {
   const steps = [];
   /** @type {Map<string, number>} */
   const seen = new Map();
+
+  /** What the agent is holding — see `agent/workingSet`. */
+  const workingSet = new WorkingSet();
+  /** The single working-set message in `messages`, moved to the end each turn. */
+  let heldMessage = /** @type {{role: string, content: string} | null} */ (null);
 
   let summary = '';
   let stopReason = 'budget';
@@ -309,6 +315,7 @@ async function run(options) {
       emit({ type: 'action', step: steps.length + 1, action });
       const result = await execute(action);
       steps.push({ action, result });
+      workingSet.record(action, result, steps.length);
       emit({ type: 'observation', step: steps.length, action, result });
 
       messages.push({
@@ -321,6 +328,36 @@ async function run(options) {
     }
 
     if (stopped) break;
+
+    // What the agent is holding, restated after the tool results and before the next
+    // decision.
+    //
+    // Tier A does not lose file contents the way Tier B does — the whole exchange stays
+    // in `messages` — and it re-read anyway. On the 0.7.0 benchmark `qwen3.5:4b` spent
+    // 73 of 126 steps on `read_file` for 25 distinct paths; `App.jsx` was read 28 times
+    // and written 4, and a binary PNG was read 13 times. 97% of the 88-minute run was
+    // inference, so each of those redundant turns cost roughly 42 seconds of the user's
+    // afternoon and told the model nothing it did not already have.
+    //
+    // A long transcript is not the same as an accessible one: by turn forty the first
+    // read of `App.jsx` is thousands of tokens back and competing with everything since.
+    // This is one short list, adjacent to the decision, saying which paths are already
+    // in hand. Unlike Tier B's version it is advisory — nothing here refuses a call —
+    // because a Tier A model re-reading after a write it did not make is sometimes right.
+    // Moved rather than appended. Pushing a fresh block each turn would leave forty
+    // stale copies in the transcript by the end of a long run — each one a list of files
+    // that was accurate when written and is now contradicted by the next copy down. The
+    // previous block is spliced out so exactly one exists, always the current one, and
+    // always last.
+    const held = workingSet.render({ includeStruggles: true });
+    if (held) {
+      if (heldMessage) {
+        const at = messages.indexOf(heldMessage);
+        if (at !== -1) messages.splice(at, 1);
+      }
+      heldMessage = { role: 'user', content: held };
+      messages.push(heldMessage);
+    }
   }
 
   if (!summary) {

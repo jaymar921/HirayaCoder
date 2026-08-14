@@ -1,0 +1,207 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  :root {
+    --bg: #0b1220;
+    --panel: #101826;
+    --panel-2: #141d2e;
+    --line: rgba(148, 163, 184, 0.16);
+    --fg: #e8ecf1;
+    --muted: #94a3b8;
+    --sunrise-a: #ff9a3c;
+    --sunrise-b: #ff5f6d;
+    --sunrise: linear-gradient(115deg, #ff9a3c, #ff5f6d);
+    --ok: #4ade80;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1280px; height: 720px; }
+  body {
+    background: var(--bg); color: var(--fg); overflow: hidden; position: relative;
+    font-family: "Segoe UI", -apple-system, system-ui, sans-serif;
+  }
+  .glow { position: absolute; border-radius: 50%; filter: blur(90px); }
+  .glow-a { width: 600px; height: 600px; left: -230px; top: -250px; background: #ff7a45; opacity: 0.2; }
+  .glow-b { width: 520px; height: 520px; right: -170px; bottom: -230px; background: #2b6cb0; opacity: 0.28; }
+
+  .wrap {
+    position: relative; z-index: 1; height: 100%;
+    display: grid; grid-template-columns: 470px 1fr; gap: 40px;
+    padding: 52px 56px 46px; align-items: center;
+  }
+
+  .brand { display: flex; align-items: center; gap: 13px; margin-bottom: 24px; }
+  .brand-name { font-size: 24px; font-weight: 700; letter-spacing: -0.3px; }
+  .ver {
+    font-size: 12.5px; font-weight: 700; letter-spacing: 0.3px;
+    padding: 5px 11px; border-radius: 999px; color: #1b1205; background: var(--sunrise);
+  }
+
+  h1 { font-size: 48px; line-height: 1.07; letter-spacing: -1.4px; font-weight: 700; margin-bottom: 16px; }
+  h1 .grad { background: var(--sunrise); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .sub { font-size: 18px; line-height: 1.5; color: var(--muted); margin-bottom: 26px; max-width: 430px; }
+  .sub b { color: var(--fg); font-weight: 600; }
+
+  .points { display: flex; flex-direction: column; gap: 13px; }
+  .point { display: flex; gap: 11px; align-items: flex-start; font-size: 14.5px; line-height: 1.45; }
+  .point .tick {
+    flex: none; width: 19px; height: 19px; border-radius: 5px; margin-top: 1px;
+    display: grid; place-items: center; background: rgba(74,222,128,0.15);
+  }
+  .point b { font-weight: 600; }
+  .point span.d { color: var(--muted); }
+
+  /* ---- panel mock ---- */
+  .app {
+    border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
+    background: var(--panel); box-shadow: 0 30px 70px rgba(0,0,0,0.55);
+    height: 616px; display: flex; flex-direction: column;
+  }
+  .titlebar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 11px 14px; border-bottom: 1px solid var(--line); background: var(--panel-2);
+  }
+  .tl { width: 11px; height: 11px; border-radius: 50%; background: #3b465c; }
+  .tab { margin-left: 10px; font-size: 12.5px; color: var(--muted); padding: 4px 10px; border-radius: 6px; background: rgba(148,163,184,0.08); }
+  .tab.on { color: var(--fg); background: rgba(255,154,60,0.14); }
+  .stat { margin-left: auto; font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 7px; }
+  .stat .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+
+  .chat { padding: 17px; display: flex; flex-direction: column; gap: 12px; flex: 1; }
+  .msg { max-width: 88%; font-size: 13.5px; line-height: 1.55; padding: 11px 14px; border-radius: 12px; }
+  .me { align-self: flex-end; background: rgba(255,154,60,0.13); border: 1px solid rgba(255,154,60,0.3); }
+
+  /* the live steps panel — the subject of this image */
+  .steps-panel { border: 1px solid var(--line); border-radius: 11px; background: rgba(148,163,184,0.05); overflow: hidden; }
+  .steps-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 9px 13px; font-size: 12.5px; color: var(--fg);
+    border-bottom: 1px solid var(--line); background: rgba(148,163,184,0.05);
+  }
+  .steps-head .caret { color: var(--muted); font-size: 10px; }
+  .steps-head .count { margin-left: auto; color: var(--muted); font-size: 11.5px; }
+  .steps-body { padding: 5px 0; }
+
+  .row { display: flex; align-items: baseline; gap: 9px; padding: 6px 13px; font-size: 12.5px; }
+  .n { flex: none; min-width: 1.5em; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .row.active .n { background: var(--sunrise); -webkit-background-clip: text; background-clip: text; color: transparent; font-weight: 800; }
+  .verb { color: var(--fg); font-weight: 600; flex: none; }
+  .target { color: var(--muted); font-family: Consolas, "Cascadia Mono", monospace; font-size: 11.5px; flex: none; }
+  .why { color: var(--muted); font-style: italic; font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1 1 auto; min-width: 0; }
+  .res { flex: none; margin-left: auto; font-size: 11px; padding-left: 8px; }
+  .res.ok { color: var(--ok); }
+  .res.run { background: var(--sunrise); -webkit-background-clip: text; background-clip: text; color: transparent; font-weight: 800; }
+
+  .composer {
+    border-top: 1px solid var(--line); padding: 12px 14px; display: flex; align-items: center; gap: 10px;
+    background: var(--panel-2); margin-top: auto;
+  }
+  .field { flex: 1; font-size: 13px; color: var(--muted); }
+  .send { width: 30px; height: 30px; border-radius: 8px; background: var(--sunrise); display: grid; place-items: center; color: #1b1205; font-weight: 800; font-size: 13px; }
+</style>
+</head>
+<body>
+  <div class="glow glow-a"></div>
+  <div class="glow glow-b"></div>
+
+  <div class="wrap">
+    <div>
+      <div class="brand">
+        <svg width="42" height="42" viewBox="0 0 128 128">
+          <defs>
+            <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#FF7A45"/><stop offset="55%" stop-color="#FFB020"/><stop offset="100%" stop-color="#2B6CB0"/>
+            </linearGradient>
+          </defs>
+          <rect width="128" height="128" rx="24" fill="#101826"/>
+          <g transform="translate(64,50)">
+            <circle r="14" fill="url(#g)"/>
+            <g stroke="url(#g)" stroke-width="4" stroke-linecap="round">
+              <line x1="0" y1="-26" x2="0" y2="-34"/><line x1="0" y1="26" x2="0" y2="34"/>
+              <line x1="-26" y1="0" x2="-34" y2="0"/><line x1="26" y1="0" x2="34" y2="0"/>
+              <line x1="-18" y1="-18" x2="-24" y2="-24"/><line x1="18" y1="-18" x2="24" y2="-24"/>
+              <line x1="-18" y1="18" x2="-24" y2="24"/><line x1="18" y1="18" x2="24" y2="24"/>
+            </g>
+          </g>
+          <g fill="none" stroke="#E8ECF1" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M40 92 L28 100 L40 108"/><path d="M88 92 L100 100 L88 108"/>
+          </g>
+        </svg>
+        <div class="brand-name">HirayaCoder</div>
+        <div class="ver">v0.8.0</div>
+      </div>
+
+      <h1>Watch it work,<br /><span class="grad">step by step.</span></h1>
+
+      <p class="sub">
+        A local model can take <b>forty seconds a step</b>. The panel no longer goes quiet
+        while it does — every step says what it is doing, to which file, and why.
+      </p>
+
+      <div class="points">
+        <div class="point">
+          <span class="tick"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>
+          <span><b>The action, the file, the reason.</b> <span class="d">The model's own stated purpose for each step, in plain words.</span></span>
+        </div>
+        <div class="point">
+          <span class="tick"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>
+          <span><b>Live while it runs.</b> <span class="d">Opens on the first step, closes when the turn ends, stays put if you touch it.</span></span>
+        </div>
+        <div class="point">
+          <span class="tick"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>
+          <span><b>See a wrong turn early.</b> <span class="d">Stop a run that has gone astray instead of reading about it afterwards.</span></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="app">
+      <div class="titlebar">
+        <span class="tl"></span><span class="tl"></span><span class="tl"></span>
+        <div class="tab on">HirayaCoder</div>
+        <div class="tab">Session 4</div>
+        <div class="stat"><span class="dot"></span> qwen3.5:4b &middot; Agent</div>
+      </div>
+
+      <div class="chat">
+        <div class="msg me">Build the TODO app from the spec in README.md.</div>
+
+        <div class="steps-panel">
+          <div class="steps-head"><span class="caret">&#9662;</span> Steps <span class="count">6 &middot; running</span></div>
+          <div class="steps-body">
+            <div class="row">
+              <span class="n">1</span><span class="verb">Reading</span><span class="target">README.md</span>
+              <span class="why">extracting the project structure</span><span class="res ok">ok</span>
+            </div>
+            <div class="row">
+              <span class="n">2</span><span class="verb">Running</span><span class="target">npm create vite@latest</span>
+              <span class="why">scaffolding the React project</span><span class="res ok">ok</span>
+            </div>
+            <div class="row">
+              <span class="n">3</span><span class="verb">Editing</span><span class="target">src/hooks/useTodos.js</span>
+              <span class="why">all todo state, with localStorage sync</span><span class="res ok">ok</span>
+            </div>
+            <div class="row">
+              <span class="n">4</span><span class="verb">Editing</span><span class="target">src/components/TodoItem.jsx</span>
+              <span class="why">inline editing and the delete transition</span><span class="res ok">ok</span>
+            </div>
+            <div class="row">
+              <span class="n">5</span><span class="verb">Editing</span><span class="target">src/App.jsx</span>
+              <span class="why">composing the layout from the five components</span><span class="res ok">ok</span>
+            </div>
+            <div class="row active">
+              <span class="n">6</span><span class="verb">Running</span><span class="target">npm run build</span>
+              <span class="why">confirming the app compiles before finishing</span><span class="res run">&#9656;</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="composer">
+        <div class="field">Ask HirayaCoder to build, fix, or explain something&hellip;</div>
+        <div class="send">&#9650;</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
