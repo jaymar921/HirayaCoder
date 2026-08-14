@@ -5,10 +5,16 @@
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/jaymar921/HirayaCoder/main/docs/images/hero-offline-agent.png" width="900" alt="HirayaCoder v0.7.0 — your AI pair programmer, fully offline. A VS Code chat panel showing the agent reading two files, writing two files, and asking for approval before running npm run build." />
+  <img src="https://raw.githubusercontent.com/jaymar921/HirayaCoder/main/docs/images/hero-offline-agent.png" width="900" alt="HirayaCoder v0.8.0 — your AI pair programmer, fully offline. A VS Code chat panel showing the agent reading two files, writing two files, and asking for approval before running npm run build." />
 </p>
 
 *A local Filipino-inspired AI coder that brings imagination and speed to your VS Code workflow.*
+
+> **Pre-release.** HirayaCoder is not on the VS Code Marketplace yet. Releases are
+> published as a `.vsix` on the
+> [Releases page](https://github.com/jaymar921/HirayaCoder/releases) and installed by
+> hand — [Step 4](#step-4--install-hirayacoder) has the one command it takes. Everything
+> described below works today; what is missing is the one-click install.
 
 **HirayaCoder is a free AI coding assistant that runs entirely on your own computer.**
 You type what you want in plain English, and it writes and edits the files for you — no
@@ -136,6 +142,36 @@ There is a longer, friendlier walkthrough in
 <p align="center">
   <img src="https://raw.githubusercontent.com/jaymar921/HirayaCoder/main/docs/images/capabilities.png" width="900" alt="What HirayaCoder does: nothing leaves your machine, you approve every change, agentic on every model, big requests become a checklist, it knows your machine, and it learns your project. Three modes — Agent, Plan, and Ask." />
 </p>
+
+### Watching a run happen
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/jaymar921/HirayaCoder/main/docs/images/live-session.png" width="900" alt="The live Steps panel in HirayaCoder v0.8.0. Six steps of a TODO app build, each showing the action, the file it touched, and the model's own stated reason — reading README.md to extract the project structure, scaffolding the React project, writing the useTodos hook, and running npm run build." />
+</p>
+
+A local model can take the better part of a minute per step, so the panel shows you each
+one as it happens: what it is doing, which file, and the reason the model gave for it.
+It opens when the first step arrives and folds away when the turn ends — and if you open
+or close it yourself, it stays how you left it.
+
+That matters most when a run is going wrong. Six steps in, you can see it re-reading the
+same file or editing something you never asked about, and stop it — rather than finding
+out from the summary ten minutes later.
+
+### Small models that finish
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/jaymar921/HirayaCoder/main/docs/images/knows-what-it-has.png" width="900" alt="Before and after, measured on qwen3.5:0.8b. Before v0.8.0: three identical list_files calls and the run ended, 5 of 7 sessions this way and zero files written. After: the second repeat is answered with a WHAT YOU ALREADY HAVE block listing the folders already listed, and the third step writes a file." />
+</p>
+
+The classic failure of a very small model is not bad code — it is the same correct-looking
+action forever. HirayaCoder keeps its own record of every file the agent has read, written
+and deleted, every folder it has listed and every command it has run, and puts that record
+in front of the model on each turn.
+
+A repeated read is no longer fatal either. Asking twice for a directory listing used to end
+the run; now the agent is handed back what it already had, told what to do next, and only
+stopped if it asks a third time.
 
 ### The three modes
 

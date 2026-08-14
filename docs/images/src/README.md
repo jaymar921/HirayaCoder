@@ -8,6 +8,8 @@ one-line change instead of a redesign.
 |---|---|---|
 | `hero-offline-agent.html` | `../hero-offline-agent.png` | README hero, Marketplace listing |
 | `capabilities.html` | `../capabilities.png` | README feature section |
+| `live-session.html` | `../live-session.png` | README, "Watching a run happen" |
+| `knows-what-it-has.html` | `../knows-what-it-has.png` | README, "Small models that finish" |
 
 Both are self-contained: no fonts, scripts, or images are fetched, and the app icon is
 inlined as SVG. Everything renders from system fonts, so they look the same on any
@@ -30,14 +32,23 @@ On Windows, `msedge.exe` takes the same flags and needs `--user-data-dir` pointe
 scratch folder — without it the launch is handed to the browser the user already has open
 and no screenshot is written.
 
+Two more Windows details, both of which fail *silently* — Chromium reports success and
+writes nothing, so check the file timestamps rather than the exit code:
+
+- **The page must be a `file:///` URL, not a relative path.** Percent-encode the spaces:
+  `file:///F:/important%20stuff/.../src/hero-offline-agent.html`.
+- **`--screenshot` will not write to a path containing a space.** Render to a scratch
+  folder and copy the PNG into `docs/images/` afterwards.
+
 ## When these need updating
 
-- **The version badge**, on every release. It appears once per file, as `v0.7.0`.
+- **The version badge**, on every release. It appears once per file, as `v0.8.0`.
 - **The "New in …" line**, whenever a release changes what a card is claiming. It moves
   to whichever card the release actually changed rather than staying put — it sat on
-  *Knows your machine* for 0.6.1 and moved to *Big requests become a checklist* for
-  0.7.0, which is the card that stopped being true as written. Only ever one card
-  carries it; two "New in" tags read as a changelog rather than as a highlight.
+  *Knows your machine* for 0.6.1, moved to *Big requests become a checklist* for 0.7.0,
+  and to *Agentic on every model* for 0.8.0, which is the card that release actually
+  changed. Only ever one card carries it; two "New in" tags read as a changelog rather
+  than as a highlight.
 - **The mock chat transcript** in the hero, if the panel's real layout changes enough that
   the picture stops being an honest one. It is a mock, not a screenshot — but it should
   never show something the extension does not do.
