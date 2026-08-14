@@ -392,6 +392,26 @@ describe('superseding stale entries', () => {
       assert.deepStrictEqual(recalled, await store.readRecent(2));
     });
 
+    it('prefers the note that shares more of the subject than the one sharing less', async () => {
+      // `vite.config.js` and `src/hooks/useTodos.js` both match a subject naming
+      // useTodos and vite — but only one of them is what the step is about. On a
+      // one-entry window the count is the only thing that can separate them, and
+      // before 0.7.0 any single shared token was enough, so the newest weak match won.
+      const recalled = await store.readRelevant('Wire useTodos into the todos hook for addTodo', 1);
+
+      assert.strictEqual(recalled.length, 1);
+      assert.ok(
+        recalled[0].includes('useTodos.js'),
+        `expected the strongest match, got: ${recalled[0]}`
+      );
+    });
+
+    it('still breaks a tie by recency', async () => {
+      // Two notes, one shared token each ("npm"): the newer one wins.
+      const recalled = await store.readRelevant('npm', 1);
+      assert.ok(recalled[0].includes('npm run build'), `expected the newer npm note, got: ${recalled[0]}`);
+    });
+
     it('fills the remainder of the window with recent notes', async () => {
       const recalled = await store.readRelevant('Update README.md', 3);
       assert.strictEqual(recalled.length, 3);

@@ -65,6 +65,19 @@ class TodoList {
     /** @type {TodoItem[]} */
     this.items = items.slice(0, MAX_ITEMS).map((text) => ({ text: String(text).trim(), status: 'pending' }));
     if (this.items.length > 0) this.items[0].status = 'active';
+
+    /**
+     * Every change made to the list after it was planned, in order.
+     *
+     * The list is the one thing in a run that both the user and the model treat as
+     * settled — it is shown once, ticked off as it goes, and read back in the summary.
+     * So when it changes mid-run because the user was asked something, that has to be
+     * visible: a checklist that quietly grew an item reads afterwards as a model that
+     * did work nobody asked for.
+     *
+     * @type {Array<{kind: 'inserted' | 'reworded' | 'dropped', detail: string, at: number}>}
+     */
+    this.changes = [];
   }
 
   /** @returns {boolean} */
@@ -131,6 +144,103 @@ class TodoList {
   remaining(opts = {}) {
     const wanted = opts.includeActive ? ['pending', 'active'] : ['pending'];
     return this.items.filter((item) => wanted.includes(item.status)).map((item) => item.text);
+  }
+
+  /**
+   * Add items directly after the one being worked on.
+   *
+   * Used when the user, having been asked, says the work needs a step nobody planned
+   * for. They go *after* the active item rather than at the end, because a step the
+   * current one turned out to need is a step the ones after it need too.
+   *
+   * The `MAX_ITEMS` ceiling still applies — it is the number a small model can hold,
+   * and the user answering a question does not change that. Anything over the ceiling
+   * is refused rather than silently dropped, so the caller can say so.
+   *
+   * @param {string[]} texts
+   * @returns {number} How many were actually added.
+   */
+  insertAfterCurrent(texts) {
+    const index = this.items.findIndex((item) => item.status === 'active');
+    if (index === -1) return 0;
+
+    const room = MAX_ITEMS - this.items.length;
+    if (room <= 0) {
+      logger.warn(`Cannot add to the checklist: it is already at the ${MAX_ITEMS}-item ceiling.`);
+      return 0;
+    }
+
+    /** @type {TodoItem[]} */
+    const added = texts
+      .map((text) => String(text).trim())
+      .filter(Boolean)
+      .slice(0, room)
+      .map((text) => ({ text, status: /** @type {TodoStatus} */ ('pending') }));
+    if (added.length === 0) return 0;
+
+    this.items.splice(index + 1, 0, ...added);
+    for (const item of added) {
+      this.changes.push({ kind: 'inserted', detail: item.text, at: index + 1 });
+      logger.info(`Checklist gained an item after ${index + 1}: ${item.text}`);
+    }
+    return added.length;
+  }
+
+  /**
+   * Restate the active item.
+   *
+   * The original text is kept in the change log rather than overwritten in place: the
+   * summary has to be able to say what the item *was*, or a user reading it afterwards
+   * cannot tell that their answer is why it succeeded.
+   *
+   * @param {string} text
+   * @returns {boolean}
+   */
+  replaceCurrent(text) {
+    const active = this.current();
+    const wanted = String(text || '').trim();
+    if (!active || !wanted || wanted === active.text) return false;
+
+    this.changes.push({ kind: 'reworded', detail: `"${active.text}" → "${wanted}"`, at: this.position() });
+    logger.info(`Checklist item ${this.position()} reworded: ${active.text} → ${wanted}`);
+    active.text = wanted;
+    return true;
+  }
+
+  /**
+   * Close the active item as skipped and move on, leaving the rest of the list alone.
+   *
+   * Distinct from `skipRemaining`, which gives up on everything. This is the user
+   * saying "not that one" — the run continues.
+   *
+   * @param {string} reason
+   * @returns {TodoItem | null} The next item.
+   */
+  skipCurrent(reason) {
+    const active = this.current();
+    if (!active) return null;
+    this.changes.push({ kind: 'dropped', detail: active.text, at: this.position() });
+    return this.finishCurrent('skipped', reason);
+  }
+
+  /**
+   * What changed about the list after it was planned, in plain language.
+   *
+   * @returns {string} Empty when the list ran as planned.
+   */
+  describeChanges() {
+    if (this.changes.length === 0) return '';
+    const lines = this.changes.map((change) => {
+      switch (change.kind) {
+        case 'inserted':
+          return `- Added at position ${change.at + 1}: ${change.detail}`;
+        case 'reworded':
+          return `- Item ${change.at} reworded: ${change.detail}`;
+        default:
+          return `- Item ${change.at} dropped: ${change.detail}`;
+      }
+    });
+    return `The checklist changed while it ran:\n${lines.join('\n')}`;
   }
 
   /** Mark every remaining item as skipped — used when the session is cut short. */

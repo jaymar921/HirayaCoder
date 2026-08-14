@@ -143,3 +143,79 @@ describe('TodoList', () => {
     assert.match(todos.render(), /\[x\] 1\. One/);
   });
 });
+
+describe('TodoList — changed by the user mid-run', () => {
+  it('adds an item after the one being worked on, not at the end', () => {
+    // A step the current item turned out to need is a step the ones after it need too.
+    const todos = new TodoList(['One', 'Two', 'Three']);
+    assert.strictEqual(todos.insertAfterCurrent(['One and a half']), 1);
+
+    assert.deepStrictEqual(
+      todos.items.map((item) => item.text),
+      ['One', 'One and a half', 'Two', 'Three']
+    );
+  });
+
+  it('leaves the new item pending and the current one active', () => {
+    const todos = new TodoList(['One', 'Two']);
+    todos.insertAfterCurrent(['Extra']);
+    assert.strictEqual(todos.current().text, 'One');
+    assert.strictEqual(todos.items[1].status, 'pending');
+  });
+
+  it('refuses to push the list past the ceiling a small model can hold', () => {
+    const todos = new TodoList(['1', '2', '3', '4', '5', '6']);
+    assert.strictEqual(todos.insertAfterCurrent(['7']), 0);
+    assert.strictEqual(todos.items.length, 6);
+  });
+
+  it('adds only as many as there is room for', () => {
+    const todos = new TodoList(['1', '2', '3', '4', '5']);
+    assert.strictEqual(todos.insertAfterCurrent(['6', '7', '8']), 1);
+    assert.strictEqual(todos.items.length, 6);
+  });
+
+  it('rewords the active item and keeps what it was', () => {
+    const todos = new TodoList(['Do the thing', 'Two']);
+    assert.strictEqual(todos.replaceCurrent('Do the specific thing'), true);
+
+    assert.strictEqual(todos.current().text, 'Do the specific thing');
+    // The summary has to be able to say what it was, or a user cannot tell that their
+    // answer is why it succeeded.
+    assert.match(todos.describeChanges(), /Do the thing.*Do the specific thing/);
+  });
+
+  it('ignores a reword that changes nothing', () => {
+    const todos = new TodoList(['One', 'Two']);
+    assert.strictEqual(todos.replaceCurrent('One'), false);
+    assert.strictEqual(todos.replaceCurrent('   '), false);
+    assert.strictEqual(todos.changes.length, 0);
+  });
+
+  it('skips one item without giving up on the rest', () => {
+    const todos = new TodoList(['One', 'Two', 'Three']);
+    const next = todos.skipCurrent('you asked me to skip this one');
+
+    assert.strictEqual(todos.items[0].status, 'skipped');
+    assert.strictEqual(next.text, 'Two');
+    assert.strictEqual(todos.items[2].status, 'pending', 'skipping one must not abandon the others');
+  });
+
+  it('says nothing about a list that ran as planned', () => {
+    const todos = new TodoList(['One', 'Two']);
+    todos.finishCurrent('done');
+    assert.strictEqual(todos.describeChanges(), '');
+  });
+
+  it('reports every change it made, in order', () => {
+    const todos = new TodoList(['One', 'Two']);
+    todos.replaceCurrent('One, precisely');
+    todos.insertAfterCurrent(['One and a half']);
+    todos.skipCurrent('you asked me to skip this one');
+
+    const described = todos.describeChanges();
+    assert.match(described, /reworded/);
+    assert.match(described, /Added at position 2: One and a half/);
+    assert.match(described, /dropped/);
+  });
+});

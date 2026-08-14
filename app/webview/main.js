@@ -10,6 +10,7 @@
 import { createMessage, appendImages, TraceView, renderTodos, renderChanges } from './components/messageBubble.js';
 import { ThinkingIndicator } from './components/thinkingIndicator.js';
 import { renderPlanChecklist } from './components/planChecklist.js';
+import { renderClarification } from './components/clarificationCard.js';
 import { render } from './components/markdown.js';
 
 const vscode = acquireVsCodeApi();
@@ -239,6 +240,19 @@ const handlers = {
     const fresh = renderTodos(msg.items);
     if (existing) existing.replaceWith(fresh);
     else state.body.appendChild(fresh);
+  },
+
+  // The agent has stopped and is waiting on an answer. The card goes into the running
+  // message rather than below it, so it sits with the work it is about — and it stays
+  // there once answered, as part of the record of the run.
+  clarify(msg) {
+    if (!state.body || !msg.request) return;
+    state.body.appendChild(
+      renderClarification(msg.request, (answer) => {
+        vscode.postMessage({ type: 'clarify', ...answer });
+      })
+    );
+    scrollToEnd();
   },
 
   action(msg) {
