@@ -117,6 +117,11 @@ function exec(argv, cwd, timeoutMs = 600000) {
     encoding: 'utf8',
     shell: process.platform === 'win32',
     windowsHide: true,
+    // Node's own deprecation notices are not build output. They land on stderr, which
+    // is what the auto-user pastes back, so without this every build failure message
+    // opened with two lines about `shell: true` — spending a 0.8B model's context on a
+    // warning about the harness rather than on the error it is being asked to fix.
+    env: { ...process.env, NODE_NO_WARNINGS: '1' },
   });
   return {
     code: result.status,
@@ -126,10 +131,26 @@ function exec(argv, cwd, timeoutMs = 600000) {
   };
 }
 
-/** ANSI is noise in a JSON record and in a message pasted back to a model. */
+/** Escape sequences, matched without writing a control character into this file. */
+const ANSI = new RegExp(String.fromCharCode(27) + '\\[[0-9;]*m', 'g');
+
+/** Lines the Node runtime wrote about itself, which are not build output. */
+const RUNTIME_NOISE = /^\(node:\d+\)|^\(Use `node --trace-|DeprecationWarning|ExperimentalWarning/;
+
+/**
+ * Strip everything that is noise rather than build output.
+ *
+ * ANSI colour, and any line the Node runtime wrote about itself. Both would otherwise
+ * be pasted back to the model as if the build had said them, and the deprecation notice
+ * about `shell: true` opened every build-failure message in the first sweep — two lines
+ * of a 0.8B model's context spent on a warning about the harness.
+ */
 function plain(text) {
-  // eslint-disable-next-line no-control-regex -- stripping escape sequences is the point.
-  return String(text).replace(/\[[0-9;]*m/g, '');
+  return String(text)
+    .replace(ANSI, '')
+    .split('\n')
+    .filter((line) => !RUNTIME_NOISE.test(line))
+    .join('\n');
 }
 
 /** @param {string} root */
