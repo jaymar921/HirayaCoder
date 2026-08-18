@@ -282,13 +282,25 @@ async function runModel(options) {
 
   const modes = new PermissionModes({ initial: { autoEdit: true, autoApproveScripts: true } });
   const auditLog = new AuditLog(root);
+  /** @type {string[]} What the gate insisted on asking about, even with auto-approve on. */
+  const confirmations = [];
   const gate = new PermissionGate({
     workspaceRoot: root,
     modes,
     auditLog,
-    // Unattended, so a prompt that does reach here is declined and recorded rather than
-    // silently approved. `npm create vite` is the one that historically asks.
-    confirm: async () => false,
+    // Approved, and every one recorded.
+    //
+    // Auto-approve does not cover the always-confirm set — anything reaching the network
+    // or publishing code — and the brief's very first instruction is
+    // `npm create vite@latest`, which reaches the network. Declining unattended made the
+    // task structurally impossible: the first run of this harness watched a model be
+    // refused the scaffold command and then be blamed for there being no project. A user
+    // sitting in front of the panel clicks Allow, so the benchmark does too, and the list
+    // goes in the record where it can be read.
+    confirm: async (request) => {
+      confirmations.push(String((request && (request.command || request.path || request.title)) || 'unnamed'));
+      return true;
+    },
   });
 
   const memory = new MemoryStore(root, 1);
@@ -427,6 +439,7 @@ async function runModel(options) {
     // The single number this benchmark exists to produce: a working product, or not.
     delivered: Boolean(finalGates && finalGates.build.ok && finalProbe && finalProbe.ran && finalProbe.passed === FEATURES.length),
     filesInWorkspace: findFiles(root).sort().slice(0, 400),
+    confirmations: confirmations.slice(0, 40),
     auditDecisions: audit.reduce((acc, event) => {
       acc[event.decision] = (acc[event.decision] || 0) + 1;
       return acc;
