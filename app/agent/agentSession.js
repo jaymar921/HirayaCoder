@@ -231,6 +231,22 @@ const MAX_RELATED_FILE_CHARS = 4000;
 const UNDICTATABLE =
   /(?:^|\/)(?:node_modules|dist|build|out|coverage|\.git)\/|(?:^|\/)(?:package(?:-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|\.env(?:\..+)?)$/i;
 
+/**
+ * A path that is a filename rather than a piece of prose that looks like one.
+ *
+ * The stem must be at least two characters and the extension at least two, which is the
+ * rule that took a live sweep to find: a request saying *Counter (e.g. "3 of 5
+ * remaining")* had `e.g` picked out of it as a path, and a file called `e.g` was
+ * dictated into the project root. `i.e` and `etc.` fail the same way and are excluded by
+ * the same rule.
+ *
+ * The cost is real and small: a genuine single-letter extension like `.c` or `.h` will
+ * not be dictated, and has to be written by the loop instead. Against that, a junk file
+ * in the user's project — created without them asking, from a fragment of their own
+ * sentence — is exactly the kind of surprise this feature must not produce.
+ */
+const DICTATABLE_FILENAME = /(?:^|\/)[\w@.-]*[\w-]{2,}[\w@.-]*\.[a-z][a-z0-9]{1,7}$/i;
+
 /** Openers that begin a request for information rather than for work. */
 const QUESTION_OPENERS =
   /^\s*(?:how|what|what's|whats|why|when|where|which|who|is|are|was|were|do|does|did|can|could|should|would|will|explain|describe|tell\s+me|show\s+me)\b/i;
@@ -1514,7 +1530,7 @@ class AgentSession {
       if (!target || seen.has(target)) continue;
       seen.add(target);
       if (UNDICTATABLE.test(target)) continue;
-      if (!/\.[a-z][\w]{0,7}$/i.test(target)) continue;
+      if (!DICTATABLE_FILENAME.test(target)) continue;
 
       const exists = this._existsInWorkspace(target);
       // An existing file with nothing said about it is somebody else's — the

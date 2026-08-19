@@ -190,6 +190,36 @@ describe('a structured request, split and dictated', () => {
     assert.deepStrictEqual(client.dictatedPaths, []);
   });
 
+  it('does not mistake a fragment of a sentence for a filename', async () => {
+    // Found in a live sweep, not in review: a request reading *Counter (e.g. "3 of 5
+    // remaining")* had `e.g` picked out of it as a path, and a file called `e.g` was
+    // written into the project root. A junk file created without the user asking, out of
+    // a fragment of their own sentence, is exactly the surprise this must never produce.
+    const request = [
+      'Please extend the dashboard.',
+      '',
+      '## Counters',
+      '',
+      'Show a live count of the remaining items (e.g. "3 of 5 remaining") in the header,',
+      'updating as items are checked off. Keep it readable at narrow widths — the sidebar',
+      'collapses below 700px and the header has to survive that without wrapping oddly.',
+      '',
+      '## Empty state',
+      '',
+      'Write a friendly message when the list is empty (i.e. before anything is added),',
+      'and make sure it disappears the moment the first item arrives rather than lingering',
+      'for a frame, which looks like a bug even though it is not.',
+    ].join('\n');
+
+    const client = dictatingClient();
+    await makeSession(client).run(request, { mode: 'agent' });
+
+    for (const target of client.dictatedPaths) {
+      assert.strictEqual(/(?:^|\/)(?:e\.g|i\.e)$/.test(target), false, `dictated a prose fragment: ${target}`);
+    }
+    assert.strictEqual(fs.existsSync(path.join(root, 'e.g')), false);
+  });
+
   it('does not split a request with no structure, and dictates nothing', async () => {
     const client = dictatingClient();
     const result = await makeSession(client).run('Fix the typo in the heading.', { mode: 'agent' });
