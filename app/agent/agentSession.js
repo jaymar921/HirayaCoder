@@ -1170,6 +1170,30 @@ class AgentSession {
         allSteps.push({ action, result: executed });
         if (executed.ok) summaries.push(`Ran \`${command}\`, which the request named.`);
         else logger.warn(`The request's own scaffold command did not succeed: ${executed.observation}`);
+      } else {
+        // No command to run, so make the directory.
+        //
+        // Dictation will not write into a project directory that does not exist — for
+        // good reason, since filling one in ahead of `npm create vite` makes the
+        // scaffold a silent no-op. But that rule assumed something else would create it,
+        // and for a request that names no scaffold command, nothing does.
+        //
+        // Measured on both POS briefs, which are built by writing files rather than by
+        // running a generator: `pos-app/` never appeared, so every `.java` and `.py`
+        // file the tree drew was skipped, and `mvn package` then succeeded over a
+        // project with no sources at all. A directory the request drew is not a risky
+        // thing to make — and making it is the difference between a run that writes the
+        // project and one that writes nothing.
+        const action = {
+          action: 'create_folder',
+          path: projectRoot,
+          thought: `${projectRoot} is the project directory this request draws`,
+        };
+        emit({ type: 'action', step: allSteps.length + 1, action });
+        const executed = await this._execute(action, activeRoute, changeSet);
+        emit({ type: 'observation', step: allSteps.length + 1, result: executed });
+        allSteps.push({ action, result: executed });
+        if (!executed.ok) logger.warn(`Could not create ${projectRoot}: ${executed.observation}`);
       }
     }
 

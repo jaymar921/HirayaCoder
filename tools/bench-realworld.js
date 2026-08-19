@@ -307,12 +307,25 @@ function runMavenGates(brief, root, scriptTimeoutMs) {
   }
 
   const compile = exec(['mvn', '-B', '-q', 'clean', 'compile'], appPath, budget);
+  // A compile that produced no classes did not compile anything.
+  //
+  // Maven is perfectly happy to build a project with no sources: `qwen3.5:0.8b` wrote a
+  // valid `pom.xml`, put every `.java` file somewhere else entirely, and this harness
+  // reported compile, test **and** package as passing over an empty tree — which then
+  // produced a jar. Three green gates and not one line of the model's code in them.
+  // That is precisely the lie this benchmark exists to refuse, and it got through
+  // because exit codes were being trusted where the artefact should have been checked.
+  const classes = countFiles(path.join(appPath, 'target', 'classes'), '.class');
   gates.compile = {
-    ok: compile.ok,
-    detail: compile.ok ? 'mvn clean compile exited 0' : 'mvn clean compile failed',
+    ok: compile.ok && classes > 0,
+    detail: !compile.ok
+      ? 'mvn clean compile failed'
+      : classes > 0
+        ? 'mvn clean compile produced ' + classes + ' class file(s)'
+        : 'mvn clean compile exited 0 but compiled nothing — there are no sources under src/main/java',
     output: compile.ok ? '' : plain(compile.stdout || compile.stderr).slice(-4000),
   };
-  if (!compile.ok) {
+  if (!gates.compile.ok) {
     gates.test = { ok: false, detail: 'not attempted — it does not compile', output: '' };
     gates.build = { ok: false, detail: 'not attempted — it does not compile', output: '' };
     return gates;
@@ -439,6 +452,28 @@ function pythonBinary(cwd) {
   }
   cachedPython = '';
   return cachedPython;
+}
+
+/**
+ * How many files with this extension a directory tree holds.
+ *
+ * @param {string} dir
+ * @param {string} extension
+ * @returns {number}
+ */
+function countFiles(dir, extension) {
+  let entries = [];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  let found = 0;
+  for (const entry of entries) {
+    if (entry.isDirectory()) found += countFiles(path.join(dir, entry.name), extension);
+    else if (entry.name.endsWith(extension)) found += 1;
+  }
+  return found;
 }
 
 /**

@@ -122,9 +122,9 @@ describe('a structured request, split and dictated', () => {
   /**
    * Stand in for the scaffolding step having worked.
    *
-   * Dictation will not write into a project directory that does not exist — see the
-   * test at the bottom of this file for why — so every case about *what* it writes has
-   * to start from a project that has been created.
+   * The session creates the project directory itself when the request names no scaffold
+   * command, so these cases would pass without this — but starting from a project that
+   * exists is what each of them is actually about, and saying so keeps them readable.
    */
   function scaffolded() {
     fs.mkdirSync(path.join(root, 'notes-app'), { recursive: true });
@@ -208,21 +208,86 @@ describe('a structured request, split and dictated', () => {
     assert.deepStrictEqual(client.dictatedPaths, []);
   });
 
-  it('will not fill in a project directory that does not exist yet', async () => {
-    // Measured on `qwen3.5:0.8b`: the setup step failed to scaffold, the structure step
-    // then dictated into `notes-app/src/`, creating `notes-app/` on the way — and when
-    // the scaffold command finally ran, `npm create vite` found a non-empty directory,
-    // exited 0, and created nothing. A clean exit code over a project that does not
-    // exist is the worst failure available, because everything downstream believes it.
+  it('creates the project directory the request drew, when nothing else will', async () => {
+    // The counterpart to the rule below, and the gap it left. Dictation will not write
+    // into a project directory that does not exist — but that assumed something else
+    // would create it, and a request that names no scaffold command has nothing that
+    // does. Measured on both POS briefs, which are built by writing files rather than
+    // by running a generator: `pos-app/` never appeared, every source file the tree
+    // drew was skipped, and `mvn package` then succeeded over a project with no
+    // sources at all.
     const client = dictatingClient();
     await makeSession(client).run(REQUEST, { mode: 'agent' });
 
-    assert.deepStrictEqual(
-      client.dictatedPaths.filter((target) => target.startsWith('notes-app/')),
-      [],
-      'nothing under notes-app/ should be written before notes-app/ exists'
+    assert.ok(fs.existsSync(path.join(root, 'notes-app')), 'the project directory was never created');
+    assert.ok(
+      fs.existsSync(path.join(root, 'notes-app', 'src', 'store.js')),
+      `store.js was not written; dictated ${JSON.stringify(client.dictatedPaths)}`
     );
-    assert.strictEqual(fs.existsSync(path.join(root, 'notes-app')), false);
+  });
+
+  it('waits for the scaffold command rather than pre-filling its directory', async () => {
+    // The protection that must survive the above. Filling in `shop/` before
+    // `npm create vite` runs makes the scaffold a silent no-op — measured: it found a
+    // non-empty directory, exited 0, and created nothing.
+    const request = [
+      'Build a small shop front.',
+      '',
+      '## Setup',
+      '',
+      'Scaffold it with `npm create vite@latest shop -- --template react`, then install',
+      'the dependencies before writing any code of your own.',
+      '',
+      '## Structure',
+      '',
+      'Use this layout:',
+      '',
+      '```',
+      'shop/',
+      '├── src/',
+      '│   ├── Cart.jsx       # The basket, and the running total',
+      '│   └── Item.jsx       # One line of the basket, with a remove control',
+      '```',
+      '',
+      '## Behaviour',
+      '',
+      '- Show the running total under the basket, updating as lines are removed, so the',
+      '  number never disagrees with the lines above it.',
+      '- Keep the remove control reachable by keyboard, because the basket is the one',
+      '  screen people use in a hurry.',
+    ].join('\n');
+
+    const modes = new PermissionModes({ initial: { autoEdit: true, autoApproveScripts: false } });
+    const gate = new PermissionGate({
+      workspaceRoot: root,
+      modes,
+      auditLog: new AuditLog(root),
+      // The user declines the scaffold, so nothing creates `shop/`.
+      confirm: async () => false,
+    });
+    const client = dictatingClient();
+    const session = new AgentSession({
+      client,
+      model: 'test-model',
+      capability: TIER_B,
+      gate,
+      workspaceRoot: root,
+      thinkingCapacity: 'low',
+      sessionId: '1',
+    });
+
+    await session.run(request, { mode: 'agent' });
+
+    assert.strictEqual(
+      fs.existsSync(path.join(root, 'shop')),
+      false,
+      'the directory a scaffold command owns must not be created for it'
+    );
+    assert.deepStrictEqual(
+      client.dictatedPaths.filter((target) => target.startsWith('shop/')),
+      [],
+      'nothing under shop/ should be written before the scaffold runs'
+    );
   });
 
   it('does not mistake a fragment of a sentence for a filename', async () => {
