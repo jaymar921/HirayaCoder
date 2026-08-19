@@ -94,12 +94,25 @@ window.__hirayaProbe = async function probe() {
     });
   }
 
+  /**
+   * Everything a control says about itself, not the first thing it says.
+   *
+   * Combined rather than preferred, which is the fix for a real failure: a row's delete
+   * button keeps `aria-label="Delete Grace"` while its visible text changes to
+   * "Confirm delete?", so a label function that returned the aria-label alone could
+   * never see the confirmation it had just triggered.
+   */
   function label(el) {
-    return (
-      (el.getAttribute && (el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('data-testid'))) ||
-      el.textContent ||
-      ''
-    ).toLowerCase();
+    if (!el || !el.getAttribute) return '';
+    return [
+      el.getAttribute('aria-label'),
+      el.getAttribute('title'),
+      el.getAttribute('data-testid'),
+      el.textContent,
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
   }
 
   function click(el) {

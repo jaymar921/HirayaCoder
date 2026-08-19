@@ -74,6 +74,8 @@ const { ModelDiscovery } = require(path.join(appRoot, 'core', 'modelDiscovery'))
 const environmentProfile = require(path.join(appRoot, 'core', 'environmentProfile'));
 
 const { probeApp, FEATURES } = require('./lib/appProbe');
+const { probeJavaService, JAVA_FEATURES } = require('./lib/javaProbe');
+const briefs = require('./lib/briefs');
 const { parseArgs, slug } = require('./lib/args');
 
 /** Bumped when the JSON shape changes, so a later sweep can be told from an earlier one. */
@@ -81,25 +83,7 @@ const SCHEMA_VERSION = 1;
 
 const ENDPOINT = process.env.OLLAMA_HOST || 'http://127.0.0.1:11434';
 
-/** Where the brief expects the project to end up. Every gate is relative to this. */
-const APP_DIR = 'todo-glass-app';
 
-/** The files section 3 of the brief names. Present-or-not, nothing about their contents. */
-const REQUIRED_FILES = [
-  'index.html',
-  'package.json',
-  'vite.config.js',
-  'src/main.jsx',
-  'src/App.jsx',
-  'src/index.css',
-  'src/hooks/useTodos.js',
-  'src/components/TodoInput.jsx',
-  'src/components/TodoItem.jsx',
-  'src/components/TodoList.jsx',
-  'src/components/TodoStats.jsx',
-  'src/components/ClearButton.jsx',
-  'README.md',
-];
 
 // ---------------------------------------------------------------------------
 // Running commands the harness needs for itself
@@ -185,22 +169,55 @@ function findFiles(root, prefix = '', out = []) {
  * @param {string} root
  * @param {number} scriptTimeoutMs
  */
-function runGates(root, scriptTimeoutMs) {
-  const appPath = path.join(root, APP_DIR);
-  const gates = {};
+function runGates(brief, root, scriptTimeoutMs) {
+  return brief.toolchain === 'maven'
+    ? runMavenGates(brief, root, scriptTimeoutMs)
+    : runNodeGates(brief, root, scriptTimeoutMs);
+}
 
-  const scaffolded = fs.existsSync(path.join(appPath, 'package.json'));
-  gates.scaffold = { ok: scaffolded, detail: scaffolded ? APP_DIR + '/package.json exists' : 'no ' + APP_DIR + '/package.json' };
-
-  const missing = REQUIRED_FILES.filter((relative) => !fs.existsSync(path.join(appPath, relative)));
-  gates.structure = {
+/**
+ * Which of `brief.requiredFiles` are not on disk.
+ *
+ * A presence check and nothing more. A file being there says nothing about what is in
+ * it, which is the whole lesson of the 0.9.0 baseline: a project passed every
+ * file-presence check with `App.jsx` holding Vite's counter demo.
+ *
+ * @param {import('./lib/briefs').Brief} brief
+ * @param {string} appPath
+ */
+function structureGate(brief, appPath, scaffolded) {
+  const missing = brief.requiredFiles.filter((relative) => !fs.existsSync(path.join(appPath, relative)));
+  return {
     ok: scaffolded && missing.length === 0,
-    detail: missing.length ? 'missing: ' + missing.join(', ') : 'all ' + REQUIRED_FILES.length + ' required files present',
+    detail: missing.length
+      ? 'missing: ' + missing.join(', ')
+      : 'all ' + brief.requiredFiles.length + ' required files present',
     missing,
   };
+}
+
+/**
+ * @param {import('./lib/briefs').Brief} brief
+ * @param {string} root
+ * @param {number} scriptTimeoutMs
+ */
+function runNodeGates(brief, root, scriptTimeoutMs) {
+  const appPath = path.join(root, brief.appDir);
+  const gates = {};
+  const budget = Math.max(scriptTimeoutMs, 600000);
+
+  const scaffolded = fs.existsSync(path.join(appPath, 'package.json'));
+  gates.scaffold = {
+    ok: scaffolded,
+    detail: scaffolded ? brief.appDir + '/package.json exists' : 'no ' + brief.appDir + '/package.json',
+  };
+  gates.structure = structureGate(brief, appPath, scaffolded);
 
   if (!scaffolded) {
     gates.install = { ok: false, detail: 'not attempted — nothing to install' };
+    for (const extra of brief.extraGates || []) {
+      gates[extra.join(' ')] = { ok: false, detail: 'not attempted — nothing to run', output: '' };
+    }
     gates.build = { ok: false, detail: 'not attempted — nothing to build', output: '' };
     return gates;
   }
@@ -208,7 +225,7 @@ function runGates(root, scriptTimeoutMs) {
   const installed = fs.existsSync(path.join(appPath, 'node_modules'));
   const install = installed
     ? { ok: true, stdout: '', stderr: '', code: 0 }
-    : exec(['npm', 'install'], appPath, Math.max(scriptTimeoutMs, 600000));
+    : exec(['npm', 'install'], appPath, budget);
   gates.install = {
     ok: install.ok,
     detail: installed ? 'node_modules already present' : install.ok ? 'npm install exited 0' : 'npm install failed',
@@ -216,15 +233,29 @@ function runGates(root, scriptTimeoutMs) {
   };
 
   if (!gates.install.ok) {
+    for (const extra of brief.extraGates || []) {
+      gates[extra.join(' ')] = { ok: false, detail: 'not attempted — dependencies are not installed', output: '' };
+    }
     gates.build = { ok: false, detail: 'not attempted — dependencies are not installed', output: '' };
     return gates;
+  }
+
+  // The brief's own extra checks — a test suite it asked for, most often. Run before
+  // the build, in the order the brief lists them.
+  for (const extra of brief.extraGates || []) {
+    const outcome = exec(extra, appPath, budget);
+    gates[extra.join(' ')] = {
+      ok: outcome.ok,
+      detail: outcome.ok ? extra.join(' ') + ' exited 0' : extra.join(' ') + ' failed',
+      output: outcome.ok ? '' : plain(outcome.stderr || outcome.stdout).slice(-3000),
+    };
   }
 
   // Remove the previous bundle first. A `dist/` left by an earlier turn passes the
   // probe for a build that has since started failing, which is the single worst lie a
   // benchmark can tell.
   fs.rmSync(path.join(appPath, 'dist'), { recursive: true, force: true });
-  const build = exec(['npm', 'run', 'build'], appPath, Math.max(scriptTimeoutMs, 600000));
+  const build = exec(['npm', 'run', 'build'], appPath, budget);
   gates.build = {
     ok: build.ok && fs.existsSync(path.join(appPath, 'dist', 'index.html')),
     detail: build.ok ? 'npm run build exited 0' : 'npm run build failed',
@@ -232,6 +263,96 @@ function runGates(root, scriptTimeoutMs) {
   };
 
   return gates;
+}
+
+/**
+ * Compile, test and package a Maven project.
+ *
+ * A missing toolchain is recorded as `skipped`, never as a failure — the convention
+ * `bench-build.js` already sets. This machine not having Maven says nothing about the
+ * model.
+ *
+ * @param {import('./lib/briefs').Brief} brief
+ * @param {string} root
+ * @param {number} scriptTimeoutMs
+ */
+function runMavenGates(brief, root, scriptTimeoutMs) {
+  const appPath = path.join(root, brief.appDir);
+  const gates = {};
+  const budget = Math.max(scriptTimeoutMs, 900000);
+
+  const scaffolded = fs.existsSync(path.join(appPath, 'pom.xml'));
+  gates.scaffold = {
+    ok: scaffolded,
+    detail: scaffolded ? brief.appDir + '/pom.xml exists' : 'no ' + brief.appDir + '/pom.xml',
+  };
+  gates.structure = structureGate(brief, appPath, scaffolded);
+
+  const haveMaven = exec(['mvn', '-v'], root, 60000).ok;
+  if (!haveMaven) {
+    const skipped = { ok: false, skipped: true, detail: 'maven is not installed on this machine', output: '' };
+    gates.compile = { ...skipped };
+    gates.test = { ...skipped };
+    gates.build = { ...skipped };
+    return gates;
+  }
+
+  if (!scaffolded) {
+    const nothing = { ok: false, detail: 'not attempted — there is no pom.xml', output: '' };
+    gates.compile = { ...nothing };
+    gates.test = { ...nothing };
+    gates.build = { ...nothing };
+    return gates;
+  }
+
+  const compile = exec(['mvn', '-B', '-q', 'clean', 'compile'], appPath, budget);
+  gates.compile = {
+    ok: compile.ok,
+    detail: compile.ok ? 'mvn clean compile exited 0' : 'mvn clean compile failed',
+    output: compile.ok ? '' : plain(compile.stdout || compile.stderr).slice(-4000),
+  };
+  if (!compile.ok) {
+    gates.test = { ok: false, detail: 'not attempted — it does not compile', output: '' };
+    gates.build = { ok: false, detail: 'not attempted — it does not compile', output: '' };
+    return gates;
+  }
+
+  const test = exec(['mvn', '-B', '-q', 'test'], appPath, budget);
+  gates.test = {
+    ok: test.ok,
+    detail: test.ok ? 'mvn test exited 0' : 'mvn test failed',
+    output: test.ok ? '' : plain(test.stdout || test.stderr).slice(-4000),
+  };
+
+  const built = exec(['mvn', '-B', '-q', '-DskipTests', 'package'], appPath, budget);
+  const jar = findJar(path.join(appPath, 'target'));
+  gates.build = {
+    ok: built.ok && Boolean(jar),
+    detail: !built.ok ? 'mvn package failed' : jar ? 'packaged ' + path.basename(jar) : 'mvn package produced no jar',
+    output: built.ok ? '' : plain(built.stdout || built.stderr).slice(-4000),
+  };
+
+  return gates;
+}
+
+/**
+ * The application jar in a Maven `target/`, ignoring the sources and javadoc ones.
+ *
+ * @param {string} targetDir
+ * @returns {string}
+ */
+function findJar(targetDir) {
+  let entries = [];
+  try {
+    entries = fs.readdirSync(targetDir);
+  } catch {
+    return '';
+  }
+  const jar = entries
+    .filter((name) => name.endsWith('.jar'))
+    .filter((name) => !/-(?:sources|javadoc|tests)\.jar$/.test(name))
+    .sort((a, b) => b.length - a.length)[0];
+  return jar ? path.join(targetDir, jar) : '';
 }
 
 // ---------------------------------------------------------------------------
@@ -249,20 +370,25 @@ function runGates(root, scriptTimeoutMs) {
  * @param {{ran: boolean, features: Record<string, {ok: boolean, detail: string}>}} [probe]
  * @returns {string | null}  null when there is nothing left to complain about.
  */
-function nextUserMessage(gates, probe) {
+function nextUserMessage(brief, gates, probe) {
+  const where = '`' + brief.appDir + '`';
+  const manifest = brief.toolchain === 'maven' ? 'pom.xml' : 'package.json';
+
   if (!gates.scaffold.ok) {
-    return (
-      'I do not see the app. There is no `' +
-      APP_DIR +
-      '/package.json` in my workspace. Please create the project and its files.'
-    );
+    return `I do not see the app. There is no \`${brief.appDir}/${manifest}\` in my workspace. Please create the project and its files.`;
   }
-  if (!gates.install.ok) {
-    return 'Dependencies are not installed. `npm install` in `' + APP_DIR + '` fails with:\n\n```\n' + String(gates.install.output || '').slice(-1500) + '\n```';
+
+  // Every gate the brief defined, in the order it defined them, complaining about the
+  // first one that is not passing. Skipped gates are not complaints — a machine without
+  // Maven is not something the model can fix.
+  for (const name of Object.keys(gates)) {
+    const gate = gates[name];
+    if (name === 'scaffold' || name === 'structure' || gate.ok || gate.skipped) continue;
+    const output = String(gate.output || '').slice(-1800);
+    if (!output) continue;
+    return `\`${name}\` is failing in ${where}:\n\n\`\`\`\n${output}\n\`\`\`\n\nPlease fix it.`;
   }
-  if (!gates.build.ok) {
-    return 'The build fails. I ran `npm run build` in `' + APP_DIR + '` and got:\n\n```\n' + String(gates.build.output || '').slice(-1800) + '\n```\n\nPlease fix it.';
-  }
+
   if (!gates.structure.ok) {
     return (
       'The build passes, but these files from the structure I asked for are missing: ' +
@@ -270,12 +396,14 @@ function nextUserMessage(gates, probe) {
       '. Please add them and move the matching code into them.'
     );
   }
+
   if (probe && probe.ran) {
     const broken = Object.keys(probe.features).filter((name) => !probe.features[name].ok);
     if (broken.length) {
       const lines = broken.map((name) => '- ' + name + ': ' + probe.features[name].detail);
+      const how = brief.toolchain === 'maven' ? 'I ran the service layer and tried it' : 'I opened the built app in a browser and tried it';
       return (
-        'I opened the built app in a browser and tried it. These are not working:\n\n' +
+        `${how}. These are not working:\n\n` +
         lines.join('\n') +
         '\n\nPlease fix them in the source and make sure the build still passes.'
       );
@@ -293,13 +421,14 @@ function nextUserMessage(gates, probe) {
  * @returns {Promise<object>}
  */
 async function runModel(options) {
-  const { model, capability, client, turns, budgetMs, scriptTimeoutMs, keep, workspace, stepSessions } = options;
+  const { brief, model, capability, client, turns, budgetMs, scriptTimeoutMs, keep, workspace, stepSessions } = options;
+  const features = brief.toolchain === 'maven' ? JAVA_FEATURES : FEATURES;
 
   const root = workspace
     ? (fs.mkdirSync(workspace, { recursive: true }), fs.realpathSync(workspace))
     : fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'hiraya-real-')));
 
-  const brief = fs.readFileSync(path.join(__dirname, 'prompts', 'todo-glass-app.md'), 'utf8');
+  const briefText = fs.readFileSync(path.join(__dirname, 'prompts', brief.promptFile), 'utf8');
 
   const modes = new PermissionModes({ initial: { autoEdit: true, autoApproveScripts: true } });
   const auditLog = new AuditLog(root);
@@ -347,7 +476,7 @@ async function runModel(options) {
   const conversation = [];
   const turnRecords = [];
   const startedAt = Date.now();
-  let message = brief;
+  let message = briefText;
   let finalGates = null;
   let finalProbe = null;
 
@@ -400,12 +529,15 @@ async function runModel(options) {
     conversation.push({ role: 'user', text: message });
     conversation.push({ role: 'assistant', text: String(outcome.summary || '') });
 
-    const gates = runGates(root, scriptTimeoutMs);
+    const gates = runGates(brief, root, scriptTimeoutMs);
     finalGates = gates;
     /** @type {any} */
     let probe = null;
     if (gates.build.ok) {
-      probe = await probeApp(path.join(root, APP_DIR, 'dist'));
+      probe =
+        brief.toolchain === 'maven'
+          ? await probeJavaService(path.join(root, brief.appDir))
+          : await probeApp(path.join(root, brief.appDir, 'dist'), { suite: brief.probe });
       finalProbe = probe;
     }
 
@@ -439,7 +571,7 @@ async function runModel(options) {
       featureScore: probe && probe.ran ? probe.passed : null,
     });
 
-    const next = nextUserMessage(gates, probe);
+    const next = nextUserMessage(brief, gates, probe);
     if (!next) {
       console.log('\n  == everything the brief asked for is working. Stopping.');
       break;
@@ -452,7 +584,9 @@ async function runModel(options) {
 
   const result = {
     schemaVersion: SCHEMA_VERSION,
-    benchmark: 'realworld-todo-glass-app',
+    benchmark: 'realworld-' + brief.id,
+    brief: brief.id,
+    briefLabel: brief.label,
     model,
     tier: capability.tier,
     params: capability.params,
@@ -467,13 +601,13 @@ async function runModel(options) {
       ? Object.fromEntries(Object.keys(finalGates).map((n) => [n, { ok: finalGates[n].ok, detail: finalGates[n].detail }]))
       : null,
     buildOutput: finalGates && finalGates.build ? String(finalGates.build.output || '').slice(-2000) : '',
-    features: finalProbe && finalProbe.ran ? Object.fromEntries(FEATURES.map((n) => [n, finalProbe.features[n]])) : null,
+    features: finalProbe && finalProbe.ran ? Object.fromEntries(features.map((n) => [n, finalProbe.features[n]])) : null,
     featureScore: finalProbe && finalProbe.ran ? finalProbe.passed : 0,
-    featureTotal: FEATURES.length,
+    featureTotal: features.length,
     consoleErrors: finalProbe ? finalProbe.consoleErrors : [],
     pageErrors: finalProbe ? finalProbe.pageErrors : [],
     // The single number this benchmark exists to produce: a working product, or not.
-    delivered: Boolean(finalGates && finalGates.build.ok && finalProbe && finalProbe.ran && finalProbe.passed === FEATURES.length),
+    delivered: Boolean(finalGates && finalGates.build.ok && finalProbe && finalProbe.ran && finalProbe.passed === features.length),
     filesInWorkspace: findFiles(root).sort().slice(0, 400),
     confirmations: confirmations.slice(0, 40),
     auditDecisions: audit.reduce((acc, event) => {
@@ -502,10 +636,16 @@ async function runModel(options) {
 async function main() {
   const { positional, flags } = parseArgs(process.argv.slice(2));
   const model = positional[0];
+  const brief = briefs.byId(String(flags.brief || 'todo'));
   const machine = String(flags.machine || process.env.HIRAYA_BENCH_MACHINE || '').toUpperCase();
 
   if (!model || !machine) {
-    console.error('Usage: node tools/bench-realworld.js <model> --machine <A|B|C> [--turns 10] [--keep]');
+    console.error('Usage: node tools/bench-realworld.js <model> --machine <A|B|C> [--brief todo|cms|pos] [--turns 10] [--keep]');
+    process.exit(1);
+  }
+
+  if (!brief) {
+    console.error('Unknown brief. Available: ' + briefs.BRIEFS.map((b) => b.id).join(', '));
     process.exit(1);
   }
 
@@ -529,9 +669,10 @@ async function main() {
   );
 
   console.log(`\nHirayaCoder real-world benchmark — ${model} (tier ${capability.tier}, ${capability.params}B)`);
-  console.log(`Brief: tools/prompts/todo-glass-app.md — React + Vite + Tailwind TODO app`);
+  console.log(`Brief: tools/prompts/${brief.promptFile} — ${brief.label}`);
 
   const result = await runModel({
+    brief,
     model,
     capability,
     client,
@@ -548,7 +689,10 @@ async function main() {
   const outRoot = path.resolve(String(flags.out || path.join(__dirname, '..', 'benchmarks', 'results')));
   const dir = path.join(outRoot, machine);
   fs.mkdirSync(dir, { recursive: true });
-  const file = path.join(dir, `realworld__${slug(model)}__${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.json`);
+  const file = path.join(
+    dir,
+    `realworld-${brief.id}__${slug(model)}__${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.json`
+  );
   fs.writeFileSync(file, JSON.stringify(result, null, 2));
 
   console.log('\n' + '='.repeat(72));
@@ -560,7 +704,7 @@ async function main() {
   }
   if (result.features) {
     console.log(`  features ${result.featureScore}/${result.featureTotal}:`);
-    for (const name of FEATURES) {
+    for (const name of Object.keys(result.features)) {
       const feature = result.features[name];
       console.log(`    ${feature.ok ? 'ok  ' : 'FAIL'} ${name.padEnd(16)} ${feature.detail}`);
     }
@@ -576,4 +720,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { runGates, nextUserMessage, REQUIRED_FILES, APP_DIR, SCHEMA_VERSION };
+module.exports = { runGates, nextUserMessage, findJar, SCHEMA_VERSION };

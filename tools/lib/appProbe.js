@@ -90,7 +90,7 @@ function serve(rootDir) {
   });
 }
 
-/** The feature names the probe reports, in the order the brief asks for them. */
+/** The feature names the TODO probe reports, in the order the brief asks for them. */
 const FEATURES = [
   'mounted',
   'emptyState',
@@ -106,6 +106,28 @@ const FEATURES = [
   'clearAll',
 ];
 
+/** What the contact-manager probe reports. Same shape, a different product. */
+const CONTACT_FEATURES = [
+  'mounted',
+  'emptyState',
+  'addContact',
+  'validatesInput',
+  'listsContacts',
+  'searchFilters',
+  'editContact',
+  'deleteContact',
+  'deleteConfirms',
+  'clearAll',
+  'clearAllConfirms',
+  'persists',
+];
+
+/** Which page script drives which brief, and what each one is expected to report. */
+const SUITES = {
+  'browser-todo': { file: 'probe-page.js', features: FEATURES },
+  'browser-contacts': { file: 'probe-contacts.js', features: CONTACT_FEATURES },
+};
+
 /**
  * Drive the built app through every feature.
  *
@@ -115,12 +137,14 @@ const FEATURES = [
  *   passed: number, total: number, consoleErrors: string[], pageErrors: string[], finalText?: string}>}
  */
 async function probeApp(distDir, options = {}) {
+  const suite = SUITES[options.suite] || SUITES['browser-todo'];
+  const expected = suite.features;
   const blank = {
     ran: false,
     reason: '',
     features: {},
     passed: 0,
-    total: FEATURES.length,
+    total: expected.length,
     consoleErrors: [],
     pageErrors: [],
   };
@@ -131,7 +155,7 @@ async function probeApp(distDir, options = {}) {
   }
 
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- a file in this repo.
-  const probeSource = fs.readFileSync(path.join(__dirname, 'probe-page.js'), 'utf8');
+  const probeSource = fs.readFileSync(path.join(__dirname, suite.file), 'utf8');
 
   const site = await serve(distDir);
   const browser = new Browser({ timeoutMs: options.timeoutMs || 30000 });
@@ -141,15 +165,15 @@ async function probeApp(distDir, options = {}) {
     await browser.evaluate(probeSource);
     const report = await browser.evaluate('window.__hirayaProbe()');
     const features = (report && report.features) || {};
-    for (const name of FEATURES) {
+    for (const name of expected) {
       if (!features[name]) features[name] = { ok: false, detail: 'not reached — an earlier feature failed hard' };
     }
     return {
       ran: true,
       reason: '',
       features,
-      passed: FEATURES.filter((name) => features[name] && features[name].ok).length,
-      total: FEATURES.length,
+      passed: expected.filter((name) => features[name] && features[name].ok).length,
+      total: expected.length,
       consoleErrors: browser.consoleErrors.slice(0, 20),
       pageErrors: browser.pageErrors.slice(0, 20),
       finalText: report ? report.finalText : '',
@@ -167,4 +191,4 @@ async function probeApp(distDir, options = {}) {
   }
 }
 
-module.exports = { probeApp, serve, FEATURES };
+module.exports = { probeApp, serve, FEATURES, CONTACT_FEATURES, SUITES };
