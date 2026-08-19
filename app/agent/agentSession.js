@@ -32,6 +32,7 @@ const requestPlan = require('../core/requestPlan');
 const fileTree = require('../core/fileTree');
 const fileSpec = require('../core/fileSpec');
 const namedCommands = require('../core/namedCommands');
+const missingDeps = require('../core/missingDeps');
 const intentRouter = require('../core/intentRouter');
 const toolRegistry = require('./toolRegistry');
 const contextBuilder = require('../core/contextBuilder');
@@ -230,6 +231,14 @@ const MAX_RELATED_FILE_CHARS = 4000;
  * not: a model that has now been told twice is not going to find it on the next one.
  */
 const MAX_DICTATION_ATTEMPTS = 2;
+
+/**
+ * How many packages one install command may name.
+ *
+ * A list longer than this is not a project missing its dependencies, it is a detector
+ * that has gone wrong, and the right response to that is to install nothing.
+ */
+const MAX_PACKAGES_TO_INSTALL = 8;
 
 /** Source files whose imports the assembly check can read. */
 const MODULE_FILE = /\.(?:jsx?|tsx?|mjs|cjs|vue|svelte)$/i;
@@ -1417,6 +1426,41 @@ class AgentSession {
     }
 
     if (todos.current()) todos.skipRemaining('the session ran out of steps');
+
+    // Install what the files this session wrote actually import.
+    //
+    // The furthest a `qwen3.5:0.8b` run got before this: project scaffolded, dependencies
+    // installed, twelve of thirteen files written — and the build failing with
+    // `Cannot find module 'tailwindcss'`, because the model wrote a correct
+    // `postcss.config.js` naming it and never installed it. The brief did ask; the
+    // install is simply a different action from the file, and the file is the part the
+    // model is good at.
+    //
+    // Both halves are already known here: the extension wrote the files, so it can read
+    // what they import, and it can read `package.json` to see what is declared. The
+    // command still goes through the gate, where a network install always confirms.
+    if (this.capability.tier === 'B' && projectRoot && !this._controller.signal.aborted) {
+      const wanted = missingDeps.missing({
+        files: changeSet
+          .list()
+          .filter((change) => change.kind !== 'delete')
+          .map((change) => ({ path: change.path, source: this._readInWorkspace(change.path) || '' })),
+        manifest: this._readInWorkspace(`${projectRoot}/package.json`) || '',
+      });
+      if (wanted.length > 0 && this._readInWorkspace(`${projectRoot}/package.json`)) {
+        const action = {
+          action: 'run_script',
+          command: `npm install ${wanted.slice(0, MAX_PACKAGES_TO_INSTALL).join(' ')}`,
+          cwd: projectRoot,
+          thought: 'the files just written import these, and they are not installed',
+        };
+        emit({ type: 'action', step: allSteps.length + 1, action });
+        const executed = await this._execute(action, activeRoute, changeSet);
+        emit({ type: 'observation', step: allSteps.length + 1, result: executed });
+        allSteps.push({ action, result: executed });
+        if (executed.ok) summaries.push(`Installed ${wanted.join(', ')}, which the written code imports.`);
+      }
+    }
 
     // Everything is written. Does the screen they were written for actually use them?
     //
