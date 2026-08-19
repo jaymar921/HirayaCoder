@@ -1,0 +1,178 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  :root {
+    --bg: #0b1220;
+    --line: rgba(148, 163, 184, 0.16);
+    --fg: #e8ecf1;
+    --muted: #94a3b8;
+    --sunrise: linear-gradient(115deg, #ff9a3c, #ff5f6d);
+    --ok: #4ade80;
+    --sky: #7dd3fc;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1280px; height: 720px; }
+  body {
+    background: var(--bg); color: var(--fg); overflow: hidden; position: relative;
+    font-family: "Segoe UI", -apple-system, system-ui, sans-serif;
+  }
+  .glow { position: absolute; border-radius: 50%; filter: blur(100px); }
+  .glow-a { width: 600px; height: 600px; right: -220px; top: -290px; background: #ff7a45; opacity: 0.15; }
+  .glow-b { width: 560px; height: 560px; left: -250px; bottom: -280px; background: #2b6cb0; opacity: 0.26; }
+
+  .wrap { position: relative; z-index: 1; height: 100%; padding: 42px 56px 32px; display: flex; flex-direction: column; }
+
+  header { display: flex; align-items: center; gap: 13px; margin-bottom: 18px; }
+  .brand-name { font-size: 22px; font-weight: 700; letter-spacing: -0.2px; }
+  .ver { font-size: 12px; font-weight: 700; padding: 4px 10px; border-radius: 999px; color: #1b1205; background: var(--sunrise); }
+  .head-right { margin-left: auto; font-size: 13px; color: var(--muted); }
+  .head-right b { color: var(--fg); font-weight: 600; }
+
+  h1 { font-size: 38px; letter-spacing: -1px; line-height: 1.12; font-weight: 700; margin-bottom: 9px; }
+  h1 .grad { background: var(--sunrise); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .lede { font-size: 15px; color: var(--muted); margin-bottom: 20px; max-width: 960px; line-height: 1.5; }
+  .lede b { color: var(--fg); font-weight: 600; }
+
+  .cols { display: grid; grid-template-columns: 1fr 1.15fr; gap: 20px; flex: 1; min-height: 0; }
+  .col { border: 1px solid var(--line); border-radius: 13px; padding: 16px 18px; display: flex; flex-direction: column; min-height: 0; }
+  .col.you { background: rgba(255,255,255,0.02); }
+  .col.it { background: rgba(74,222,128,0.045); border-color: rgba(74,222,128,0.22); }
+
+  .col-hd { display: flex; align-items: center; gap: 9px; margin-bottom: 3px; }
+  .col-hd h2 { font-size: 15px; font-weight: 700; }
+  .badge { font-size: 10.5px; font-weight: 700; letter-spacing: 0.5px; padding: 3px 8px; border-radius: 999px; }
+  .badge.y { background: rgba(148,163,184,0.18); color: var(--muted); }
+  .badge.i { background: rgba(74,222,128,0.16); color: var(--ok); }
+  .col-sub { font-size: 12.5px; color: var(--muted); margin-bottom: 12px; }
+
+  pre {
+    font-family: Consolas, "Cascadia Mono", monospace; font-size: 12.5px; line-height: 1.62;
+    color: var(--muted); white-space: pre; overflow: hidden;
+  }
+  pre .c { color: #64748b; }
+  pre b { color: var(--fg); font-weight: 600; }
+
+  .step {
+    display: flex; align-items: baseline; gap: 9px; padding: 4px 0; font-size: 12.5px;
+  }
+  .step .n {
+    flex: none; width: 17px; height: 17px; border-radius: 5px; font-size: 10.5px; font-weight: 700;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: rgba(74,222,128,0.16); color: var(--ok); align-self: center;
+  }
+  .step .t { color: var(--fg); font-weight: 600; }
+  .step .d { color: var(--muted); font-size: 11.5px; }
+
+  .files { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 10px; }
+  .files .t { font-size: 10.5px; font-weight: 700; letter-spacing: 0.5px; color: var(--sky); margin-bottom: 6px; }
+  .f {
+    font-family: Consolas, monospace; font-size: 11.5px; line-height: 1.62; color: var(--muted);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .f b { color: var(--fg); font-weight: 600; }
+  .f .p { color: #94a3b8; }
+
+  .note {
+    margin-top: auto; padding-top: 11px; font-size: 12.5px; line-height: 1.5; color: var(--muted);
+  }
+  .note b { color: var(--fg); font-weight: 600; }
+
+  footer { margin-top: 15px; font-size: 12.5px; color: var(--muted); display: flex; gap: 26px; }
+  footer b { color: var(--fg); font-weight: 600; }
+</style>
+</head>
+<body>
+  <div class="glow glow-a"></div>
+  <div class="glow glow-b"></div>
+
+  <div class="wrap">
+    <header>
+      <svg width="34" height="34" viewBox="0 0 128 128">
+        <defs>
+          <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#FF7A45"/><stop offset="55%" stop-color="#FFB020"/><stop offset="100%" stop-color="#2B6CB0"/>
+          </linearGradient>
+        </defs>
+        <rect width="128" height="128" rx="24" fill="#101826"/>
+        <g transform="translate(64,50)">
+          <circle r="14" fill="url(#g)"/>
+          <g stroke="url(#g)" stroke-width="4" stroke-linecap="round">
+            <line x1="0" y1="-26" x2="0" y2="-34"/><line x1="0" y1="26" x2="0" y2="34"/>
+            <line x1="-26" y1="0" x2="-34" y2="0"/><line x1="26" y1="0" x2="34" y2="0"/>
+            <line x1="-18" y1="-18" x2="-24" y2="-24"/><line x1="18" y1="-18" x2="24" y2="-24"/>
+            <line x1="-18" y1="18" x2="-24" y2="24"/><line x1="18" y1="18" x2="24" y2="24"/>
+          </g>
+        </g>
+        <g fill="none" stroke="#E8ECF1" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M40 92 L28 100 L40 108"/><path d="M88 92 L100 100 L88 108"/>
+        </g>
+      </svg>
+      <div class="brand-name">HirayaCoder</div>
+      <div class="ver">v0.9.0</div>
+      <div class="head-right">No extra model call &middot; works the same at <b>0.8B</b> as at 70B</div>
+    </header>
+
+    <h1>The structure you drew <span class="grad">is the plan.</span></h1>
+    <p class="lede">
+      A long brief does not fit in a small model's head — and it does not have to. Headings, numbered steps and
+      the folder tree you sketched are <b>a plan somebody already typed out</b>. Reading it takes no reasoning,
+      so HirayaCoder does the splitting and the model is only ever asked for one section at a time.
+    </p>
+
+    <div class="cols">
+      <div class="col you">
+        <div class="col-hd"><h2>What you wrote</h2><span class="badge y">YOUR REQUEST</span></div>
+        <div class="col-sub">One message, 98 lines, eight sections.</div>
+<pre><b>### 3. Folder Structure</b>
+
+todo-glass-app/
+├── src/
+│   ├── components/
+│   │   ├── TodoInput.jsx   <span class="c"># Add-todo form</span>
+│   │   ├── TodoItem.jsx    <span class="c"># Single todo row</span>
+│   │   └── TodoList.jsx    <span class="c"># Renders TodoItem</span>
+│   ├── hooks/
+│   │   └── useTodos.js     <span class="c"># All todo state</span>
+│   ├── App.jsx             <span class="c"># Composes layout</span>
+│   └── main.jsx
+├── vite.config.js
+└── package.json</pre>
+        <div class="note">
+          The comment column is the part nobody used. It is <b>you saying what each file is for</b>.
+        </div>
+      </div>
+
+      <div class="col it">
+        <div class="col-hd"><h2>What it runs</h2><span class="badge i">READ, NOT GUESSED</span></div>
+        <div class="col-sub">Your sections, your order, your words — one step at a time.</div>
+
+        <div class="step"><span class="n">1</span><span class="t">Project Setup</span><span class="d">scaffold &amp; install</span></div>
+        <div class="step"><span class="n">2</span><span class="t">Folder Structure</span><span class="d">12 files, full paths</span></div>
+        <div class="step"><span class="n">3</span><span class="t">Features</span><span class="d">add / edit / delete / clear</span></div>
+        <div class="step"><span class="n">4</span><span class="t">Design</span><span class="d">the glass theme</span></div>
+        <div class="step"><span class="n">5</span><span class="t">README</span><span class="d">at the repo root</span></div>
+        <div class="step"><span class="n">6</span><span class="t">Build Verification</span><span class="d">until it passes</span></div>
+
+        <div class="files">
+          <div class="t">AND THE PATHS IT JOINED BACK TOGETHER</div>
+          <div class="f"><b>todo-glass-app/src/components/TodoItem.jsx</b> <span class="p">— Single todo row (edit/delete/toggle)</span></div>
+          <div class="f"><b>todo-glass-app/src/hooks/useTodos.js</b> <span class="p">— All todo state logic</span></div>
+          <div class="f"><b>todo-glass-app/src/App.jsx</b> <span class="p">— Composes layout + components</span></div>
+        </div>
+
+        <div class="note">
+          <b>Tech Stack</b> became a rule under every step, not a step of its own — nothing in it asks for
+          anything to be done.
+        </div>
+      </div>
+    </div>
+
+    <footer>
+      <div><b>Nothing leaves your machine.</b> The split is your own text, read on your own disk.</div>
+      <div><b>Pre-release</b> &middot; download from GitHub Releases</div>
+    </footer>
+  </div>
+</body>
+</html>
