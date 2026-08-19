@@ -102,6 +102,22 @@ describe('fileTree.withoutTree', () => {
   });
 });
 
+describe('fileTree.parse — paths that try to leave the project', () => {
+  it('refuses a segment that climbs out', () => {
+    // Not the control that stops it — `pathGuard` refuses such a path on the read and
+    // again on the write. This is the parser being honest about what it returns.
+    assert.strictEqual(fileTree.looksLikeEntry('../../etc/passwd'), false);
+    assert.strictEqual(fileTree.looksLikeEntry('..'), false);
+    assert.strictEqual(fileTree.looksLikeEntry('./local.js'), false);
+  });
+
+  it('skips the offending line without discarding the rest of the tree', () => {
+    const tree = ['app/', '├── src/', '│   ├── ../../escape.js', '│   └── real.js'].join('\n');
+    const paths = fileTree.files(tree).map((file) => file.path);
+    assert.deepStrictEqual(paths, ['app/src/real.js']);
+  });
+});
+
 describe('fileTree.hasTree', () => {
   it('refuses a flat list of filenames', () => {
     // No directories to join onto: read as a tree, every path would be wrong.

@@ -76,7 +76,12 @@ function looksLikeEntry(name) {
   // A sentence is not a filename. Spaces are the giveaway: real paths in a tree do not
   // have them often enough to be worth the false positives from prose that does.
   if (/\s/.test(text)) return false;
-  if (/^[.]{2,}$/.test(text)) return false;
+  // No segment may climb out of the tree. Everything downstream — `pathGuard` on the
+  // read, `pathGuard` again on the write — refuses a path that leaves the workspace, so
+  // this is not the control that stops it. It is the parser being honest about what it
+  // returns: these are paths inside the project the tree describes, and a `..` in one
+  // would make that untrue several layers before anything checked.
+  if (text.split('/').some((segment) => segment === '..' || segment === '.')) return false;
   return /^[\w.@~-]+(?:\/[\w.@~-]+)*\/?$/.test(text);
 }
 
@@ -116,7 +121,13 @@ function parse(text) {
     if (!looksLikeEntry(name)) {
       // A line that is not an entry ends the tree if we have already started one —
       // otherwise a paragraph after the block would keep being scanned for paths.
-      if (entries.length > 0 && rest.trim()) break;
+      //
+      // Unless it is still drawn as part of the tree. A rejected entry inside the
+      // drawing — a `..` segment, a name with a space in it — is one line to skip, not a
+      // reason to discard everything below it. Ending the tree there would let a single
+      // odd line silently drop the rest of the structure.
+      const drawn = /[├└│]|\|--|`--/.test(line);
+      if (entries.length > 0 && rest.trim() && !drawn) break;
       continue;
     }
 

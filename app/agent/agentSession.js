@@ -231,21 +231,66 @@ const MAX_RELATED_FILE_CHARS = 4000;
 const UNDICTATABLE =
   /(?:^|\/)(?:node_modules|dist|build|out|coverage|\.git)\/|(?:^|\/)(?:package(?:-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|\.env(?:\..+)?)$/i;
 
+/** Longer than any real path, and the bound that keeps the check below linear. */
+const MAX_TARGET_PATH_CHARS = 400;
+
 /**
- * A path that is a filename rather than a piece of prose that looks like one.
+ * Is this a filename, or a piece of prose that looks like one?
  *
- * The stem must be at least two characters and the extension at least two, which is the
- * rule that took a live sweep to find: a request saying *Counter (e.g. "3 of 5
+ * The rule: a stem of at least two word characters, and an extension of two to eight
+ * letters. It took a live sweep to find — a request saying *Counter (e.g. "3 of 5
  * remaining")* had `e.g` picked out of it as a path, and a file called `e.g` was
- * dictated into the project root. `i.e` and `etc.` fail the same way and are excluded by
- * the same rule.
+ * dictated into the project root. `i.e` and `etc.` fail the same rule.
  *
- * The cost is real and small: a genuine single-letter extension like `.c` or `.h` will
- * not be dictated, and has to be written by the loop instead. Against that, a junk file
- * in the user's project — created without them asking, from a fragment of their own
- * sentence — is exactly the kind of surprise this feature must not produce.
+ * The cost is real and small: a genuine single-letter extension like `.c` or `.h` is not
+ * dictated and is left to the loop. Against that, a junk file appearing in someone's
+ * project, created without them asking, out of a fragment of their own sentence, is
+ * exactly the surprise this feature must not produce.
+ *
+ * ## Why this is not a regular expression
+ *
+ * It was one, and the obvious one — `[\w@.-]*[\w-]{2,}[\w@.-]*\.[a-z][a-z0-9]{1,7}$` —
+ * is quadratic. Three adjacent variable-length classes over the same character set, then
+ * a literal that a non-matching input never reaches, is a backtracking machine. Measured
+ * on this project's own SAST pass, against a string of `a`s with no dot in it:
+ *
+ * | Input length | Time |
+ * |---|---|
+ * | 400 | 19 ms |
+ * | 800 | 196 ms |
+ * | 1,600 | 1.4 s |
+ * | 3,200 | 10.6 s |
+ *
+ * The input is a token taken out of the user's own request, so this is a hang rather
+ * than a compromise — but a paste containing one long unbroken token would freeze the
+ * extension, and "it is only the user's own text" has never been a good enough reason
+ * here. Split on the last `/` and the last `.` and every step below is linear.
+ *
+ * @param {string} target
+ * @returns {boolean}
  */
-const DICTATABLE_FILENAME = /(?:^|\/)[\w@.-]*[\w-]{2,}[\w@.-]*\.[a-z][a-z0-9]{1,7}$/i;
+function isDictatableFilename(target) {
+  const path = String(target);
+  if (path.length > MAX_TARGET_PATH_CHARS) return false;
+
+  const name = path.slice(path.lastIndexOf('/') + 1);
+  const dot = name.lastIndexOf('.');
+  // `dot <= 0` covers both "no extension" and a dotfile like `.env`, whose whole name is
+  // the extension and which is never something to dictate.
+  if (dot <= 0) return false;
+
+  const stem = name.slice(0, dot);
+  const extension = name.slice(dot + 1);
+  if (extension.length < 2 || extension.length > 8) return false;
+  if (!/^[a-z][a-z0-9]*$/i.test(extension)) return false;
+
+  let wordChars = 0;
+  for (const character of stem) {
+    if (/[\w-]/.test(character)) wordChars += 1;
+    if (wordChars >= 2) return true;
+  }
+  return false;
+}
 
 /** Openers that begin a request for information rather than for work. */
 const QUESTION_OPENERS =
@@ -1530,7 +1575,7 @@ class AgentSession {
       if (!target || seen.has(target)) continue;
       seen.add(target);
       if (UNDICTATABLE.test(target)) continue;
-      if (!DICTATABLE_FILENAME.test(target)) continue;
+      if (!isDictatableFilename(target)) continue;
 
       const exists = this._existsInWorkspace(target);
       // An existing file with nothing said about it is somebody else's — the
