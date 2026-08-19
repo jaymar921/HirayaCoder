@@ -1558,6 +1558,15 @@ class AgentSession {
     const targets = this._filesForItem(item).slice(0, MAX_DICTATIONS_PER_ITEM);
     if (targets.length === 0) return outcome;
 
+    // The drawing comes out of the background before the background goes into a prompt
+    // about one file. The paths have already been read; leaving fifteen filenames in
+    // front of a 0.8B model competes with the one filename in the instruction, and
+    // recency wins — asked for `tailwind.config.js` with the tree in view, it returned a
+    // `package.json`. What is left is the prose around the tree, which is the part worth
+    // keeping: "do not flatten it", "all todo CRUD operations live in the `useTodos`
+    // custom hook, components stay presentational".
+    const background = fileTree.hasTree(item.detail) ? fileTree.withoutTree(item.detail) : item.detail;
+
     logger.info(`Dictating ${targets.length} file(s) named by step "${item.text.slice(0, 60)}".`);
 
     for (const target of targets) {
@@ -1575,22 +1584,41 @@ class AgentSession {
       }
 
       const current = target.exists ? this._readInWorkspace(target.path) : null;
-      const result = await dictation.dictate({
-        client: this.client,
-        model: this.model,
-        path: target.path,
-        purpose: target.purpose,
-        spec: current
-          ? `${item.detail}\n\nThis file already exists. Its current contents are below; ` +
-            `replace them with what this step asks for, keeping anything still needed.\n---\n${current}\n---`
-          : item.detail,
-        constraints,
-        related: related.slice(-dictation.MAX_RELATED),
-        signal: this._controller.signal,
-      });
+      const spec = current
+        ? `${background}\n\nThis file already exists. Its current contents are below; ` +
+          `replace them with what this step asks for, keeping anything still needed.\n---\n${current}\n---`
+        : background;
+
+      // One retry, with the reason the first reply was rejected.
+      //
+      // Worth its cost because the rejections are specific and correctable — "the reply
+      // was cut off", "that is not JavaScript" — rather than the model being unable to
+      // do it. A second unusable reply is recorded as a miss and the run carries on: a
+      // file that could not be written is a fact the summary should carry, not a reason
+      // to abandon the other eleven.
+      let result = null;
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        result = await dictation.dictate({
+          client: this.client,
+          model: this.model,
+          path: target.path,
+          purpose: target.purpose,
+          spec,
+          constraints,
+          related: related.slice(-dictation.MAX_RELATED),
+          previousError: attempt > 1 && result ? result.reason : '',
+          signal: this._controller.signal,
+        });
+        if (result.ok || this._controller.signal.aborted) break;
+      }
 
       if (!result.ok) {
         outcome.failed.push({ path: target.path, reason: result.reason });
+        // Said out loud rather than swallowed. A file the request named and the run
+        // could not produce is exactly what a user needs to know, and the first version
+        // of this dropped five of eleven files in silence.
+        emit({ type: 'dictation-failed', path: target.path, reason: result.reason });
+        logger.warn(`Could not write ${target.path}: ${result.reason}.`);
         continue;
       }
 

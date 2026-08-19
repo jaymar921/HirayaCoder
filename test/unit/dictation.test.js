@@ -123,6 +123,45 @@ describe('dictation.renderContracts', () => {
   });
 });
 
+describe('dictation.matchesPath', () => {
+  // The failure this was written from, measured on `qwen3.5:0.8b`: asked for
+  // `tailwind.config.js` it returned a `package.json`, and asked for
+  // `postcss.config.js` it returned the App component. Nothing was wrong with the files
+  // it wrote — they were answers to a different question, and both landed on disk.
+  it('refuses a package.json written over a config module', () => {
+    const manifest = '{\n  "name": "todo-glass-app",\n  "dependencies": { "react": "^18.2.0" }\n}';
+    const verdict = dictation.matchesPath('tailwind.config.js', manifest);
+    assert.strictEqual(verdict.ok, false);
+    assert.match(verdict.reason, /not JavaScript or TypeScript/);
+  });
+
+  it('refuses a React component written over a stylesheet', () => {
+    const component = "import React from 'react';\n\nexport default function App() { return <div />; }";
+    assert.strictEqual(dictation.matchesPath('src/index.css', component).ok, false);
+  });
+
+  it('refuses prose written over a JSON file', () => {
+    assert.strictEqual(dictation.matchesPath('data.json', 'const a = 1;').ok, false);
+  });
+
+  it('accepts a module that opens with an object literal', () => {
+    // `export default { plugins: {...} }` is a real postcss config and is not JSON.
+    assert.strictEqual(dictation.matchesPath('postcss.config.js', 'export default {\n  plugins: {},\n};').ok, true);
+  });
+
+  it('accepts each kind of file at its own extension', () => {
+    assert.strictEqual(dictation.matchesPath('package.json', '{"name":"x"}').ok, true);
+    assert.strictEqual(dictation.matchesPath('src/App.jsx', 'export default function App() {}').ok, true);
+    assert.strictEqual(dictation.matchesPath('src/index.css', '@tailwind base;\nbody { margin: 0; }').ok, true);
+    assert.strictEqual(dictation.matchesPath('index.html', '<!doctype html><div id="root"></div>').ok, true);
+  });
+
+  it('has no opinion about an extension it does not know', () => {
+    assert.strictEqual(dictation.matchesPath('README.md', 'Anything at all goes here.').ok, true);
+    assert.strictEqual(dictation.matchesPath('notes.txt', 'free text').ok, true);
+  });
+});
+
 describe('dictation.buildPrompt', () => {
   const prompt = dictation.buildPrompt({
     path: 'src/components/TodoItem.jsx',
@@ -137,6 +176,18 @@ describe('dictation.buildPrompt', () => {
     assert.match(prompt, /Single todo row/);
     assert.match(prompt, /No external UI libraries/);
     assert.match(prompt, /useTodos\.js/);
+  });
+
+  it('restates the path last, after the background', () => {
+    // Background competes with the instruction and the instruction is one filename. The
+    // first version put the item's whole section — a fifteen-file folder tree — in the
+    // middle and the model wrote whichever file it liked.
+    const lastBlock = prompt.split('\n\n').pop();
+    assert.match(lastBlock, /The file to write is src\/components\/TodoItem\.jsx, and only that file/);
+  });
+
+  it('marks the background as background', () => {
+    assert.match(prompt, /for context only — do not write any other file from it/);
   });
 
   it('asks for a file and forbids the placeholders that pass for one', () => {

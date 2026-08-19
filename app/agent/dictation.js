@@ -73,6 +73,14 @@ const TIMEOUT_MS = 300000;
 const MAX_RELATED = 8;
 
 /**
+ * How much project background a dictation carries.
+ *
+ * Short on purpose — see `buildPrompt`. Background competes with the instruction, and
+ * the instruction is one filename.
+ */
+const MAX_SPEC_CHARS = 700;
+
+/**
  * Fenced code blocks, with or without a language tag.
  *
  * Non-greedy so the first complete block wins: a model that writes the file and then
@@ -211,7 +219,25 @@ function buildPrompt(options) {
   blocks.push(`Write the complete contents of the file ${options.path}.`);
 
   if (options.purpose) blocks.push(`What this file is for: ${options.purpose}`);
-  if (options.spec) blocks.push(`This is part of the following request:\n---\n${options.spec}\n---`);
+
+  // The spec is capped hard, and it is capped for a reason worth stating.
+  //
+  // The first version of this passed the item's whole section, which for the benchmark
+  // brief is the folder tree — fifteen filenames. The model read the tree and wrote
+  // whichever file it liked: asked for `tailwind.config.js` it returned a
+  // `package.json`, and asked for `postcss.config.js` it returned the App component.
+  // Nothing was wrong with the files it wrote; they were answers to a different
+  // question. A list of other filenames in front of a 0.8B model competes directly with
+  // the one filename in the instruction, and recency decides it.
+  //
+  // So the spec is background, it is short, and the path is restated last.
+  if (options.spec) {
+    const spec = String(options.spec).trim();
+    blocks.push(
+      'Background on the project, for context only — do not write any other file from ' +
+        `it:\n---\n${spec.length > MAX_SPEC_CHARS ? `${spec.slice(0, MAX_SPEC_CHARS)}…` : spec}\n---`
+    );
+  }
   if (options.constraints) blocks.push(`Rules for the whole project:\n${options.constraints}`);
 
   const contracts = renderContracts(options.related);
@@ -222,12 +248,80 @@ function buildPrompt(options) {
   }
 
   blocks.push(
-    'Reply with the complete file inside one ``` code block, and nothing else. ' +
+    `The file to write is ${options.path}, and only that file. ` +
+      'Reply with its complete contents inside one ``` code block, and nothing else. ' +
       'No explanation before or after. The file must be complete and runnable on its own — ' +
       'no "..." placeholders, no "rest of the code here", no TODO comments standing in for real code.'
   );
 
   return blocks.join('\n\n');
+}
+
+/**
+ * Extensions whose content is recognisable enough to check against the path.
+ *
+ * This is the mechanical half of the fix above. Telling the model which file to write
+ * makes it write the right one *most* of the time; checking that what came back is the
+ * kind of file that was asked for makes the remaining times visible instead of writing
+ * a `package.json` over a `tailwind.config.js`.
+ *
+ * Each test is deliberately weak — "is this JSON", "does this contain code" — because a
+ * strong one would start rejecting unusual but valid files, and the failure it exists to
+ * catch is not subtle.
+ *
+ * @type {Array<{match: RegExp, ok: (code: string) => boolean, want: string}>}
+ */
+const KIND_CHECKS = [
+  {
+    match: /\.json$/i,
+    ok: (code) => {
+      try {
+        JSON.parse(code);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    want: 'JSON',
+  },
+  {
+    match: /\.(?:js|jsx|mjs|cjs|ts|tsx)$/i,
+    // The interesting half is the negative: a JSON document is a valid answer to some
+    // question, and never to "write me this module".
+    ok: (code) => {
+      const text = code.trim();
+      if (text.startsWith('{') || text.startsWith('[')) {
+        try {
+          JSON.parse(text);
+          return false;
+        } catch {
+          /* not JSON after all — an object literal in a module body is fine */
+        }
+      }
+      return /\b(?:import|export|require|function|const|let|var|class|=>)\b/.test(text);
+    },
+    want: 'JavaScript or TypeScript',
+  },
+  {
+    match: /\.css$/i,
+    ok: (code) => !/^\s*import\s+\w+\s+from\s+['"]react/m.test(code) && /[{@]/.test(code),
+    want: 'CSS',
+  },
+  { match: /\.html?$/i, ok: (code) => /<\w+/.test(code), want: 'HTML' },
+];
+
+/**
+ * Is this the kind of file that was asked for?
+ *
+ * @param {string} filePath
+ * @param {string} code
+ * @returns {{ok: boolean, reason: string}}
+ */
+function matchesPath(filePath, code) {
+  const check = KIND_CHECKS.find((candidate) => candidate.match.test(String(filePath)));
+  if (!check) return { ok: true, reason: '' };
+  if (check.ok(String(code))) return { ok: true, reason: '' };
+  return { ok: false, reason: `the reply is not ${check.want}, which is what ${filePath} has to be` };
 }
 
 /**
@@ -281,6 +375,12 @@ async function dictate(options) {
     return { ok: false, code: '', reason, durationMs };
   }
 
+  const kind = matchesPath(options.path, code);
+  if (!kind.ok) {
+    logger.info(`Dictation of ${options.path} answered a different question: ${kind.reason}.`);
+    return { ok: false, code: '', reason: kind.reason, durationMs };
+  }
+
   logger.info(`Dictated ${options.path}: ${code.length} chars in ${(durationMs / 1000).toFixed(1)}s.`);
   return { ok: true, code, reason: '', durationMs };
 }
@@ -288,6 +388,7 @@ async function dictate(options) {
 module.exports = {
   dictate,
   extractCode,
+  matchesPath,
   exportsOf,
   renderContracts,
   buildPrompt,
@@ -295,4 +396,5 @@ module.exports = {
   MIN_CODE_CHARS,
   NUM_PREDICT,
   MAX_RELATED,
+  MAX_SPEC_CHARS,
 };

@@ -80,6 +80,28 @@ describe('fileTree.parse — other drawings of the same thing', () => {
   });
 });
 
+describe('fileTree.withoutTree', () => {
+  const structure = requestPlan.fromRequest(BRIEF).items.find((item) => /Folder Structure/.test(item.text));
+  const prose = fileTree.withoutTree(structure.detail);
+
+  it('takes every filename out', () => {
+    // Fifteen filenames in front of a small model compete with the one filename in the
+    // instruction. Measured: asked for `tailwind.config.js` with the tree in view,
+    // `qwen3.5:0.8b` returned a `package.json`.
+    assert.strictEqual(/TodoItem\.jsx|useTodos\.js|package\.json/.test(prose), false, prose);
+  });
+
+  it('keeps the instructions written around it', () => {
+    assert.match(prose, /do not flatten it/);
+    assert.match(prose, /components stay presentational/);
+  });
+
+  it('leaves text with no tree in it alone', () => {
+    const plain = 'Add a delete button to the row and wire it to the hook.';
+    assert.strictEqual(fileTree.withoutTree(plain), plain);
+  });
+});
+
 describe('fileTree.hasTree', () => {
   it('refuses a flat list of filenames', () => {
     // No directories to join onto: read as a tree, every path would be wrong.

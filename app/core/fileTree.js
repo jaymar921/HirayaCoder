@@ -174,4 +174,35 @@ function hasTree(text) {
   return entries.length >= 2 && new Set(entries.map((entry) => entry.depth)).size >= 2;
 }
 
-module.exports = { parse, files, hasTree, looksLikeEntry, MAX_DEPTH, MAX_ENTRIES, LEVEL_WIDTH };
+/**
+ * The same text with the drawing taken out, leaving the prose around it.
+ *
+ * Used when a step is about to write *one* of the files a tree names. The tree has
+ * already been read — the paths are known — and leaving it in the prompt is actively
+ * harmful: fifteen filenames compete with the one filename in the instruction, and on
+ * a 0.8B model recency wins. Measured: asked for `tailwind.config.js` with the tree in
+ * front of it, the model returned a `package.json`.
+ *
+ * What is left behind is the part worth keeping. Around the benchmark brief's tree sits
+ * "do not flatten it" and "all todo CRUD operations live in the `useTodos` custom hook,
+ * components stay presentational" — real instructions about how the files relate, with
+ * no filenames to be distracted by.
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+function withoutTree(text) {
+  const lines = String(text || '').split(/\r?\n/);
+  const kept = lines.filter((line) => {
+    if (/^\s*```/.test(line)) return false;
+    const column = PREFIX.exec(line)[0].length;
+    const rest = line.slice(column);
+    const hash = rest.indexOf('#');
+    const name = (hash >= 0 ? rest.slice(0, hash) : rest).trim();
+    return !looksLikeEntry(name);
+  });
+  // Collapse the run of blank lines the removal leaves behind.
+  return kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+module.exports = { parse, files, hasTree, withoutTree, looksLikeEntry, MAX_DEPTH, MAX_ENTRIES, LEVEL_WIDTH };

@@ -363,6 +363,17 @@ async function runModel(options) {
     const actions = {};
     /** @type {string[]} */
     const failures = [];
+    /**
+     * Files the request named that the run could not produce.
+     *
+     * Recorded separately from tool failures because it is a different fact: not "the
+     * agent tried and the tool refused" but "the model was asked for this file and what
+     * came back was not one". The first sweep dropped five of eleven files this way and
+     * the log said nothing at all.
+     *
+     * @type {Array<{path: string, reason: string}>}
+     */
+    const missedFiles = [];
     let lastAction = '?';
 
     const turnStarted = Date.now();
@@ -379,6 +390,9 @@ async function runModel(options) {
           const text = String(event.result.observation).split('\n')[0].slice(0, 120);
           failures.push(lastAction + ': ' + text);
           console.log(`         FAILED: ${text}`);
+        } else if (event.type === 'dictation-failed') {
+          missedFiles.push({ path: String(event.path), reason: String(event.reason).slice(0, 160) });
+          console.log(`         NOT WRITTEN: ${event.path} — ${event.reason}`);
         }
       },
     });
@@ -411,6 +425,7 @@ async function runModel(options) {
       actions,
       steps: (outcome.steps || []).length,
       failures: failures.slice(0, 12),
+      missedFiles,
       commands: (outcome.changeSet && outcome.changeSet.commands ? outcome.changeSet.commands : []).map((c) => ({
         command: c.command,
         ok: c.ok,
