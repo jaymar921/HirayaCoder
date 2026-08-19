@@ -47,6 +47,11 @@ const MAX_ITEMS = 6;
 /**
  * @typedef {object} TodoItem
  * @property {string} text
+ * @property {string} [detail]
+ *   The span of the request this item came from, when the list was read from the
+ *   request's own structure rather than proposed by the model. The `text` is the
+ *   instruction; this is the spec behind it, and it is what the step running the item
+ *   is shown *instead of* the whole request. See `core/requestPlan` and `agent/stepBrief`.
  * @property {TodoStatus} status
  * @property {string} [outcome]  Why it ended the way it did, in plain language.
  * @property {number} [steps]    Steps the item consumed.
@@ -59,11 +64,19 @@ const MAX_ITEMS = 6;
 
 class TodoList {
   /**
-   * @param {string[]} items
+   * @param {Array<string | {text: string, detail?: string}>} items
+   *   A plain string per item, as the model's planner produces, or `{text, detail}`
+   *   when the list was read from the request's own structure — see `core/requestPlan`.
+   *   `detail` is the span of the request this item came from, and it is the item's
+   *   spec: the step that runs it is shown that rather than the whole request.
    */
   constructor(items) {
     /** @type {TodoItem[]} */
-    this.items = items.slice(0, MAX_ITEMS).map((text) => ({ text: String(text).trim(), status: 'pending' }));
+    this.items = items.slice(0, MAX_ITEMS).map((entry) => {
+      const text = typeof entry === 'string' ? entry : entry.text;
+      const detail = typeof entry === 'string' ? '' : String(entry.detail || '');
+      return { text: String(text).trim(), detail, status: 'pending' };
+    });
     if (this.items.length > 0) this.items[0].status = 'active';
 
     /**

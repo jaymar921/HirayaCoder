@@ -57,6 +57,20 @@ const MAX_BACKGROUND_CHARS = 1200;
 const MAX_PRIOR_ITEMS = 6;
 
 /**
+ * How much of an item's own section rides along as its spec.
+ *
+ * Larger than `MAX_BACKGROUND_CHARS` because it is doing the opposite job. That cap
+ * shortens something the step has been told to ignore; this one carries the thing the
+ * step has been told to do, and cutting it drops requirements. The benchmark brief's
+ * largest section — the folder tree, which names twelve files — is just over a
+ * thousand characters, so this is set where a whole section of a real request fits.
+ */
+const MAX_DETAIL_CHARS = 1600;
+
+/** The rules repeated under every step. Short, because they are paid for every time. */
+const MAX_CONSTRAINT_CHARS = 500;
+
+/**
  * A path, or a path-like token, inside an item's text.
  *
  * The repeated group is separated by a mandatory `/`, which the character class
@@ -200,6 +214,11 @@ function renderFiles(options) {
  * @param {Array<{kind: string, path: string}>} [options.changes]  The change set so far.
  * @param {number} [options.attempt]                1 on the first try, 2 on a retry.
  * @param {string} [options.previousFailure]        Why the first attempt did not land.
+ * @param {string} [options.detail]
+ *   This item's own section of the request, verbatim — present when the checklist was
+ *   read from the request's structure rather than proposed by the model. See below.
+ * @param {string} [options.constraints]
+ *   Rules that hold for every step, kept out of the items that state them.
  * @returns {string}
  */
 function build(options) {
@@ -213,21 +232,55 @@ function build(options) {
 
   blocks.push(`Step ${position} of ${total}: ${item}`);
 
-  // The original request is background, explicitly demoted. Without saying so, a model
-  // handed a 5,000-character spec and one item does the spec.
-  const full = String(options.task || '').trim();
-  if (full) {
-    const task = full.length > MAX_BACKGROUND_CHARS ? `${full.slice(0, MAX_BACKGROUND_CHARS)}…` : full;
+  const detail = String(options.detail || '').trim();
+  if (detail) {
+    // The item's own section, promoted rather than demoted.
+    //
+    // When `core/requestPlan` built the checklist, each item carries the span of the
+    // request it came from — and that span is not background, it *is* the spec for this
+    // step. Handing it over whole is the point of the split: the model gets the three
+    // hundred words about the folder structure instead of the five thousand about the
+    // whole app, and it gets them as an instruction rather than as something it has
+    // been told not to act on.
+    //
+    // The full request is deliberately not included as well. Both would put the thing
+    // this step must ignore back in front of a model whose entire budget is the reason
+    // the request was split.
     blocks.push(
-      `This step is one part of a larger request. The request is below for background only — ` +
-        `do NOT try to satisfy all of it now, only step ${position}.\n---\n${task}\n---`
+      `What this step asks for, in the user's own words:\n---\n` +
+        neutralize(detail, { maxChars: MAX_DETAIL_CHARS }) +
+        `\n---`
+    );
+  } else {
+    // The original request is background, explicitly demoted. Without saying so, a model
+    // handed a 5,000-character spec and one item does the spec.
+    const full = String(options.task || '').trim();
+    if (full) {
+      const task = full.length > MAX_BACKGROUND_CHARS ? `${full.slice(0, MAX_BACKGROUND_CHARS)}…` : full;
+      blocks.push(
+        `This step is one part of a larger request. The request is below for background only — ` +
+          `do NOT try to satisfy all of it now, only step ${position}.\n---\n${task}\n---`
+      );
+    }
+  }
+
+  const constraints = String(options.constraints || '').trim();
+  if (constraints) {
+    // Short, and repeated under every step on purpose: these are the lines the user
+    // wrote that are true of all the work rather than of one piece of it, and the step
+    // that does not see them is the step that reaches for a component library.
+    blocks.push(
+      `These apply to every step, including this one:\n${neutralize(constraints, { maxChars: MAX_CONSTRAINT_CHARS })}`
     );
   }
 
   const prior = renderPriorItems(options.items, position);
   if (prior) blocks.push(prior);
 
-  const files = renderFiles({ item: options.item, changes: options.changes });
+  // The detail is searched for filenames alongside the item text. It is where they
+  // actually are: "Folder Structure" names nothing, and the tree underneath it names
+  // all twelve files the step has to create.
+  const files = renderFiles({ item: `${options.item}\n${detail}`, changes: options.changes });
   if (files) blocks.push(files);
 
   if (attempt > 1) {
@@ -259,4 +312,6 @@ module.exports = {
   MAX_FILES_LISTED,
   MAX_PRIOR_ITEMS,
   MAX_BACKGROUND_CHARS,
+  MAX_DETAIL_CHARS,
+  MAX_CONSTRAINT_CHARS,
 };

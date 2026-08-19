@@ -28,6 +28,8 @@ const fs = require('fs');
 const logger = require('../utils/logger');
 const pathGuard = require('../security/pathGuard');
 const promptRouter = require('../core/promptRouter');
+const requestPlan = require('../core/requestPlan');
+const fileTree = require('../core/fileTree');
 const intentRouter = require('../core/intentRouter');
 const toolRegistry = require('./toolRegistry');
 const contextBuilder = require('../core/contextBuilder');
@@ -39,6 +41,7 @@ const plannerAgent = require('./plannerAgent');
 const completionCheck = require('./completionCheck');
 const earnedHints = require('./earnedHints');
 const stepBrief = require('./stepBrief');
+const dictation = require('./dictation');
 const stepGuard = require('./stepGuard');
 const answerCheck = require('./answerCheck');
 const commonSense = require('../core/commonSense');
@@ -202,6 +205,31 @@ const MIN_STEPS_PER_TODO_ITEM = 3;
  * see partial results than keep waiting.
  */
 const MAX_TODO_ITEMS_WITH_FULL_BUDGET = 4;
+
+/**
+ * How many files one step may be handed to write.
+ *
+ * The benchmark brief's structure section draws twelve, which is the largest real case
+ * seen and the number this is set from. A step naming more than that has almost
+ * certainly matched something that is not a file list.
+ */
+const MAX_DICTATIONS_PER_ITEM = 12;
+
+/** How much of a neighbouring file is read to work out what it exports. */
+const MAX_RELATED_FILE_CHARS = 4000;
+
+/**
+ * Paths a dictation may never target.
+ *
+ * Generated trees and dependency manifests. `package.json` is the important one: it
+ * appears in almost every drawn folder structure, it is written by the scaffolding
+ * command rather than by hand, and a model asked to "write package.json for a Vite
+ * React app with Tailwind" produces a plausible one with the wrong versions and no
+ * scripts — which is exactly what the 0.9.0 baseline recorded `qwen3.5:0.8b` doing,
+ * leaving a project whose `npm run build` did not exist.
+ */
+const UNDICTATABLE =
+  /(?:^|\/)(?:node_modules|dist|build|out|coverage|\.git)\/|(?:^|\/)(?:package(?:-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|\.env(?:\..+)?)$/i;
 
 /** Openers that begin a request for information rather than for work. */
 const QUESTION_OPENERS =
@@ -714,9 +742,11 @@ class AgentSession {
 
       const changeSet = new ChangeSet();
 
-      // A model that can hold a TODO list gets the request split into items and works
-      // through them one at a time. Everything else keeps the previous behaviour.
-      if (mode === 'agent' && this.capability.canPlanTodos) {
+      // A request gets split into items and worked through one at a time when either
+      // the request's own structure says how (any model, no inference — see
+      // `core/requestPlan`) or the model is big enough to be asked. `_runWithTodos`
+      // decides which, and returns null when neither applies.
+      if (mode === 'agent') {
         const todoResult = await this._runWithTodos(task, activeRoute, changeSet, options, emit);
         if (todoResult) {
           await this._recordSession(todoResult);
@@ -912,14 +942,38 @@ class AgentSession {
       return null;
     }
 
-    const planContext = await this._buildContext(task, activeRoute, options.editor);
-    const items = await plannerAgent.planTodos({
-      client: this.client,
-      model: this.model,
-      task,
-      context: planContext,
-      signal: this._controller.signal,
-    });
+    // The request's own structure first, and only then the model.
+    //
+    // Not an optimization — it is the only route open to most of the models this
+    // extension exists for. `planTodos` needs `thinking` and 2B parameters, so below
+    // that threshold there was no list at all and the whole request went into every
+    // prompt. Reading headings and numbered steps needs no inference, so it works at
+    // 0.8B exactly as well as at 70B.
+    //
+    // It is also better where both are available: the items are spans of the user's own
+    // text in the user's own order, and each one carries the section it came from, so
+    // the step that runs it is shown three hundred words about the folder structure
+    // rather than five thousand about the whole app. And it costs no round-trip.
+    const structural = requestPlan.fromRequest(task);
+    /** @type {Array<string | {text: string, detail: string}>} */
+    let items = structural.items;
+    let planSource = 'the request’s own structure';
+
+    if (items.length === 0) {
+      if (!this.capability.canPlanTodos) {
+        logger.debug(`No structure to split on (${structural.reason}) and this model is not asked to plan.`);
+        return null;
+      }
+      const planContext = await this._buildContext(task, activeRoute, options.editor);
+      items = await plannerAgent.planTodos({
+        client: this.client,
+        model: this.model,
+        task,
+        context: planContext,
+        signal: this._controller.signal,
+      });
+      planSource = 'the model';
+    }
 
     // One item is not a list — it is the task. Running it through this path would add
     // a wrapper and an inference call to buy nothing.
@@ -929,6 +983,11 @@ class AgentSession {
     }
 
     const todos = new TodoList(items);
+    // Rules the request states once and means throughout — "no external UI libraries",
+    // "React functional components only". They are not work, so they are not items;
+    // they ride under every step instead. Empty unless the plan came from the structure.
+    const constraints = structural.constraints;
+    logger.info(`Checklist of ${todos.items.length} item(s) from ${planSource}.`);
     // Reachable from `_recover`, which runs inside a loop this method is awaiting and
     // has no other way to reach the checklist. Cleared in the `finally` below so a
     // later turn cannot write into a list that has already been reported.
@@ -997,6 +1056,29 @@ class AgentSession {
       const itemRevisionBefore = changeSet.revision;
       let itemStepCount = 0;
 
+      // Before the loop is asked to decide anything, write the files this step names.
+      //
+      // Only ever files the *request* named, and only on the constrained tier — a Tier
+      // A model orchestrates tools well enough to be left to it, and the whole finding
+      // behind `agent/dictation` is about the tier that does not. See `_dictateFiles`.
+      /** @type {{written: string[], failed: Array<{path: string, reason: string}>, steps: AgentStep[]}} */
+      let dictated = { written: [], failed: [], steps: [] };
+      if (this.capability.tier === 'B' && item.detail) {
+        dictated = await this._dictateFiles({
+          item,
+          constraints,
+          route: activeRoute,
+          changeSet,
+          emit,
+          stepOffset: allSteps.length,
+        });
+        allSteps.push(...dictated.steps);
+        itemStepCount += dictated.steps.length;
+        if (dictated.written.length) {
+          summaries.push(`Wrote ${dictated.written.join(', ')}.`);
+        }
+      }
+
       for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
         if (remainingSteps <= 0 || this._controller.signal.aborted) break;
 
@@ -1019,20 +1101,28 @@ class AgentSession {
         // attempt did write something.
         const attemptRevisionBefore = changeSet.revision;
 
-        const itemTask = this.stepSessions
-          ? stepBrief.build({
-              task,
-              item: item.text,
-              position,
-              total: todos.items.length,
-              items: todos.items,
-              changes: changeSet.list(),
-              attempt,
-              previousFailure: attemptResult ? attemptResult.verdict.detail : '',
-            })
-          : `${task}\n\n${todos.render()}\n\n` +
-            `Right now, do only item ${position}: ${item.text}\n` +
-            'Ignore the other items — they are handled separately. When this one item is complete, reply with "done".';
+        // An item that carries its own section of the request gets the step brief
+        // whether or not the experimental step mode is on, because the alternative
+        // below puts the entire request back into the prompt — which is the exact cost
+        // the split was made to avoid. The experimental flag governs the *retry*, which
+        // is a separate thing and stays where it was.
+        const itemTask =
+          this.stepSessions || item.detail
+            ? stepBrief.build({
+                task,
+                item: item.text,
+                detail: item.detail,
+                constraints,
+                position,
+                total: todos.items.length,
+                items: todos.items,
+                changes: changeSet.list(),
+                attempt,
+                previousFailure: attemptResult ? attemptResult.verdict.detail : '',
+              })
+            : `${task}\n\n${todos.render()}\n\n` +
+              `Right now, do only item ${position}: ${item.text}\n` +
+              'Ignore the other items — they are handled separately. When this one item is complete, reply with "done".';
 
         // The transition itself, at info, because the experimental step mode is the
         // feature most often being evaluated when someone reads this log — and "was it
@@ -1367,6 +1457,161 @@ class AgentSession {
    * @returns {boolean}
    * @private
    */
+  /**
+   * Read a workspace file, or return null.
+   *
+   * Confined by `pathGuard` like every other read. Used to tell a dictation what the
+   * files around it export, and to show it what it is rewriting.
+   *
+   * @param {string} relativePath
+   * @returns {string | null}
+   * @private
+   */
+  _readInWorkspace(relativePath) {
+    if (!this.workspaceRoot) return null;
+    try {
+      const resolved = pathGuard.resolvePath(this.workspaceRoot, relativePath);
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- confined above
+      const source = fs.readFileSync(resolved.absolute, 'utf8');
+      return source.length > MAX_RELATED_FILE_CHARS ? source.slice(0, MAX_RELATED_FILE_CHARS) : source;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The files this item is responsible for, and whether each may be written.
+   *
+   * Two questions, and the request answers both. *Which* files: the tree the user drew,
+   * read by `core/fileTree`, or failing that the paths the item's own text names.
+   * *Whether*: a file that does not exist yet is this step's to create, and a file that
+   * already exists is left alone **unless the user annotated it** in their tree.
+   *
+   * That last rule is doing real work. The benchmark brief's tree comments `App.jsx`
+   * with "Composes layout + components" and leaves `package.json` and `vite.config.js`
+   * bare — because the first is a file the author expects to be authored and the others
+   * are what `npm create vite` produces. Rewriting `App.jsx`, which the scaffold left
+   * holding its counter demo, is the single thing that most needed doing in the 0.7.0
+   * and 0.9.0 baseline runs. Rewriting `package.json` would destroy the project.
+   *
+   * @param {import('./todoList').TodoItem} item
+   * @returns {Array<{path: string, purpose: string, exists: boolean}>}
+   * @private
+   */
+  _filesForItem(item) {
+    const detail = String(item.detail || '');
+    if (!detail) return [];
+
+    const named = fileTree.hasTree(detail)
+      ? fileTree.files(detail)
+      : stepBrief.namedFiles(`${item.text}\n${detail}`).map((path) => ({ path, purpose: '' }));
+
+    /** @type {Array<{path: string, purpose: string, exists: boolean}>} */
+    const targets = [];
+    const seen = new Set();
+    for (const entry of named) {
+      const target = String(entry.path || '').replace(/^\.\//, '');
+      if (!target || seen.has(target)) continue;
+      seen.add(target);
+      if (UNDICTATABLE.test(target)) continue;
+      if (!/\.[a-z][\w]{0,7}$/i.test(target)) continue;
+
+      const exists = this._existsInWorkspace(target);
+      // An existing file with nothing said about it is somebody else's — the
+      // scaffold's, or the user's. Only an annotated one may be replaced.
+      if (exists && !entry.purpose) continue;
+      targets.push({ path: target, purpose: String(entry.purpose || ''), exists });
+    }
+    return targets;
+  }
+
+  /**
+   * Write the files this item names by asking the model for their contents.
+   *
+   * See `agent/dictation` for why this exists: below about 2B the JSON action protocol
+   * is the bottleneck rather than the coding, and `llama3.2:1b` answered eleven turns
+   * out of eleven with an unparseable reply while being perfectly able to write the
+   * component when simply asked for it.
+   *
+   * Every write goes through `_execute`, so the permission gate, the path guard, the
+   * change set, the file history and the audit log all see it exactly as they see a
+   * write the model chose for itself. The only difference is who picked the path, and
+   * here that is the user's own request.
+   *
+   * @param {object} options
+   * @param {import('./todoList').TodoItem} options.item
+   * @param {string} options.constraints
+   * @param {import('../core/promptRouter').Route} options.route
+   * @param {ChangeSet} options.changeSet
+   * @param {(event: object) => void} options.emit
+   * @param {number} options.stepOffset
+   * @returns {Promise<{written: string[], failed: Array<{path: string, reason: string}>, steps: AgentStep[]}>}
+   * @private
+   */
+  async _dictateFiles(options) {
+    const { item, constraints, route, changeSet, emit } = options;
+    /** @type {{written: string[], failed: Array<{path: string, reason: string}>, steps: AgentStep[]}} */
+    const outcome = { written: [], failed: [], steps: [] };
+
+    if (!route.allowedActions.has('write_file')) return outcome;
+
+    const targets = this._filesForItem(item).slice(0, MAX_DICTATIONS_PER_ITEM);
+    if (targets.length === 0) return outcome;
+
+    logger.info(`Dictating ${targets.length} file(s) named by step "${item.text.slice(0, 60)}".`);
+
+    for (const target of targets) {
+      if (this._controller.signal.aborted) break;
+
+      // What the neighbours export, read off the disk rather than remembered. This is
+      // what makes `App.jsx` import `TodoList` by the name `TodoList.jsx` actually
+      // exported — the failure that cost the 0.7.0 session an hour of pasted console
+      // errors.
+      const related = [];
+      for (const change of changeSet.list()) {
+        if (change.kind === 'delete' || change.path === target.path) continue;
+        const source = this._readInWorkspace(change.path);
+        if (source) related.push({ path: change.path, source });
+      }
+
+      const current = target.exists ? this._readInWorkspace(target.path) : null;
+      const result = await dictation.dictate({
+        client: this.client,
+        model: this.model,
+        path: target.path,
+        purpose: target.purpose,
+        spec: current
+          ? `${item.detail}\n\nThis file already exists. Its current contents are below; ` +
+            `replace them with what this step asks for, keeping anything still needed.\n---\n${current}\n---`
+          : item.detail,
+        constraints,
+        related: related.slice(-dictation.MAX_RELATED),
+        signal: this._controller.signal,
+      });
+
+      if (!result.ok) {
+        outcome.failed.push({ path: target.path, reason: result.reason });
+        continue;
+      }
+
+      const action = {
+        action: 'write_file',
+        path: target.path,
+        code: result.code,
+        thought: target.purpose || `write ${target.path}, named by this step`,
+      };
+      emit({ type: 'action', step: options.stepOffset + outcome.steps.length + 1, action });
+      const executed = await this._execute(action, route, changeSet);
+      emit({ type: 'observation', step: options.stepOffset + outcome.steps.length + 1, result: executed });
+      outcome.steps.push({ action, result: executed });
+
+      if (executed.ok) outcome.written.push(target.path);
+      else outcome.failed.push({ path: target.path, reason: executed.observation });
+    }
+
+    return outcome;
+  }
+
   _existsInWorkspace(relativePath) {
     if (!this.workspaceRoot) return false;
     try {

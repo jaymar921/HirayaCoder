@@ -53,13 +53,13 @@ const MIN_ITEMS = 2;
 /**
  * More than this and a small model spends its session on bookkeeping.
  *
- * Higher than `todoList.MAX_ITEMS` (6) on purpose. That ceiling protects a model
- * *holding* a list in its head; here the list is held on disk and the model sees one
- * item at a time, so the constraint is turn cost rather than working memory. Eight
- * matches the largest brief this was built against, where every section is genuinely a
- * separate piece of work.
+ * Deliberately the same number as `todoList.MAX_ITEMS`. `TodoList` truncates past its
+ * own cap, so a plan built to a larger one would have its tail silently dropped — and
+ * the tail of a brief is where "and write the README" lives. Matching the two means the
+ * overflow is *folded* into the last item by the code below, where it is still asked
+ * for, rather than discarded by a slice two files away.
  */
-const MAX_ITEMS = 8;
+const MAX_ITEMS = 6;
 
 /** An item's own text, before the detail behind it. */
 const MAX_ITEM_CHARS = 150;
