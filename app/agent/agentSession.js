@@ -244,6 +244,16 @@ const MAX_PACKAGES_TO_INSTALL = 8;
 const MODULE_FILE = /\.(?:jsx?|tsx?|mjs|cjs|vue|svelte)$/i;
 
 /**
+ * Files whose correct contents are nothing at all.
+ *
+ * A Python package marker, and the two conventional "keep this directory" files. Asking
+ * a model to write one is asking a question with no good answer — and the answer it
+ * gives, an empty code block, is one `dictation` is right to refuse from a model that
+ * was asked for a component.
+ */
+const MARKER_FILE = /(?:^|\/)(?:__init__\.py|\.gitkeep|\.keep|py\.typed)$/i;
+
+/**
  * Paths a dictation may never target.
  *
  * Generated trees and dependency manifests. `package.json` is the important one: it
@@ -1834,6 +1844,30 @@ class AgentSession {
         if (change.kind === 'delete' || change.path === target.path) continue;
         const source = this._readInWorkspace(change.path);
         if (source) related.push({ path: change.path, source });
+      }
+
+      // A marker file is made, not written.
+      //
+      // `__init__.py` is usually empty, and an empty reply is one `dictation` refuses —
+      // correctly, since an empty code block from a model asked for a component means
+      // it gave up. So every package marker in the Python sweeps came back "the code
+      // block was empty" or "cut off", and the package did not import. Asking a model
+      // for a file whose correct contents are nothing is the wrong question; the
+      // extension can simply create it.
+      if (MARKER_FILE.test(target.path) && !target.exists) {
+        const action = {
+          action: 'write_file',
+          path: target.path,
+          code: '',
+          thought: `${target.path} marks a package; it needs no contents`,
+        };
+        emit({ type: 'action', step: options.stepOffset + outcome.steps.length + 1, action });
+        const executed = await this._execute(action, route, changeSet);
+        emit({ type: 'observation', step: options.stepOffset + outcome.steps.length + 1, result: executed });
+        outcome.steps.push({ action, result: executed });
+        if (executed.ok) outcome.written.push(target.path);
+        else outcome.failed.push({ path: target.path, reason: executed.observation });
+        continue;
       }
 
       // What the request asks *this file* to do, gathered from wherever it was written.

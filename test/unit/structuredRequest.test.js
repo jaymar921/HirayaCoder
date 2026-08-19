@@ -490,6 +490,54 @@ describe('a structured request, split and dictated', () => {
     );
   });
 
+  it('creates a package marker rather than asking a model to write one', async () => {
+    // `__init__.py` is usually empty, and an empty reply is one dictation refuses —
+    // correctly, since an empty code block from a model asked for a component means it
+    // gave up. So every package marker in the Python sweeps came back "the code block
+    // was empty" or "cut off", and the package did not import.
+    const request = [
+      'Build a small importer in Python.',
+      '',
+      '## Structure',
+      '',
+      'Use this layout and keep the package importable:',
+      '',
+      '```',
+      'feed-app/',
+      '├── feed/',
+      '│   ├── __init__.py',
+      '│   └── reader.py      # Reads a feed file and yields entries',
+      '└── README.md',
+      '```',
+      '',
+      '## Behaviour',
+      '',
+      '- Read the feed lazily, yielding one entry at a time, so a file larger than memory',
+      '  is still processable on a laptop.',
+      '- Skip a malformed entry with a warning rather than stopping, because one bad line',
+      '  in a month of data should not cost the whole month.',
+      '',
+      '## Reporting',
+      '',
+      '- Count the entries read and the entries skipped, and print both at the end, so a',
+      '  run that quietly dropped half its input is visible rather than merely finished.',
+      '- Write the warnings to stderr and the entries to stdout, so the two can be',
+      '  separated by a shell without any flag being needed.',
+    ].join('\n');
+
+    const client = dictatingClient();
+    await makeSession(client).run(request, { mode: 'agent' });
+
+    const marker = path.join(root, 'feed-app', 'feed', '__init__.py');
+    assert.ok(fs.existsSync(marker), 'the package marker was never created');
+    assert.strictEqual(fs.readFileSync(marker, 'utf8'), '', 'a marker file should be empty');
+    assert.strictEqual(
+      client.dictatedPaths.some((target) => target.endsWith('__init__.py')),
+      false,
+      'a marker file should not be asked of the model at all'
+    );
+  });
+
   it('does not try to write a PNG', async () => {
     // The benchmark brief's README section carries the placeholder
     // `![screenshot](./screenshot.png)` — a real path with a real extension, and nothing

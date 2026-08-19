@@ -158,8 +158,12 @@ function extractCode(reply) {
  * @param {string} source
  * @returns {{default: string, named: string[]}}
  */
-function exportsOf(source) {
+function exportsOf(source, filePath) {
   const text = String(source || '');
+  const language = languageOf(filePath);
+  if (language === 'python') return pythonExports(text);
+  if (language === 'jvm') return jvmExports(text);
+
   /** @type {Set<string>} */
   const named = new Set();
 
@@ -186,6 +190,79 @@ function exportsOf(source) {
 }
 
 /**
+ * Which family of "what does this file offer" applies.
+ *
+ * @param {string} [filePath]
+ * @returns {'python' | 'jvm' | 'js'}
+ */
+function languageOf(filePath) {
+  const name = String(filePath || '');
+  if (/\.pyi?$/i.test(name)) return 'python';
+  if (/\.(?:java|kt|kts|groovy|scala)$/i.test(name)) return 'jvm';
+  return 'js';
+}
+
+/**
+ * What a Python module offers: its top-level classes and functions.
+ *
+ * Python has no export statement, so the JavaScript reader found nothing in one and
+ * reported "no exports found" — for every file, in every Python run. That is worse than
+ * silence: it is a paragraph of prompt asserting that the module the next file has to
+ * import offers nothing at all.
+ *
+ * Names beginning with an underscore are private by convention and left out. An
+ * explicit `__all__` wins outright, because a module that publishes one has said what it
+ * offers more precisely than any scan can.
+ *
+ * @param {string} text
+ * @returns {{default: string, named: string[]}}
+ */
+function pythonExports(text) {
+  const declared = /^__all__\s*=\s*[[(]([^\])]*)[\])]/m.exec(text);
+  if (declared) {
+    const names = [...declared[1].matchAll(/['"]([A-Za-z_]\w*)['"]/g)].map((match) => match[1]);
+    if (names.length) return { default: '', named: names };
+  }
+
+  /** @type {Set<string>} */
+  const named = new Set();
+  // Top level only — the leading anchor with no indentation is what keeps a method
+  // inside a class from being read as a module-level function.
+  for (const match of text.matchAll(/^(?:class|(?:async\s+)?def)\s+([A-Za-z_]\w*)/gm)) {
+    if (!match[1].startsWith('_')) named.add(match[1]);
+  }
+  return { default: '', named: [...named] };
+}
+
+/**
+ * What a Java or Kotlin file offers: its public types.
+ *
+ * One file, one public type is the rule the language enforces, so this is usually a
+ * single name — and it is the name the next file has to `import`.
+ *
+ * @param {string} text
+ * @returns {{default: string, named: string[]}}
+ */
+function jvmExports(text) {
+  /** @type {Set<string>} */
+  const named = new Set();
+  for (const match of text.matchAll(
+    /^\s*public\s+(?:final\s+|abstract\s+|sealed\s+|static\s+)*(?:class|interface|enum|record|@interface)\s+([A-Za-z_]\w*)/gm
+  )) {
+    named.add(match[1]);
+  }
+  // A package-private type is still importable from inside its own package, which is
+  // exactly where the rest of this project lives.
+  if (named.size === 0) {
+    for (const match of text.matchAll(/^\s*(?:final\s+|abstract\s+)*(?:class|interface|enum|record)\s+([A-Za-z_]\w*)/gm)) {
+      named.add(match[1]);
+    }
+  }
+  const packageName = /^\s*package\s+([\w.]+)\s*;/m.exec(text);
+  return { default: packageName ? packageName[1] : '', named: [...named] };
+}
+
+/**
  * The import contract for files that already exist, as lines for the prompt.
  *
  * @param {Array<{path: string, source: string}>} files
@@ -194,15 +271,26 @@ function exportsOf(source) {
 function renderContracts(files) {
   const lines = [];
   for (const file of (files || []).slice(-MAX_RELATED)) {
-    const found = exportsOf(file.source);
+    const language = languageOf(file.path);
+    const found = exportsOf(file.source, file.path);
+    const names = found.named.map((name) => `\`${name}\``).join(', ');
     const parts = [];
-    if (found.default) parts.push(`default export \`${found.default}\``);
-    if (found.named.length) parts.push(`named exports ${found.named.map((n) => `\`${n}\``).join(', ')}`);
-    lines.push(`- ${file.path} — ${parts.length ? parts.join('; ') : 'no exports found'}`);
+
+    if (language === 'python') {
+      if (names) parts.push(`defines ${names}`);
+    } else if (language === 'jvm') {
+      if (found.default) parts.push(`package \`${found.default}\``);
+      if (names) parts.push(`declares ${names}`);
+    } else {
+      if (found.default) parts.push(`default export \`${found.default}\``);
+      if (names) parts.push(`named exports ${names}`);
+    }
+
+    lines.push(`- ${file.path} — ${parts.length ? parts.join('; ') : 'nothing importable found'}`);
   }
   if (!lines.length) return '';
   return (
-    'Files that already exist in this project, and exactly what each one exports. ' +
+    'Files that already exist in this project, and exactly what each one offers. ' +
     'Import from them using these names — do not guess, and do not rewrite them:\n' +
     lines.join('\n')
   );

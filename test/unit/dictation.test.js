@@ -105,7 +105,71 @@ describe('dictation.exportsOf', () => {
   });
 });
 
+describe('dictation.exportsOf — languages that have no export statement', () => {
+  // Measured on the POS sweeps: every Python and Java file reported "no exports found",
+  // because the reader only understood JavaScript. That is worse than silence — it is a
+  // paragraph of prompt asserting that the module the next file has to import offers
+  // nothing at all.
+  const PYTHON = [
+    'import json',
+    '',
+    'class FileProductRepository(ProductRepository):',
+    '    def __init__(self): pass',
+    '    def add(self, product): pass',
+    '',
+    'def build_default(): pass',
+    '',
+    'def _internal(): pass',
+  ].join('\n');
+
+  it('reads a Python module’s top-level classes and functions', () => {
+    const found = dictation.exportsOf(PYTHON, 'pos_app/repository/file_product_repository.py');
+    assert.deepStrictEqual(found.named.sort(), ['FileProductRepository', 'build_default']);
+  });
+
+  it('leaves out the underscore-private names, and the methods inside a class', () => {
+    const found = dictation.exportsOf(PYTHON, 'a/b.py');
+    assert.strictEqual(found.named.includes('_internal'), false);
+    assert.strictEqual(found.named.includes('add'), false, 'a method is not a module-level name');
+  });
+
+  it('believes an explicit __all__ over its own scan', () => {
+    const source = '__all__ = ["Product"]\n\nclass Product: pass\n\ndef helper(): pass\n';
+    assert.deepStrictEqual(dictation.exportsOf(source, 'm.py').named, ['Product']);
+  });
+
+  it('reads a Java file’s public type and its package', () => {
+    const source = 'package com.pos.app.service;\n\npublic class ProductService {\n  public void add() {}\n}\n';
+    const found = dictation.exportsOf(source, 'src/main/java/com/pos/app/service/ProductService.java');
+    assert.deepStrictEqual(found.named, ['ProductService']);
+    assert.strictEqual(found.default, 'com.pos.app.service');
+  });
+
+  it('still reads a package-private Java type, which its own package can import', () => {
+    const found = dictation.exportsOf('package a.b;\n\nclass Helper {}\n', 'Helper.java');
+    assert.deepStrictEqual(found.named, ['Helper']);
+  });
+
+  it('leaves JavaScript to the JavaScript reader', () => {
+    assert.strictEqual(dictation.exportsOf('export default function App() {}', 'src/App.jsx').default, 'App');
+  });
+});
+
 describe('dictation.renderContracts', () => {
+  it('words the contract the way each language imports', () => {
+    const rendered = dictation.renderContracts([
+      { path: 'pos_app/service/product_service.py', source: 'class ProductService:\n    pass\n' },
+      { path: 'src/main/java/com/pos/app/Main.java', source: 'package com.pos.app;\npublic class Main {}\n' },
+      { path: 'src/TodoList.jsx', source: 'export default function TodoList() {}' },
+    ]);
+    assert.match(rendered, /product_service\.py — defines `ProductService`/);
+    assert.match(rendered, /Main\.java — package `com\.pos\.app`; declares `Main`/);
+    assert.match(rendered, /TodoList\.jsx — default export `TodoList`/);
+    assert.strictEqual(/no exports found/.test(rendered), false);
+  });
+});
+
+describe('dictation.renderContracts (JavaScript)', () => {
   it('states what each existing file offers, so the import is not a guess', () => {
     // The 0.7.0 session lost an hour to four missing default exports and two prop-name
     // mismatches, every one of them found only when the user pasted a console error.
