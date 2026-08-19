@@ -507,6 +507,9 @@ async function dictate(options) {
   const prompt = buildPrompt(options);
 
   let raw = '';
+  /** Ollama's own account of why generation ended, and how much it wrote. */
+  let stopped = '';
+  let produced = 0;
   try {
     const response = await options.client.chat(
       {
@@ -525,13 +528,20 @@ async function dictate(options) {
       { timeoutMs: TIMEOUT_MS, signal: options.signal }
     );
     raw = (response && response.message && response.message.content) || '';
+    // Kept so a rejection can say whether the model ran out of room or simply stopped.
+    // Two theories about truncation were tested and discarded before this went in; the
+    // run should report the answer rather than have it guessed at from the outside.
+    stopped = String((response && response.done_reason) || '');
+    produced = Number((response && response.eval_count) || 0);
   } catch (err) {
     const reason = /** @type {Error} */ (err).message || 'the model call failed';
     logger.warn(`Dictation of ${options.path} failed: ${reason}`);
     return { ok: false, code: '', reason, durationMs: Date.now() - started };
   }
 
-  const { code, reason } = extractCode(raw);
+  const { code, reason: why } = extractCode(raw);
+  // A rejection carries what the model was doing when it stopped.
+  const reason = why && stopped ? why + ' (' + stopped + ', ' + produced + ' tokens)' : why;
   const durationMs = Date.now() - started;
   if (!code) {
     logger.info(`Dictation of ${options.path} produced nothing usable: ${reason}.`);

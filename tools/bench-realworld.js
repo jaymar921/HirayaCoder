@@ -418,11 +418,26 @@ function runPythonGates(brief, root, scriptTimeoutMs) {
   // `mainloop()` under an `if __name__ == "__main__"` guard, so importing it as a
   // module runs the definitions and not the loop — and a project that cannot even be
   // imported is one the brief's own step 3 would have caught.
-  const imported = exec(
-    [python, '-c', 'import importlib.util,sys; spec=importlib.util.spec_from_file_location("pos_main","main.py"); m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m); print("imported")'],
-    appPath,
-    budget
+  // Written to a file rather than passed with `-c`.
+  //
+  // `exec` runs through `cmd` on Windows, which mangled the one-liner into
+  // `import` on its own — and the gate then reported *"main.py could not be
+  // imported"* with a `SyntaxError` from the harness's own command. A gate that fails
+  // for its own reasons is worse than no gate, because the message names the model's
+  // file.
+  const checkPath = path.join(appPath, '.hiraya-import-check.py');
+  fs.writeFileSync(
+    checkPath,
+    [
+      'import importlib.util',
+      'spec = importlib.util.spec_from_file_location("pos_main", "main.py")',
+      'module = importlib.util.module_from_spec(spec)',
+      'spec.loader.exec_module(module)',
+      'print("imported")',
+    ].join('\n')
   );
+  const imported = exec([python, '.hiraya-import-check.py'], appPath, budget);
+  fs.rmSync(checkPath, { force: true });
   gates.build = {
     ok: imported.ok,
     detail: imported.ok ? 'main.py imports cleanly' : 'main.py could not be imported',
