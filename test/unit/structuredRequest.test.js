@@ -252,6 +252,39 @@ describe('a structured request, split and dictated', () => {
     assert.strictEqual(fs.existsSync(path.join(root, 'e.g')), false);
   });
 
+  it('does not try to write a PNG', async () => {
+    // The benchmark brief's README section carries the placeholder
+    // `![screenshot](./screenshot.png)` — a real path with a real extension, and nothing
+    // a model could ever produce. A fenced code block written into it is junk with a
+    // misleading name.
+    const request = [
+      'Document the notes app.',
+      '',
+      '## README',
+      '',
+      'Write a README.md at the repository root. It must include a title, a feature list,',
+      'a screenshot placeholder `![screenshot](./screenshot.png)`, and setup instructions',
+      'covering install, dev and build. Keep it short enough that somebody actually reads',
+      'it before running anything.',
+      '',
+      '## Icons',
+      '',
+      'Add an `icon.svg` in the public folder, a simple monochrome mark that reads at 16px',
+      'as well as at 128px. Inline paths only, no external references, no embedded raster',
+      'images inside it.',
+    ].join('\n');
+
+    const client = dictatingClient();
+    await makeSession(client).run(request, { mode: 'agent' });
+
+    assert.strictEqual(
+      client.dictatedPaths.some((target) => /\.png$/i.test(target)),
+      false,
+      'a PNG must never be dictated'
+    );
+    assert.strictEqual(fs.existsSync(path.join(root, 'screenshot.png')), false);
+  });
+
   it('does not split a request with no structure, and dictates nothing', async () => {
     const client = dictatingClient();
     const result = await makeSession(client).run('Fix the typo in the heading.', { mode: 'agent' });

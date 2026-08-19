@@ -75,10 +75,20 @@ const MAX_RELATED = 8;
 /**
  * How much project background a dictation carries.
  *
- * Short on purpose — see `buildPrompt`. Background competes with the instruction, and
- * the instruction is one filename.
+ * Was 700, which was right when the spec was *only* background — the folder tree and
+ * the prose around it, competing with the instruction. It now leads with the
+ * requirements this particular file has to satisfy, gathered by `core/fileSpec`, and
+ * those are not background: they are the difference between a row component that
+ * handles Escape and one that does not.
+ *
+ * The order the caller assembles it in matters, because the cut is from the tail:
+ * requirements first, then the surrounding prose, then the current contents of a file
+ * being rewritten. Whatever gets trimmed, the requirements survive.
  */
-const MAX_SPEC_CHARS = 700;
+const MAX_SPEC_CHARS = 1200;
+
+/** How much per-file requirement text rides along. It leads the prompt, so it is paid first. */
+const MAX_REQUIREMENT_CHARS = 1000;
 
 /**
  * Fenced code blocks, with or without a language tag.
@@ -208,6 +218,8 @@ function renderContracts(files) {
  * @param {object} options
  * @param {string} options.path
  * @param {string} [options.purpose]      What the request says this file is for.
+ * @param {string} [options.requirements] What the request asks this file to do, gathered
+ *   from every section that mentions it. See `core/fileSpec`.
  * @param {string} [options.spec]         The section of the request this file belongs to.
  * @param {string} [options.constraints]  Rules that hold across the whole request.
  * @param {Array<{path: string, source: string}>} [options.related]
@@ -219,6 +231,16 @@ function buildPrompt(options) {
   blocks.push(`Write the complete contents of the file ${options.path}.`);
 
   if (options.purpose) blocks.push(`What this file is for: ${options.purpose}`);
+
+  // What the request asks *this file* to do, gathered from wherever in the request it
+  // was written — see `core/fileSpec`. Stated before the background and never labelled
+  // as background, because it is the specification: a row component told about Escape
+  // and blur is a different component from one that was not.
+  if (options.requirements) {
+    blocks.push(
+      `What this file has to do, taken from the request:\n${String(options.requirements).slice(0, MAX_REQUIREMENT_CHARS)}`
+    );
+  }
 
   // The spec is capped hard, and it is capped for a reason worth stating.
   //
@@ -397,4 +419,5 @@ module.exports = {
   NUM_PREDICT,
   MAX_RELATED,
   MAX_SPEC_CHARS,
+  MAX_REQUIREMENT_CHARS,
 };

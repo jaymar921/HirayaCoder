@@ -30,6 +30,7 @@ const pathGuard = require('../security/pathGuard');
 const promptRouter = require('../core/promptRouter');
 const requestPlan = require('../core/requestPlan');
 const fileTree = require('../core/fileTree');
+const fileSpec = require('../core/fileSpec');
 const intentRouter = require('../core/intentRouter');
 const toolRegistry = require('./toolRegistry');
 const contextBuilder = require('../core/contextBuilder');
@@ -235,6 +236,20 @@ const UNDICTATABLE =
 const MAX_TARGET_PATH_CHARS = 400;
 
 /**
+ * File types a model cannot write, whatever it replies with.
+ *
+ * `.svg` is deliberately absent — it is text, a model can write one, and a request that
+ * asks for an icon means it.
+ */
+const BINARY_EXTENSIONS = new Set([
+  'png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp', 'ico', 'icns',
+  'pdf', 'zip', 'gz', 'tar', 'jar', 'war', 'class', 'exe', 'dll', 'so', 'dylib', 'bin', 'wasm',
+  'woff', 'woff2', 'ttf', 'otf', 'eot',
+  'mp3', 'mp4', 'wav', 'ogg', 'webm', 'mov', 'avi',
+  'db', 'sqlite', 'lock',
+]);
+
+/**
  * Is this a filename, or a piece of prose that looks like one?
  *
  * The rule: a stem of at least two word characters, and an extension of two to eight
@@ -283,6 +298,11 @@ function isDictatableFilename(target) {
   const extension = name.slice(dot + 1);
   if (extension.length < 2 || extension.length > 8) return false;
   if (!/^[a-z][a-z0-9]*$/i.test(extension)) return false;
+  // A model cannot write a PNG, and a fenced code block written into one is junk with a
+  // misleading name. Found while tracing the README section of the benchmark brief,
+  // which contains the placeholder `![screenshot](./screenshot.png)` — a real path, a
+  // real extension, and nothing a dictation could ever produce.
+  if (BINARY_EXTENSIONS.has(extension.toLowerCase())) return false;
 
   let wordChars = 0;
   for (const character of stem) {
@@ -1048,6 +1068,8 @@ class AgentSession {
     // "React functional components only". They are not work, so they are not items;
     // they ride under every step instead. Empty unless the plan came from the structure.
     const constraints = structural.constraints;
+    // Behaviour the request states in sections that name no files — see core/requestPlan.
+    const requirements = structural.requirements || '';
     logger.info(`Checklist of ${todos.items.length} item(s) from ${planSource}.`);
     // Reachable from `_recover`, which runs inside a loop this method is awaiting and
     // has no other way to reach the checklist. Cleared in the `finally` below so a
@@ -1128,6 +1150,7 @@ class AgentSession {
         dictated = await this._dictateFiles({
           item,
           constraints,
+          requirements,
           route: activeRoute,
           changeSet,
           emit,
@@ -1619,6 +1642,7 @@ class AgentSession {
    * @param {object} options
    * @param {import('./todoList').TodoItem} options.item
    * @param {string} options.constraints
+   * @param {string} options.requirements
    * @param {import('../core/promptRouter').Route} options.route
    * @param {ChangeSet} options.changeSet
    * @param {(event: object) => void} options.emit
@@ -1627,7 +1651,7 @@ class AgentSession {
    * @private
    */
   async _dictateFiles(options) {
-    const { item, constraints, route, changeSet, emit } = options;
+    const { item, constraints, requirements, route, changeSet, emit } = options;
     /** @type {{written: string[], failed: Array<{path: string, reason: string}>, steps: AgentStep[]}} */
     const outcome = { written: [], failed: [], steps: [] };
 
@@ -1661,11 +1685,32 @@ class AgentSession {
         if (source) related.push({ path: change.path, source });
       }
 
+      // What the request asks *this file* to do, gathered from wherever it was written.
+      //
+      // The step that writes `TodoItem.jsx` lives in the folder-structure section, which
+      // specifies no behaviour at all; the behaviour is three sections away, under
+      // *Features*, which names no files. Without this the model writing the row that
+      // owns toggle, edit and delete is never shown the words "Escape", "blur" or
+      // "double-click" — every one of which the benchmark grades. See `core/fileSpec`.
+      const relevant = fileSpec.forFile({
+        path: target.path,
+        purpose: target.purpose,
+        requirements,
+      });
+      if (relevant.matched > 0) {
+        logger.debug(`${target.path}: ${relevant.matched} of ${relevant.considered} requirement(s) apply.`);
+      }
+
       const current = target.exists ? this._readInWorkspace(target.path) : null;
-      const spec = current
-        ? `${background}\n\nThis file already exists. Its current contents are below; ` +
-          `replace them with what this step asks for, keeping anything still needed.\n---\n${current}\n---`
-        : background;
+      const spec = [
+        background,
+        current
+          ? 'This file already exists. Its current contents are below; replace them with what ' +
+            `this step asks for, keeping anything still needed.\n---\n${current}\n---`
+          : '',
+      ]
+        .filter(Boolean)
+        .join('\n\n');
 
       // One retry, with the reason the first reply was rejected.
       //
@@ -1681,6 +1726,7 @@ class AgentSession {
           model: this.model,
           path: target.path,
           purpose: target.purpose,
+          requirements: relevant.text,
           spec,
           constraints,
           related: related.slice(-dictation.MAX_RELATED),

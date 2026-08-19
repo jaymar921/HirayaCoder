@@ -35,6 +35,7 @@
  */
 
 const logger = require('../utils/logger');
+const fileTree = require('./fileTree');
 
 /**
  * Below this, a request is one thing however many bullets it has.
@@ -77,12 +78,16 @@ const MAX_ITEM_CHARS = 150;
 const IMPERATIVE = new RegExp(
   '^(?:' +
     [
-      'add', 'build', 'change', 'check', 'confirm', 'configure', 'create', 'delete', 'design',
-      'document', 'enforce', 'ensure', 'export', 'fix', 'generate', 'give', 'implement', 'include',
-      'initialise', 'initialize', 'install', 'keep', 'make', 'move', 'must', 'name', 'open',
-      'persist', 'provide', 'refactor', 'remove', 'rename', 'render', 'replace', 'report', 'run',
-      'scaffold', 'set', 'show', 'split', 'start', 'store', 'style', 'summarise', 'summarize',
-      'support', 'test', 'update', 'use', 'verify', 'wire', 'write',
+      'add', 'allow', 'apply', 'build', 'catch', 'change', 'check', 'clear', 'compile', 'confirm',
+      'configure', 'connect', 'create', 'define', 'delete', 'design', 'display', 'document',
+      'edit', 'enforce', 'ensure', 'expose', 'export', 'extend', 'filter', 'fix', 'generate',
+      'give', 'handle', 'highlight', 'implement', 'include', 'initialise', 'initialize', 'install',
+      'keep', 'list', 'load', 'make', 'modify', 'move', 'must', 'name', 'open', 'package',
+      'persist', 'prevent', 'print', 'provide', 'read', 'refactor', 'reject', 'remove', 'rename',
+      'render', 'replace', 'report', 'require', 'reset', 'return', 'run', 'save', 'scaffold',
+      'search', 'set', 'show', 'sort', 'split', 'start', 'store', 'style', 'summarise', 'summarize',
+      'support', 'test', 'throw', 'track', 'update', 'use', 'validate', 'verify', 'view', 'wire',
+      'wrap', 'write',
     ].join('|') +
     ')\\b',
   'i'
@@ -97,6 +102,31 @@ const IMPERATIVE = new RegExp(
  * from files changed. The summary is what the run ends with anyway.
  */
 const REPORTING_HEADING = /^(?:output|summary|summarise|summarize|report(?:ing)?|deliverables?|when done)\b/i;
+
+/** One filename. Linear, and counted rather than repeated inside the pattern. */
+const FILENAME_TOKEN = /[\w-]+\.[a-z]{2,4}\b/gi;
+
+/**
+ * Does this section point at particular files, rather than describe behaviour?
+ *
+ * Two filenames is the bar. One is a passing mention — "persist it to localStorage", "do
+ * not dump everything into App.jsx" — while a section listing several is telling you
+ * where the work goes.
+ *
+ * Counted in a loop rather than written as a repeated group in the pattern, because that
+ * shape is a nested quantifier and this release has already paid for one of those.
+ *
+ * @param {string} text
+ * @returns {boolean}
+ */
+function namesFilesIn(text) {
+  let found = 0;
+  for (const match of String(text || '').matchAll(FILENAME_TOKEN)) {
+    if (match) found += 1;
+    if (found >= 2) return true;
+  }
+  return false;
+}
 
 /** Leading list markers, heading hashes, numbering and emphasis, stripped for a title. */
 function cleanTitle(text) {
@@ -136,24 +166,34 @@ function sectionsByHeading(lines) {
     .map((match) => match[1].length);
   if (levels.length < MIN_ITEMS) return null;
 
-  const cut = Math.min(...levels);
-  const marker = new RegExp('^#{' + cut + '}\\s+\\S');
+  // Shallowest first, then deeper until a level actually divides the document.
+  //
+  // Taking the shallowest and stopping there was wrong, and both prompts added after
+  // the first one found it: a document that opens with a single `#` title and then uses
+  // `##` for its sections has exactly one level-1 section — the whole file — so the
+  // split failed, fell through to the numbered-step reader, and cut the request into its
+  // *feature list items* instead of its sections. A title is not a section.
+  const present = [...new Set(levels)].sort((a, b) => a - b);
+  for (const cut of present) {
+    const marker = new RegExp('^#{' + cut + '}\\s+\\S');
 
-  /** @type {Array<{title: string, body: string[]}>} */
-  const sections = [];
-  let current = null;
-  for (const line of lines) {
-    if (marker.test(line)) {
-      current = { title: cleanTitle(line), body: [] };
-      sections.push(current);
-      continue;
+    /** @type {Array<{title: string, body: string[]}>} */
+    const sections = [];
+    let current = null;
+    for (const line of lines) {
+      if (marker.test(line)) {
+        current = { title: cleanTitle(line), body: [] };
+        sections.push(current);
+        continue;
+      }
+      // Anything before the first heading is a preamble — the "you are an autonomous
+      // coding agent, do not stop until it builds" opening. It is framing for the whole
+      // request, so it is not an item and it is not attached to the first one either.
+      if (current) current.body.push(line);
     }
-    // Anything before the first heading is a preamble — the "you are an autonomous
-    // coding agent, do not stop until it builds" opening. It is framing for the whole
-    // request, so it is not an item and it is not attached to the first one either.
-    if (current) current.body.push(line);
+    if (sections.length >= MIN_ITEMS) return sections;
   }
-  return sections.length >= MIN_ITEMS ? sections : null;
+  return null;
 }
 
 /**
@@ -193,11 +233,26 @@ function sectionsByNumber(lines) {
  * @typedef {object} RequestPlan
  * @property {PlannedItem[]} items
  * @property {string} constraints  Sections that state rules rather than work, kept whole.
+ * @property {string} requirements
+ *   The text of every section that asks for behaviour but names no files.
+ *
+ *   This is the half of a brief that has nowhere else to go, and the measurement that
+ *   made it a field of its own is stark. In the TODO brief, the *Folder Structure*
+ *   section names fifteen files and specifies no behaviour; the *Features* section
+ *   specifies about ten of the twelve behaviours the benchmark grades and names no
+ *   files. Splitting by section and stopping there means the step that writes
+ *   `TodoItem.jsx` — the file that owns toggle, edit and delete — is never shown the
+ *   word "Escape".
+ *
+ *   Chunking a long request helps because it cuts how many constraints must be
+ *   satisfied at once. Chunking it along the wrong axis does not cut them, it *drops*
+ *   them, which looks like the same failure and is worse: no retry recovers a
+ *   requirement the model never saw.
  * @property {string} reason       Why it split the way it did, for the log and the record.
  */
 
 /** An empty plan, which every caller must treat as "carry on as before". */
-const NO_PLAN = { items: [], constraints: '', reason: '' };
+const NO_PLAN = { items: [], constraints: '', requirements: '', reason: '' };
 
 /**
  * Read a request's own structure as a plan.
@@ -241,9 +296,14 @@ function fromRequest(request) {
     // something, because a heading alone ("Project Setup") does not say what to do.
     const firstAsk = body.map(cleanTitle).find((line) => IMPERATIVE.test(line)) || '';
     const combined = titleAsks || !firstAsk ? section.title : `${section.title}: ${firstAsk}`;
+    const detail = [section.title, ...section.body].join('\n').trim();
     items.push({
       text: combined.length > MAX_ITEM_CHARS ? `${combined.slice(0, MAX_ITEM_CHARS - 1)}…` : combined,
-      detail: [section.title, ...section.body].join('\n').trim(),
+      detail,
+      // Which side of the divide this section falls on. A section that names files says
+      // *where* the work goes; one that names none says *what it has to do*. Both are
+      // work items, but only the second is worth repeating under every file.
+      namesFiles: fileTree.hasTree(detail) || namesFilesIn(detail),
     });
   }
 
@@ -270,7 +330,14 @@ function fromRequest(request) {
     (dropped.length ? `, dropping "${dropped.join('", "')}" as reporting` : '');
   logger.info(`Request plan: ${reason}.`);
 
-  return { items: kept, constraints: constraints.join('\n\n').trim(), reason };
+  // The behaviour that has nowhere else to go — see the `requirements` typedef.
+  const requirements = kept
+    .filter((item) => !item.namesFiles)
+    .map((item) => item.detail)
+    .join('\n\n')
+    .trim();
+
+  return { items: kept, constraints: constraints.join('\n\n').trim(), requirements, reason };
 }
 
 module.exports = {
