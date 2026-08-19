@@ -220,6 +220,20 @@ const MAX_DICTATIONS_PER_ITEM = 12;
 const MAX_RELATED_FILE_CHARS = 4000;
 
 /**
+ * How many times one file is asked for before the run moves on without it.
+ *
+ * Two, and the second is earned in one of two ways: the reply was unusable (cut off
+ * mid-file, or not the kind of file that was asked for), or it was a perfectly good file
+ * that does not mention something its requirements named. Both are specific and
+ * correctable, which is what makes a retry worth its twenty seconds. A third attempt is
+ * not: a model that has now been told twice is not going to find it on the next one.
+ */
+const MAX_DICTATION_ATTEMPTS = 2;
+
+/** Source files whose imports the assembly check can read. */
+const MODULE_FILE = /\.(?:jsx?|tsx?|mjs|cjs|vue|svelte)$/i;
+
+/**
  * Paths a dictation may never target.
  *
  * Generated trees and dependency manifests. `package.json` is the important one: it
@@ -1376,6 +1390,25 @@ class AgentSession {
 
     if (todos.current()) todos.skipRemaining('the session ran out of steps');
 
+    // Everything is written. Does the screen they were written for actually use them?
+    //
+    // Runs after the items rather than inside one, because the answer is only knowable
+    // once they have all had their turn — and it is the failure that survived every
+    // other check in two evaluations: a clean build over an app that renders the
+    // scaffold's demo.
+    if (this.capability.tier === 'B' && constraints !== undefined && !this._controller.signal.aborted) {
+      const assembled = await this._assemble({
+        constraints,
+        requirements,
+        route: activeRoute,
+        changeSet,
+        emit,
+        stepOffset: allSteps.length,
+      });
+      allSteps.push(...assembled.steps);
+      if (assembled.rewrote) summaries.push(`Wired ${assembled.missing.join(', ')} into ${assembled.rewrote}.`);
+    }
+
     const progress = todos.progress();
     const caveat =
       progress.warned > 0
@@ -1720,7 +1753,9 @@ class AgentSession {
       // file that could not be written is a fact the summary should carry, not a reason
       // to abandon the other eleven.
       let result = null;
-      for (let attempt = 1; attempt <= 2; attempt += 1) {
+      /** What the last attempt was told it had got wrong. */
+      let complaint = '';
+      for (let attempt = 1; attempt <= MAX_DICTATION_ATTEMPTS; attempt += 1) {
         result = await dictation.dictate({
           client: this.client,
           model: this.model,
@@ -1730,10 +1765,31 @@ class AgentSession {
           spec,
           constraints,
           related: related.slice(-dictation.MAX_RELATED),
-          previousError: attempt > 1 && result ? result.reason : '',
+          previousError: complaint,
           signal: this._controller.signal,
         });
-        if (result.ok || this._controller.signal.aborted) break;
+        if (this._controller.signal.aborted) break;
+
+        if (!result.ok) {
+          complaint = result.reason;
+          continue;
+        }
+
+        // The file arrived. Now: does it contain the things its requirements named?
+        //
+        // Only literal words are checked — an identifier the author backticked, or a key
+        // whose spelling the platform fixes (`Escape` is `Escape`, `blur` is `blur`).
+        // A requirement that says "cancel on Escape" over code that never says the word
+        // is a requirement that did not get implemented, and that is worth one more go.
+        // Anything softer is deliberately not checked: "with a confirmation state" can be
+        // written a dozen ways, and a guess at those would rewrite working code.
+        const missing = dictation.missingFrom(relevant.text, result.code);
+        if (missing.length === 0 || attempt >= MAX_DICTATION_ATTEMPTS) break;
+
+        complaint =
+          `the file was written but does not mention ${missing.join(', ')}, which the requirements above ask for. ` +
+          'Write it again, in full, actually implementing those.';
+        logger.info(`${target.path}: missing ${missing.join(', ')}; asking again.`);
       }
 
       if (!result.ok) {
@@ -1760,6 +1816,111 @@ class AgentSession {
       if (executed.ok) outcome.written.push(target.path);
       else outcome.failed.push({ path: target.path, reason: executed.observation });
     }
+
+    return outcome;
+  }
+
+  /**
+   * Make sure the file everything else was written for actually uses it.
+   *
+   * The single most expensive failure in two evaluations, and the one a build cannot
+   * see: five correct components on disk, a clean `npm run build`, and an `App.jsx`
+   * still holding the scaffold's counter demo because nothing ever went back to it. The
+   * 0.7.0 analysis recorded it across five models; the 0.9.0 baseline reproduced it with
+   * every gate green and **2 of 12** features working.
+   *
+   * Nothing here needs the model's judgement. The extension knows which files this
+   * session wrote, it knows which of them is the composition root, and it can read
+   * whether that file imports the others. When it does not, the file is asked for again
+   * with the missing imports named — one more dictation, not a whole extra turn.
+   *
+   * @param {object} options
+   * @param {string} options.constraints
+   * @param {string} options.requirements
+   * @param {import('../core/promptRouter').Route} options.route
+   * @param {ChangeSet} options.changeSet
+   * @param {(event: object) => void} options.emit
+   * @param {number} options.stepOffset
+   * @returns {Promise<{rewrote: string, missing: string[], steps: AgentStep[]}>}
+   * @private
+   */
+  async _assemble(options) {
+    const { route, changeSet, emit } = options;
+    /** @type {{rewrote: string, missing: string[], steps: AgentStep[]}} */
+    const outcome = { rewrote: '', missing: [], steps: [] };
+    if (!route.allowedActions.has('write_file')) return outcome;
+
+    const written = changeSet
+      .list()
+      .filter((change) => change.kind !== 'delete' && MODULE_FILE.test(change.path))
+      .map((change) => change.path);
+    if (written.length < 2) return outcome;
+
+    // The composition root among the files this session actually wrote. A root the
+    // session never touched is not this check's business — it belongs to whoever wrote
+    // it, and rewriting it uninvited is the behaviour the annotation rule exists to
+    // prevent.
+    const root = written.find((candidate) => fileSpec.isComposition(candidate, ''));
+    if (!root) return outcome;
+
+    const source = this._readInWorkspace(root);
+    if (!source) return outcome;
+
+    // A file counts as imported if its module name appears in an import or require. The
+    // path may be written a dozen ways — `./components/TodoList`, `../components/TodoList.jsx`,
+    // an alias — so the basename is what is looked for, inside import statements only.
+    const importing = (source.match(/^\s*(?:import\b[^\n]*|const[^\n]*=\s*require\([^\n]*)/gm) || []).join('\n');
+    const missing = written
+      .filter((candidate) => candidate !== root)
+      .filter((candidate) => {
+        const name = (candidate.split('/').pop() || '').replace(/\.[^.]*$/, '');
+        return name.length > 1 && !importing.includes(name);
+      });
+
+    outcome.missing = missing;
+    if (missing.length === 0) return outcome;
+
+    logger.info(`${root} does not use ${missing.join(', ')}; asking for it again.`);
+
+    const related = [];
+    for (const candidate of written) {
+      if (candidate === root) continue;
+      const text = this._readInWorkspace(candidate);
+      if (text) related.push({ path: candidate, source: text });
+    }
+
+    const result = await dictation.dictate({
+      client: this.client,
+      model: this.model,
+      path: root,
+      purpose: 'the screen that puts the other components together',
+      requirements: options.requirements,
+      spec:
+        `This file already exists but does not use ${missing.join(', ')}, which this session wrote ` +
+        'for it. Write it again so that it imports and renders them. Its current contents are ' +
+        `below.\n---\n${source}\n---`,
+      constraints: options.constraints,
+      related: related.slice(-dictation.MAX_RELATED),
+      signal: this._controller.signal,
+    });
+
+    if (!result.ok) {
+      emit({ type: 'dictation-failed', path: root, reason: result.reason });
+      logger.warn(`Could not reassemble ${root}: ${result.reason}.`);
+      return outcome;
+    }
+
+    const action = {
+      action: 'write_file',
+      path: root,
+      code: result.code,
+      thought: `wire ${missing.join(', ')} into ${root}`,
+    };
+    emit({ type: 'action', step: options.stepOffset + 1, action });
+    const executed = await this._execute(action, route, changeSet);
+    emit({ type: 'observation', step: options.stepOffset + 1, result: executed });
+    outcome.steps.push({ action, result: executed });
+    if (executed.ok) outcome.rewrote = root;
 
     return outcome;
   }

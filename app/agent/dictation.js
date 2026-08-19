@@ -333,6 +333,59 @@ const KIND_CHECKS = [
 ];
 
 /**
+ * Words in a requirement that have to appear in the code if it was implemented at all.
+ *
+ * Two kinds, and both are chosen because they are *literal*: an identifier the author
+ * put in backticks (`localStorage`, `line-through`), and the name of a key or event
+ * whose spelling the platform fixes (`Escape` is `Escape`, `blur` is `blur`). A
+ * requirement mentioning either and code that never says the word is a requirement that
+ * did not get implemented.
+ *
+ * Everything softer is left out on purpose. "with a confirmation state" could be written
+ * a dozen ways, and a check that guessed at those would fail correct code — which is
+ * worse than not checking, because it burns a retry and then rewrites something that
+ * worked.
+ */
+const LITERAL_TOKENS = /`([A-Za-z][\w$.-]{2,40})`/g;
+
+/** Names the platform spells for you, so the code has to spell them the same way. */
+const FIXED_SPELLINGS = [
+  'Enter', 'Escape', 'Backspace', 'Tab', 'blur', 'focus', 'submit', 'keydown', 'keyup',
+  'localStorage', 'sessionStorage', 'preventDefault', 'aria-label', 'line-through',
+];
+
+/**
+ * Which of a requirement's literal words are missing from the code.
+ *
+ * @param {string} requirements
+ * @param {string} code
+ * @returns {string[]}
+ */
+function missingFrom(requirements, code) {
+  const text = String(requirements || '');
+  const source = String(code || '');
+  if (!text.trim() || !source.trim()) return [];
+
+  /** @type {Set<string>} */
+  const wanted = new Set();
+  for (const match of text.matchAll(LITERAL_TOKENS)) wanted.add(match[1]);
+  for (const spelling of FIXED_SPELLINGS) {
+    if (new RegExp(`\\b${spelling.replace(/[-]/g, '\\-')}\\b`).test(text)) wanted.add(spelling);
+  }
+
+  const missing = [];
+  for (const token of wanted) {
+    // Case-insensitive, because `onBlur` satisfies "blur" and `KeyboardEvent` casing
+    // varies with how it is reached.
+    if (!source.toLowerCase().includes(token.toLowerCase())) missing.push(token);
+  }
+  return missing.slice(0, MAX_MISSING_REPORTED);
+}
+
+/** Beyond this the reply was not an attempt at the file, and a list is not the remedy. */
+const MAX_MISSING_REPORTED = 6;
+
+/**
  * Is this the kind of file that was asked for?
  *
  * @param {string} filePath
@@ -411,6 +464,7 @@ module.exports = {
   dictate,
   extractCode,
   matchesPath,
+  missingFrom,
   exportsOf,
   renderContracts,
   buildPrompt,

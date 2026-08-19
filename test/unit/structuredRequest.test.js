@@ -71,7 +71,10 @@ function dictatingClient() {
     async chat(body) {
       this.bodies.push(body);
       const prompt = body.messages.map((message) => message.content).join('\n');
-      const asked = /complete contents of the file (\S+)/.exec(prompt);
+      // The prompt ends that sentence with a full stop, and `\S+` swallows it — which
+      // quietly made the assertion about what is *never* dictated vacuous, since no
+      // path ever matched `/package\.json$/` with a trailing dot on it.
+      const asked = /complete contents of the file (\S+?)\.?(?=\s|$)/.exec(prompt);
       if (asked) {
         this.dictatedPaths.push(asked[1]);
         return {
@@ -250,6 +253,85 @@ describe('a structured request, split and dictated', () => {
       assert.strictEqual(/(?:^|\/)(?:e\.g|i\.e)$/.test(target), false, `dictated a prose fragment: ${target}`);
     }
     assert.strictEqual(fs.existsSync(path.join(root, 'e.g')), false);
+  });
+
+  it('makes the composition root use the files written for it', async () => {
+    // The most expensive failure in two evaluations, and one a build cannot see: five
+    // correct components on disk, a clean `npm run build`, and an App still holding the
+    // scaffold's demo because nothing went back to it. Measured at 2 of 12 features
+    // working with every gate green.
+    //
+    // Deliberately a request of its own, with no backticked identifiers and no key
+    // names in it, so nothing else in the pipeline can produce the rewrite and a pass
+    // here means the assembly check produced it.
+    const request = [
+      'Build a small dashboard.',
+      '',
+      '## Structure',
+      '',
+      'Use this layout and do not flatten it:',
+      '',
+      '```',
+      'board-app/',
+      '├── src/',
+      '│   ├── Chart.jsx      # Draws the bar chart',
+      '│   ├── Legend.jsx     # Names each series beside a colour swatch',
+      '│   └── App.jsx        # Composes the chart and the legend into one screen',
+      '```',
+      '',
+      '## Behaviour',
+      '',
+      '- Show one bar per series, and list the same series in the legend in the same order',
+      '  so the two can be read against each other without counting.',
+      '- Dim every other bar when a series is selected in the legend, so the eye can follow',
+      '  one line through a crowded chart without losing it.',
+      '',
+      '## Sizing',
+      '',
+      '- Fill the width the panel gives, keeping a sensible aspect ratio down to a phone,',
+      '  where the legend moves underneath rather than beside the chart.',
+      '- Do not set a fixed pixel width anywhere. The dashboard is embedded in panels of',
+      '  several sizes and a hard width is the first thing to break when somebody drags a',
+      '  divider.',
+    ].join('\n');
+
+    fs.mkdirSync(path.join(root, 'board-app'), { recursive: true });
+
+    const client = {
+      appWrites: 0,
+      async chat(body) {
+        const prompt = body.messages.map((message) => message.content).join('\n');
+        // The prompt ends that sentence with a full stop, and `\S+` swallows it — which
+      // quietly made the assertion about what is *never* dictated vacuous, since no
+      // path ever matched `/package\.json$/` with a trailing dot on it.
+      const asked = /complete contents of the file (\S+?)\.?(?=\s|$)/.exec(prompt);
+        if (!asked) return { message: { content: JSON.stringify({ action: 'done', summary: 'done' }) } };
+        const target = asked[1];
+        if (/App\.jsx$/.test(target)) {
+          this.appWrites += 1;
+          // First time: a screen that imports nothing, which is the real failure. Second
+          // time — only reachable if something told it what was missing — the wiring.
+          return this.appWrites > 1
+            ? {
+                message: {
+                  content:
+                    '```jsx\nimport Chart from "./Chart.jsx";\nimport Legend from "./Legend.jsx";\n' +
+                    'export default function App() { return <><Chart /><Legend /></>; }\n```',
+                },
+              }
+            : { message: { content: '```jsx\nexport default function App() { return <h1>Hello</h1>; }\n```' } };
+        }
+        const name = (target.split('/').pop() || '').replace(/\.jsx$/, '');
+        return { message: { content: '```jsx\nexport default function ' + name + '() { return null; }\n```' } };
+      },
+    };
+
+    await makeSession(client).run(request, { mode: 'agent' });
+
+    const written = fs.readFileSync(path.join(root, 'board-app', 'src', 'App.jsx'), 'utf8');
+    assert.match(written, /Chart/, 'the composition root never used what was written for it');
+    assert.match(written, /Legend/);
+    assert.strictEqual(client.appWrites, 2, 'the assembly check should have asked for App.jsx a second time');
   });
 
   it('does not try to write a PNG', async () => {

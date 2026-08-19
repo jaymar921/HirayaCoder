@@ -118,6 +118,15 @@ function parse(text) {
     const name = (hash >= 0 ? rest.slice(0, hash) : rest).trim().replace(/[,;]$/, '');
     const comment = hash >= 0 ? rest.slice(hash + 1).trim() : '';
 
+    // A tree starts at a directory or a file, never at a bare word.
+    //
+    // Without this, the heading above the drawing becomes its root: a section titled
+    // `Structure` is a single word with no spaces, so it passes `looksLikeEntry`, is
+    // taken as entry one, and the prose line after it then ends the tree — leaving a
+    // one-entry "tree" that `hasTree` rejects and a folder structure nobody read. The
+    // benchmark brief escaped this only because its heading is *two* words.
+    if (entries.length === 0 && !(name.endsWith('/') || /\.[a-z][\w]{0,7}$/i.test(name))) continue;
+
     if (!looksLikeEntry(name)) {
       // A line that is not an entry ends the tree if we have already started one —
       // otherwise a paragraph after the block would keep being scanned for paths.
