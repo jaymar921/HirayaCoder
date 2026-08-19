@@ -1577,6 +1577,23 @@ class AgentSession {
       if (UNDICTATABLE.test(target)) continue;
       if (!isDictatableFilename(target)) continue;
 
+      // You cannot fill in a project that has not been created yet.
+      //
+      // The rule below reads as fussy and it is load-bearing. Measured on
+      // `qwen3.5:0.8b`: the setup step's loop failed to scaffold, the structure step
+      // then dictated `todo-glass-app/src/components/ClearButton.jsx` — creating
+      // `todo-glass-app/` on the way — and when the scaffold command finally ran,
+      // `npm create vite` found a non-empty directory, **exited 0, and created
+      // nothing**. A clean exit code over a project that does not exist is the worst
+      // possible failure, because everything downstream believes it.
+      //
+      // So a file inside a project directory is dictated only once that directory is
+      // there. If the scaffold never happens the run writes nothing and says so, which
+      // is the honest outcome; when the next turn scaffolds, dictation resumes. Files at
+      // the workspace root have no such prerequisite and are always allowed.
+      const root = target.includes('/') ? target.slice(0, target.indexOf('/')) : '';
+      if (root && !this._existsInWorkspace(root)) continue;
+
       const exists = this._existsInWorkspace(target);
       // An existing file with nothing said about it is somebody else's — the
       // scaffold's, or the user's. Only an annotated one may be replaced.

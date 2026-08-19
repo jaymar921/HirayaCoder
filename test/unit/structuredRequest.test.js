@@ -116,7 +116,19 @@ describe('a structured request, split and dictated', () => {
     fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
   });
 
+  /**
+   * Stand in for the scaffolding step having worked.
+   *
+   * Dictation will not write into a project directory that does not exist — see the
+   * test at the bottom of this file for why — so every case about *what* it writes has
+   * to start from a project that has been created.
+   */
+  function scaffolded() {
+    fs.mkdirSync(path.join(root, 'notes-app'), { recursive: true });
+  }
+
   it('writes the annotated files the request drew, at their full paths', async () => {
+    scaffolded();
     const client = dictatingClient();
     await makeSession(client).run(REQUEST, { mode: 'agent' });
 
@@ -126,6 +138,7 @@ describe('a structured request, split and dictated', () => {
   });
 
   it('never dictates package.json, which the scaffolding command owns', async () => {
+    scaffolded();
     // A model asked to "write package.json for this app" produces a plausible one with
     // the wrong versions and no scripts. The 0.9.0 baseline recorded `qwen3.5:0.8b`
     // doing exactly that, leaving a project whose `npm run build` did not exist.
@@ -167,6 +180,7 @@ describe('a structured request, split and dictated', () => {
   });
 
   it('shows the step only its own section of the request', async () => {
+    scaffolded();
     const client = dictatingClient();
     await makeSession(client).run(REQUEST, { mode: 'agent' });
 
@@ -183,11 +197,29 @@ describe('a structured request, split and dictated', () => {
   });
 
   it('does not dictate for a model on the agentic tier', async () => {
+    scaffolded();
     // A Tier A model orchestrates tools well enough to be left to it. The finding
     // behind dictation is about the tier that does not.
     const client = dictatingClient();
     await makeSession(client, TIER_A).run(REQUEST, { mode: 'agent' });
     assert.deepStrictEqual(client.dictatedPaths, []);
+  });
+
+  it('will not fill in a project directory that does not exist yet', async () => {
+    // Measured on `qwen3.5:0.8b`: the setup step failed to scaffold, the structure step
+    // then dictated into `notes-app/src/`, creating `notes-app/` on the way — and when
+    // the scaffold command finally ran, `npm create vite` found a non-empty directory,
+    // exited 0, and created nothing. A clean exit code over a project that does not
+    // exist is the worst failure available, because everything downstream believes it.
+    const client = dictatingClient();
+    await makeSession(client).run(REQUEST, { mode: 'agent' });
+
+    assert.deepStrictEqual(
+      client.dictatedPaths.filter((target) => target.startsWith('notes-app/')),
+      [],
+      'nothing under notes-app/ should be written before notes-app/ exists'
+    );
+    assert.strictEqual(fs.existsSync(path.join(root, 'notes-app')), false);
   });
 
   it('does not mistake a fragment of a sentence for a filename', async () => {
