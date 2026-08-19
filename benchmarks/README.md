@@ -1,6 +1,9 @@
 # Build benchmark — results
 
-Raw output from `tools/bench-build.js`, the **build-a-project** benchmark. Where
+Raw output from the live-model benchmarks. `bench-build__*` and the bare
+`<model>__<lang>__*` files come from `tools/bench-build.js`, the **build-a-project**
+benchmark; `realworld__*` files come from `tools/bench-realworld.js`, documented further
+down. Where
 `bench-agent.js` asks whether a model can edit a project that already exists, this asks
 whether it can build one that does not — starting from a completely empty directory.
 
@@ -73,6 +76,102 @@ and pass it through, so the compiled table can report it alongside the timings:
 ```bash
 node tools/bench-build.js gemma4:e2b --machine B --notes "63%/37% CPU/GPU, 5.9 GB resident"
 ```
+
+## The real-world benchmark — `realworld__*.json`
+
+Added in 0.9.0, and a different question from the three above. They ask whether the agent
+loop works. This asks whether a **user gets a working product**.
+
+```bash
+node tools/bench-realworld.js <model> --machine <A|B|C> [options]
+
+node tools/bench-realworld.js qwen3.5:2b  --machine B
+node tools/bench-realworld.js llama3.2:1b --machine B --turns 8 --budget 40 --keep
+```
+
+| Flag | Meaning |
+|---|---|
+| `--machine <A\|B\|C>` | **Required.** Which device this is; picks the results directory |
+| `--turns <n>` | Auto-user turns after the brief, default 10 |
+| `--budget <min>` | Give up after this much wall clock, default 90 |
+| `--tier <A\|B>` | Force a capability tier instead of letting discovery decide |
+| `--steps` | Run with experimental step sessions on |
+| `--workspace <dir>` | Work here instead of a temp directory (implies `--keep`) |
+| `--notes "..."` | Free text stored in the record |
+
+### One brief, handed over verbatim
+
+`tools/prompts/todo-glass-app.md` is the user's message: build a React + Vite + Tailwind
+TODO app, to a fixed folder structure, with add / edit / delete / toggle / clear, and a
+build that has to pass. It is 98 lines and it is handed over **whole, once**.
+
+Splitting it into steps is HirayaCoder's job. A harness that pre-split it would be
+measuring a product that does not ship.
+
+### There is an auto-user
+
+A real session is not one message. The 0.7.0 evaluation took eleven, and every real fix
+in it came from the user pasting a build error back. So after each turn the harness runs
+the gates itself and writes the next message the way a user would — the actual
+`npm run build` output, or the list of files still missing.
+
+It is deliberately unhelpful about *how*. A user pastes the error; they do not name the
+remedy. Anything cleverer would be the harness solving the task and then congratulating
+the model for it.
+
+### Four gates, then twelve features
+
+The gates run from disk, in the order a build has to get them right: the project
+scaffolded, the required files present, `npm install` clean, `npm run build` clean.
+`dist/` is deleted before each build, so a bundle left by an earlier turn can never pass
+for one that has since started failing.
+
+Then — and this is the part that makes the benchmark worth having — the production bundle
+is served from a throwaway static server, opened in a real headless Chromium over the
+DevTools Protocol, and **driven**:
+
+| Feature | What is done to it |
+|---|---|
+| `mounted` | did anything render at all |
+| `emptyState` | is there text before any todo exists |
+| `addEnter` / `addButton` | type, then Enter; type, then click the add control |
+| `inputClears` | is the box empty afterwards |
+| `ignoresEmpty` | submit whitespace, count unchanged |
+| `liveCount` | is a remaining/completed count on screen |
+| `toggleComplete` | click the checkbox, does the row change |
+| `editTodo` | double-click, then every control in turn, until a field opens; save; did it persist |
+| `deleteTodo` | click each control in the row until the item goes, and only that item |
+| `clearCompleted` / `clearAll` | click, click again for a confirm state, then click on the empty list |
+
+### Why it clicks blindly
+
+Every model produces different markup, and most delete controls are a bare lucide `<svg>`
+with no label. A probe that looked for a selector would be grading the model on its
+accessibility attributes. So for each control it **tries the candidate buttons in turn
+and keeps the one that produces the effect** — which is the user's question: is there
+something here I can press to delete this item.
+
+### The result that justifies all of it
+
+`qwen3.5:2b` on the 0.9.0 baseline passed **every gate**: scaffold, structure, install,
+build. All four green, the kind of run a CI check calls a success.
+
+It scored **2 / 12**. `src/App.jsx` still held Vite's counter demo, and the five
+components it had correctly written were imported by nothing. A build does not object to
+an app that renders a counter.
+
+### Validate the probe before trusting it
+
+The probe was checked in both directions before any model was graded with it: **12 / 12**
+against a hand-written correct app, and exactly **10 / 12** against the same app with the
+delete handler and the clear-all handler sabotaged. Two probe bugs surfaced doing that,
+both worth knowing about if you extend it:
+
+- An item in inline-edit mode has moved its text into an `input.value`, where
+  `innerText` cannot see it — so clicking the pencil read as a successful *delete*.
+- A control list captured before a click is detached by the re-render that click causes,
+  and clicking a detached node does nothing — so a working delete button reported as
+  broken. Re-query every pass; never capture.
 
 ## Layout — why one file per run
 
