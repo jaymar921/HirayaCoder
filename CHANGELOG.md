@@ -5,6 +5,133 @@ All notable changes to HirayaCoder are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] — unreleased
+
+0.8.0 gave the agent a record of what it had already done. Running the same React +
+Vite + Tailwind brief again, graded this time **in a browser**, showed that the record
+was not the missing piece either — and that one of the three models was never failing at
+coding at all.
+
+The counted version of everything below is in
+[`doc/SESSION-ANALYSIS-0.9.0.md`](doc/SESSION-ANALYSIS-0.9.0.md).
+
+### Added — a benchmark that clicks the buttons
+
+`tools/bench-realworld.js` hands a model one verbatim brief and then grades what is on
+disk: the project scaffolded, the required files present, `npm install` clean,
+`npm run build` clean. Where the build passes it serves the production bundle and drives
+it in a real headless Chromium, clicking every control the brief asked for.
+
+That last part is the one that mattered. `qwen3.5:2b` passed **every** gate a normal CI
+check would run — scaffold, structure, install, build — and scored **2 of 12** on the
+features, because `src/App.jsx` still held Vite's counter demo and the five components it
+had correctly written were imported by nothing. A build does not object to an app that
+renders a counter. Only clicking the buttons finds it.
+
+There is also an auto-user: a real session is not one message, and every real fix in the
+0.7.0 evaluation came from the user pasting a build error back. After each turn the
+harness writes the next message the way a user would — the actual build output, or the
+files still missing — and is deliberately unhelpful about *how*, because a user pastes
+the error, they do not name the remedy.
+
+### Added — the request's own structure is the plan
+
+`plannerAgent.planTodos` asks the model to split a request into a checklist. It needs
+Ollama's `thinking` capability and at least 2B parameters, which is the right threshold —
+a model that cannot hold three goals at once cannot invent them either. It also meant
+that below that threshold there was no checklist at all, and the whole 98-line brief went
+into every prompt of an 1,800-token window.
+
+A well-written brief has already been decomposed by the person who wrote it.
+`core/requestPlan` reads that: headings, numbered steps, the order they are in. No
+inference, so it works the same at 0.8B as at 70B, and it costs no round-trip.
+
+- Every item is a span of your own text, in your own order. Nothing is paraphrased,
+  reordered, merged or invented.
+- A section that states rules rather than work — the brief's *Tech Stack*, where no line
+  starts with a verb — becomes a constraint carried under every step instead of a step of
+  its own.
+- A closing *Output* section, which asks for a message rather than a change, is dropped.
+- It declines to split far more often than it splits: a short request, an unstructured
+  one, one with a single heading, or three short bullets all run exactly as before.
+
+Each step is then shown **its own section** rather than the whole request.
+
+### Added — the folder tree you drew is read as paths
+
+`core/fileTree` turns the drawing in a brief into real paths: `src/` plus `components/`
+plus `TodoInput.jsx` is `src/components/TodoInput.jsx`, from indentation alone.
+Box-drawing, ASCII, backtick and plain-indent forms all parse.
+
+The comment column turns out to matter more than it looks. `# Add-todo form` is you
+saying what you expect that file to contain, and it also separates two kinds of entry: in
+the benchmark brief `App.jsx` and `index.css` carry comments while `package.json`,
+`vite.config.js` and `main.jsx` do not — because the first two are files you expect to be
+authored and the rest are what `npm create vite` produces.
+
+### Added — the smallest models are asked for a file, not for a decision
+
+`llama3.2:1b` ended eleven turns out of eleven with an unparseable reply and wrote
+nothing. That reads as a model too small to code. The same question, asked three ways:
+
+| How it was asked | What came back |
+|---|---|
+| Constrained to the action schema | `{"action":"done","summary":"Toggle Todo Item Complete"}` |
+| `format: "json"` | `{}` |
+| In plain words, "reply with the file in a code block" | a complete, correct, exported React component |
+
+It can write the component. It cannot express the *decision* to write it through a JSON
+action protocol — and schema-constrained decoding makes that worse, because `done` is the
+cheapest object that satisfies the grammar. **At this size the protocol is the
+bottleneck, not the coding.**
+
+So on the constrained tier, for a file your request named, the decision is made off the
+model: the action is already `write_file`, the path came from your own request, and the
+only open question is what goes in the file.
+
+Note which way that narrows. The model cannot choose the action and cannot choose the
+path, so a dictated write can only ever touch a file **you named** — and it still goes
+through `write_file`, with the same path guard, the same permission gate, the same diff
+to approve and the same audit entry as every other write.
+
+What it will not touch:
+
+- A file that already exists, unless you annotated it in your tree. That is your own
+  distinction, drawn in your own document.
+- `package.json`, lockfiles and `.env`, ever. A model asked to write `package.json`
+  produces a plausible one with the wrong versions and no scripts, which is what the
+  baseline recorded `qwen3.5:0.8b` doing — leaving a project whose `npm run build` did
+  not exist.
+- Anything under `node_modules/`, `dist/`, `build/`, `out/`, `coverage/` or `.git/`.
+
+Every dictation also carries the **real export list** of the files already on disk, read
+out of them rather than remembered. The 0.7.0 session lost an hour to four missing
+default exports and two prop-name mismatches, each one found only when the user pasted a
+console error — the extension had written those files minutes earlier and never thought
+to look.
+
+### Fixed — a dictation writing the right file into the wrong path
+
+Caught by the first sweep with the feature above turned on: `tailwind.config.js` was
+written holding a `package.json`, and `postcss.config.js` was written holding the App
+component. Both were good files and both were answers to a different question.
+
+The cause was the prompt carrying the item's whole section as background — for the
+structure section, a fifteen-filename tree competing with the one filename in the
+instruction. The drawing now comes out of the background, the path is restated last, and
+**what came back is checked against the path it was asked for**: a `.json` file has to
+parse as JSON, a `.jsx` file has to not be a JSON document, a `.css` file must not be a
+React component.
+
+A rejected file now gets one retry with the reason attached, and if that fails it is
+reported as not written rather than passed over in silence.
+
+### Documentation
+
+- `doc/SESSION-ANALYSIS-0.9.0.md` — the counted analysis of the evaluation sweep.
+- Two new images, `asked-the-wrong-way.png` and `your-structure-is-the-plan.png`, with
+  their HTML sources; the version badge moves to v0.9.0.
+
 ## [0.8.0] — unreleased
 
 0.7.0 gave the agent a way to notice it was stuck and a way to ask. Running it against a

@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/jaymar921/HirayaCoder/main/docs/images/hero-offline-agent.png" width="900" alt="HirayaCoder v0.8.0 — your AI pair programmer, fully offline. A VS Code chat panel showing the agent reading two files, writing two files, and asking for approval before running npm run build." />
+  <img src="https://raw.githubusercontent.com/jaymar921/HirayaCoder/main/docs/images/hero-offline-agent.png" width="900" alt="HirayaCoder v0.9.0 — your AI pair programmer, fully offline. A VS Code chat panel showing the agent reading two files, writing two files, and asking for approval before running npm run build." />
 </p>
 
 *A local Filipino-inspired AI coder that brings imagination and speed to your VS Code workflow.*
@@ -173,6 +173,62 @@ A repeated read is no longer fatal either. Asking twice for a directory listing 
 the run; now the agent is handed back what it already had, told what to do next, and only
 stopped if it asks a third time.
 
+### Long requests, one step at a time
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/jaymar921/HirayaCoder/main/docs/images/your-structure-is-the-plan.png" width="900" alt="The structure you drew is the plan. On the left, a folder tree from a request with comments beside each file. On the right, the six steps HirayaCoder read out of the request's headings and the full paths it joined the tree back together into." />
+</p>
+
+If you paste in a long, structured request — headings, numbered steps, a folder tree —
+HirayaCoder works through it **one section at a time**, in your order, using your words.
+It does not ask the model to summarise your request first: your headings already are the
+plan, and reading them takes no guesswork, so this works the same on a 0.8B model as on a
+large one.
+
+Two details worth knowing, because they let you steer it:
+
+- **Draw the folder structure you want** and it will be read as real paths. `src/` plus
+  `components/` plus `TodoItem.jsx` becomes `src/components/TodoItem.jsx`.
+- **Put a comment next to a file** — `TodoItem.jsx  # one todo row, with edit and
+  delete` — and that comment becomes the instruction for writing it. A file with a
+  comment beside it may be rewritten if it already exists; a file without one is left
+  alone. That is how you say "this one is yours to write" and "this one came from the
+  scaffolding tool, don't touch it".
+
+A section that only states rules — "React functional components only, no UI libraries" —
+is not treated as a step. It is carried underneath every step instead.
+
+Short requests are unaffected. "Fix the typo in the heading" runs exactly as it always
+did.
+
+### Asked the wrong way
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/jaymar921/HirayaCoder/main/docs/images/asked-the-wrong-way.png" width="900" alt="The same request put to llama3.2:1b three ways. Constrained to the action schema it replies with a done action; asked for JSON it replies with an empty object; asked in plain words it returns a complete React component." />
+</p>
+
+The smallest models have a problem that looks like incompetence and is not. Asked to
+choose a tool and fill in its arguments as JSON, a 1B model will reliably answer with the
+simplest thing that satisfies the format — often just "done". Asked in plain English to
+write a file, the same model writes it correctly.
+
+So for a file **your request named**, HirayaCoder stops asking the model what to do. The
+decision is already made: the action is a file write, the path came from your own
+request, and the only question left is what goes in the file.
+
+It is worth being precise about what that does and does not allow, because it is the one
+place the model is not choosing:
+
+- It can only ever write a file **you named** in your request.
+- It never touches `package.json`, lockfiles, `.env`, or anything inside `node_modules`,
+  `dist` or `.git`.
+- It never replaces a file that already exists unless you put a comment next to it.
+- Every write still shows you the diff and waits for approval, exactly as before, and
+  still goes in the audit log.
+
+When it writes a file, it first reads what the files around it actually export, so the
+imports line up rather than being guessed at.
+
 ### The three modes
 
 There is a row of buttons at the top of the chat. You can ignore them at first —
@@ -197,8 +253,11 @@ always asks, even then.
 
 ### Tips that make a real difference
 
-- **Ask for one thing at a time.** "Add a delete button" works far better than "add
-  delete, edit, sorting, and dark mode".
+- **Ask for one thing at a time — or structure the big ask.** "Add a delete button" works
+  far better than "add delete, edit, sorting, and dark mode" thrown in as one sentence.
+  If you do want the big one, give it headings, numbered steps or a folder tree, and it
+  will work through them one at a time — see
+  [Long requests, one step at a time](#long-requests-one-step-at-a-time).
 - **Name the file** if you know it. "Change the title in index.html" beats "change the
   title".
 - **It remembers this conversation**, so you can say "make it bigger" and it knows what
@@ -345,9 +404,15 @@ documented properly elsewhere.
 
 Measured on three named machines, with the delete declined at the prompt on purpose — a
 model that claims it deleted the file has failed the task whatever else it got right.
-There are three harnesses: editing an existing project, building one from an empty
-folder, and wiring an existing project together. The full tables, including what each
-model broke and how, are in
+There are four harnesses: editing an existing project, building one from an empty folder,
+wiring an existing project together, and — new in 0.9.0 — building a whole React app from
+one brief and then **driving it in a headless browser**, clicking every control the brief
+asked for.
+
+That last one exists because of a result worth stating plainly: a model passed the
+scaffold, structure, install and build checks, and shipped an app whose only button
+incremented Vite's demo counter. Four green gates and nothing that worked. The full
+tables, including what each model broke and how, are in
 [MODELS.md](https://github.com/jaymar921/HirayaCoder/blob/main/doc/MODELS.md) and
 [benchmarks/](https://github.com/jaymar921/HirayaCoder/blob/main/benchmarks/README.md).
 
