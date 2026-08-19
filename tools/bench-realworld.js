@@ -75,6 +75,7 @@ const environmentProfile = require(path.join(appRoot, 'core', 'environmentProfil
 
 const { probeApp, FEATURES } = require('./lib/appProbe');
 const { probeJavaService, JAVA_FEATURES } = require('./lib/javaProbe');
+const { probePythonService, PYTHON_FEATURES } = require('./lib/pythonProbe');
 const briefs = require('./lib/briefs');
 const { parseArgs, slug } = require('./lib/args');
 
@@ -170,9 +171,9 @@ function findFiles(root, prefix = '', out = []) {
  * @param {number} scriptTimeoutMs
  */
 function runGates(brief, root, scriptTimeoutMs) {
-  return brief.toolchain === 'maven'
-    ? runMavenGates(brief, root, scriptTimeoutMs)
-    : runNodeGates(brief, root, scriptTimeoutMs);
+  if (brief.toolchain === 'maven') return runMavenGates(brief, root, scriptTimeoutMs);
+  if (brief.toolchain === 'python') return runPythonGates(brief, root, scriptTimeoutMs);
+  return runNodeGates(brief, root, scriptTimeoutMs);
 }
 
 /**
@@ -336,6 +337,111 @@ function runMavenGates(brief, root, scriptTimeoutMs) {
 }
 
 /**
+ * Compile, test and import-check a stdlib-only Python project.
+ *
+ * There is no build step to gate on, so `build` here is the thing the brief actually
+ * asks for in its place: that the entry point imports and the application object can be
+ * constructed. That is the Python equivalent of "it links" — and it is the check that
+ * catches the failure a compile pass cannot, a package with a missing `__init__.py` or
+ * a module importing a name its sibling never defined.
+ *
+ * @param {import('./lib/briefs').Brief} brief
+ * @param {string} root
+ * @param {number} scriptTimeoutMs
+ */
+function runPythonGates(brief, root, scriptTimeoutMs) {
+  const appPath = path.join(root, brief.appDir);
+  const gates = {};
+  const budget = Math.max(scriptTimeoutMs, 300000);
+  const python = pythonBinary(root);
+
+  const scaffolded = fs.existsSync(path.join(appPath, 'main.py'));
+  gates.scaffold = {
+    ok: scaffolded,
+    detail: scaffolded ? brief.appDir + '/main.py exists' : 'no ' + brief.appDir + '/main.py',
+  };
+  gates.structure = structureGate(brief, appPath, scaffolded);
+
+  if (!python) {
+    const skipped = { ok: false, skipped: true, detail: 'python is not installed on this machine', output: '' };
+    gates.compile = { ...skipped };
+    gates.test = { ...skipped };
+    gates.build = { ...skipped };
+    return gates;
+  }
+
+  if (!scaffolded) {
+    const nothing = { ok: false, detail: 'not attempted — there is no main.py', output: '' };
+    gates.compile = { ...nothing };
+    gates.test = { ...nothing };
+    gates.build = { ...nothing };
+    return gates;
+  }
+
+  // Byte-compile every module the project has. `compileall -q` reports syntax errors
+  // and nothing else, which is exactly the first question: does this parse.
+  const compile = exec([python, '-m', 'compileall', '-q', '.'], appPath, budget);
+  gates.compile = {
+    ok: compile.ok,
+    detail: compile.ok ? 'python -m compileall exited 0' : 'python -m compileall found syntax errors',
+    output: compile.ok ? '' : plain(compile.stdout || compile.stderr).slice(-4000),
+  };
+  if (!compile.ok) {
+    gates.test = { ok: false, detail: 'not attempted — it does not compile', output: '' };
+    gates.build = { ok: false, detail: 'not attempted — it does not compile', output: '' };
+    return gates;
+  }
+
+  const test = exec([python, '-m', 'unittest', 'discover', '-s', 'tests'], appPath, budget);
+  gates.test = {
+    ok: test.ok,
+    detail: test.ok ? 'python -m unittest discover exited 0' : 'python -m unittest discover failed',
+    // unittest writes its report to stderr even when everything passes, so a failure
+    // needs both streams to be readable.
+    output: test.ok ? '' : plain([test.stdout, test.stderr].filter(Boolean).join('\n')).slice(-4000),
+  };
+
+  // Import the entry point without letting Tk open a window. `main.py` normally calls
+  // `mainloop()` under an `if __name__ == "__main__"` guard, so importing it as a
+  // module runs the definitions and not the loop — and a project that cannot even be
+  // imported is one the brief's own step 3 would have caught.
+  const imported = exec(
+    [python, '-c', 'import importlib.util,sys; spec=importlib.util.spec_from_file_location("pos_main","main.py"); m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m); print("imported")'],
+    appPath,
+    budget
+  );
+  gates.build = {
+    ok: imported.ok,
+    detail: imported.ok ? 'main.py imports cleanly' : 'main.py could not be imported',
+    output: imported.ok ? '' : plain(imported.stderr || imported.stdout).slice(-4000),
+  };
+
+  return gates;
+}
+
+/**
+ * Whichever spelling of Python this machine has, or '' when it has none.
+ *
+ * Resolved on use rather than at load, and cached for the process: `bench-build.js`
+ * learned the same lesson, that `python` and `python3` are both right somewhere.
+ *
+ * @param {string} cwd
+ * @returns {string}
+ */
+let cachedPython = null;
+function pythonBinary(cwd) {
+  if (cachedPython !== null) return cachedPython;
+  for (const candidate of ['python', 'python3', 'py']) {
+    if (exec([candidate, '--version'], cwd, 60000).ok) {
+      cachedPython = candidate;
+      return cachedPython;
+    }
+  }
+  cachedPython = '';
+  return cachedPython;
+}
+
+/**
  * The application jar in a Maven `target/`, ignoring the sources and javadoc ones.
  *
  * @param {string} targetDir
@@ -372,7 +478,7 @@ function findJar(targetDir) {
  */
 function nextUserMessage(brief, gates, probe) {
   const where = '`' + brief.appDir + '`';
-  const manifest = brief.toolchain === 'maven' ? 'pom.xml' : 'package.json';
+  const manifest = { maven: 'pom.xml', python: 'main.py' }[brief.toolchain] || 'package.json';
 
   if (!gates.scaffold.ok) {
     return `I do not see the app. There is no \`${brief.appDir}/${manifest}\` in my workspace. Please create the project and its files.`;
@@ -401,7 +507,10 @@ function nextUserMessage(brief, gates, probe) {
     const broken = Object.keys(probe.features).filter((name) => !probe.features[name].ok);
     if (broken.length) {
       const lines = broken.map((name) => '- ' + name + ': ' + probe.features[name].detail);
-      const how = brief.toolchain === 'maven' ? 'I ran the service layer and tried it' : 'I opened the built app in a browser and tried it';
+      const how =
+        brief.toolchain === 'node'
+          ? 'I opened the built app in a browser and tried it'
+          : 'I ran the service layer and tried it';
       return (
         `${how}. These are not working:\n\n` +
         lines.join('\n') +
@@ -422,7 +531,8 @@ function nextUserMessage(brief, gates, probe) {
  */
 async function runModel(options) {
   const { brief, model, capability, client, turns, budgetMs, scriptTimeoutMs, keep, workspace, stepSessions } = options;
-  const features = brief.toolchain === 'maven' ? JAVA_FEATURES : FEATURES;
+  const features =
+    { maven: JAVA_FEATURES, python: PYTHON_FEATURES }[brief.toolchain] || FEATURES;
 
   const root = workspace
     ? (fs.mkdirSync(workspace, { recursive: true }), fs.realpathSync(workspace))
@@ -534,10 +644,9 @@ async function runModel(options) {
     /** @type {any} */
     let probe = null;
     if (gates.build.ok) {
-      probe =
-        brief.toolchain === 'maven'
-          ? await probeJavaService(path.join(root, brief.appDir))
-          : await probeApp(path.join(root, brief.appDir, 'dist'), { suite: brief.probe });
+      if (brief.toolchain === 'maven') probe = await probeJavaService(path.join(root, brief.appDir));
+      else if (brief.toolchain === 'python') probe = await probePythonService(path.join(root, brief.appDir));
+      else probe = await probeApp(path.join(root, brief.appDir, 'dist'), { suite: brief.probe });
       finalProbe = probe;
     }
 

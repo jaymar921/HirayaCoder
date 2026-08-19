@@ -104,6 +104,34 @@ const BRIEFS = [
       'src/test/java/com/pos/app/service/ProductServiceTest.java',
     ],
   },
+  {
+    id: 'pypos',
+    label: 'Python Tkinter point of sale, stdlib only',
+    promptFile: 'pos-python-tkinter.md',
+    // Same product as `pos`, in a different language, and deliberately the same folder
+    // name — they never share a workspace, and keeping the name lets the two records be
+    // read side by side as what they are: one brief, two toolchains.
+    appDir: 'pos-app',
+    toolchain: 'python',
+    probe: 'python-service',
+    // The brief's own tree, minus the `__init__.py` files. Those are real and the model
+    // should write them, but a missing one is caught far more usefully by the import
+    // check than by a presence gate that says nothing about why the package will not
+    // load.
+    requiredFiles: [
+      'README.md',
+      'main.py',
+      'pos_app/model/product.py',
+      'pos_app/repository/product_repository.py',
+      'pos_app/repository/file_product_repository.py',
+      'pos_app/service/product_service.py',
+      'pos_app/ui/main_window.py',
+      'pos_app/ui/dialogs.py',
+      'pos_app/util/validators.py',
+      'tests/test_product_service.py',
+      'tests/test_file_product_repository.py',
+    ],
+  },
 ];
 
 /** @param {string} id */
