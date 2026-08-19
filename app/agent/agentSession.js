@@ -31,6 +31,7 @@ const promptRouter = require('../core/promptRouter');
 const requestPlan = require('../core/requestPlan');
 const fileTree = require('../core/fileTree');
 const fileSpec = require('../core/fileSpec');
+const namedCommands = require('../core/namedCommands');
 const intentRouter = require('../core/intentRouter');
 const toolRegistry = require('./toolRegistry');
 const contextBuilder = require('../core/contextBuilder');
@@ -1089,6 +1090,9 @@ class AgentSession {
     // has no other way to reach the checklist. Cleared in the `finally` below so a
     // later turn cannot write into a list that has already been reported.
     this._todos = todos;
+
+    // The project directory the request drew, before anything tries to fill it in.
+    const projectRoot = this._projectRootIn(todos.items);
     emit({ type: 'todo', items: todos.items.map((item) => item.text) });
     logger.info(`Running ${todos.items.length} TODO item(s) one at a time.`);
 
@@ -1118,6 +1122,30 @@ class AgentSession {
     let cancelled = false;
     /** Set when the user, asked mid-run, chose to stop. Not the same as cancelling. */
     let stoppedByUser = false;
+
+    // Run the command the request gave for creating the project, before anything else.
+    //
+    // Every failure to scaffold in the 0.9.0 sweep was a failure to *retype* it.
+    // `qwen3.5:0.8b` ran `npm create vite@latest todo-glass-app -- --template react`,
+    // ran it again, invented a `--yes`, then passed `.gitignore` as the working
+    // directory. The command was on the screen in backticks the whole time.
+    //
+    // The approval is untouched: this goes through `_execute` and the gate's allow-list
+    // exactly as a model-chosen command would, and a scaffold command reaches the
+    // network, so it is one the gate always confirms. What is removed is the
+    // transcription, not the permission. See `core/namedCommands`.
+    if (this.capability.tier === 'B' && projectRoot && !this._existsInWorkspace(projectRoot)) {
+      const command = namedCommands.scaffoldFor(task, projectRoot);
+      if (command) {
+        const action = { action: 'run_script', command, thought: `create ${projectRoot}, as the request specifies` };
+        emit({ type: 'action', step: allSteps.length + 1, action });
+        const executed = await this._execute(action, activeRoute, changeSet);
+        emit({ type: 'observation', step: allSteps.length + 1, result: executed });
+        allSteps.push({ action, result: executed });
+        if (executed.ok) summaries.push(`Ran \`${command}\`, which the request named.`);
+        else logger.warn(`The request's own scaffold command did not succeed: ${executed.observation}`);
+      }
+    }
 
     while (todos.current() && remainingSteps > 0) {
       if (this._controller.signal.aborted) {
@@ -1923,6 +1951,27 @@ class AgentSession {
     if (executed.ok) outcome.rewrote = root;
 
     return outcome;
+  }
+
+  /**
+   * The project directory a checklist's drawn tree is rooted at.
+   *
+   * The tree's own top entry, when it is a directory that everything else sits under —
+   * `todo-glass-app/` in the benchmark brief. Null when the request drew no tree, or
+   * drew one rooted at the workspace itself, in which case there is nothing to create.
+   *
+   * @param {import('./todoList').TodoItem[]} items
+   * @returns {string}
+   * @private
+   */
+  _projectRootIn(items) {
+    for (const item of items || []) {
+      if (!item.detail || !fileTree.hasTree(item.detail)) continue;
+      const entries = fileTree.parse(item.detail);
+      const root = entries.find((entry) => entry.depth === 0 && entry.isDir);
+      if (root && root.path && !root.path.includes('/')) return root.path;
+    }
+    return '';
   }
 
   _existsInWorkspace(relativePath) {
