@@ -95,10 +95,27 @@ public class HirayaPosProbe {
   }
 
   static Object[] argsFor(Method method, Object first) {
+    return argsFor(method, first, null);
+  }
+
+  /**
+   * Fill a method's arguments, preferring the real product and the real id for the
+   * first parameter.
+   *
+   * The id matters and the first version of this missed it. The brief allows either
+   * shape — update(Product) or update(String id, String name, ...) — and for the second
+   * one, filling parameter zero with a sample string means updating a product whose id
+   * is "Probe Widget 1". Against a deliberately correct control project that reported
+   * modifyProduct as failing with "no product with id Probe Widget 1", which is the
+   * probe's bug being blamed on the code under test.
+   */
+  static Object[] argsFor(Method method, Object first, Object id) {
     Class<?>[] types = method.getParameterTypes();
     Object[] args = new Object[types.length];
     for (int i = 0; i < types.length; i++) {
-      args[i] = (i == 0 && first != null && types[0].isInstance(first)) ? first : sample(types[i], i + 1);
+      if (i == 0 && first != null && types[0].isInstance(first)) args[i] = first;
+      else if (i == 0 && id != null) args[i] = convert(types[0], id);
+      else args[i] = sample(types[i], i + 1);
     }
     return args;
   }
@@ -207,7 +224,7 @@ public class HirayaPosProbe {
     if (update == null) report("modifyProduct", false, "no update method on the service");
     else {
       try {
-        update.invoke(instance, argsFor(update, added));
+        update.invoke(instance, argsFor(update, added, id));
         report("modifyProduct", true, "accepted an update");
       } catch (Throwable t) {
         report("modifyProduct", false, "threw " + root(t));
