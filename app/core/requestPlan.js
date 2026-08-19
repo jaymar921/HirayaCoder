@@ -83,7 +83,9 @@ const IMPERATIVE = new RegExp(
       'edit', 'enforce', 'ensure', 'expose', 'export', 'extend', 'filter', 'fix', 'generate',
       'give', 'handle', 'highlight', 'implement', 'include', 'initialise', 'initialize', 'install',
       'keep', 'list', 'load', 'make', 'modify', 'move', 'must', 'name', 'open', 'package',
-      'persist', 'prevent', 'print', 'provide', 'read', 'refactor', 'reject', 'remove', 'rename',
+      'persist', 'pick', 'place', 'prevent', 'print', 'provide', 'put', 'raise', 'read', 'refactor',
+      'refresh', 'register', 'reject', 'remove', 'rename', 'round', 'select', 'send', 'toggle',
+      'trim', 'escape', 'draw', 'bind', 'emit', 'hide', 'mark', 'limit', 'count',
       'render', 'replace', 'report', 'require', 'reset', 'return', 'run', 'save', 'scaffold',
       'search', 'set', 'show', 'sort', 'split', 'start', 'store', 'style', 'summarise', 'summarize',
       'support', 'test', 'throw', 'track', 'update', 'use', 'validate', 'verify', 'view', 'wire',
@@ -102,6 +104,33 @@ const IMPERATIVE = new RegExp(
  * from files changed. The summary is what the run ends with anyway.
  */
 const REPORTING_HEADING = /^(?:output|summary|summarise|summarize|report(?:ing)?|deliverables?|when done)\b/i;
+
+/**
+ * Words that mean "tell me", as opposed to "make the program do".
+ *
+ * The heading alone is not enough to decide, which took a fixture to notice. *Output*
+ * heads the TODO brief's closing "when done, summarize:" — a request for a message. It
+ * also heads a perfectly ordinary *Output format* section about what a program should
+ * print, and dropping that silently deletes a requirement.
+ *
+ * So a section is only treated as reporting when its heading looks like one **and**
+ * something in it actually asks to be told. That keeps every real case — "When
+ * finished, summarize:", "Deliverables Checklist (agent must confirm each…)" — and
+ * stops the false one.
+ */
+const REPORTING_VERB = /\b(?:summari[sz]e|report(?:ing)? back|report the|confirm(?:s|ed|ing)?|tell (?:me|us)|state what|declaring done|when (?:done|finished))\b/i;
+
+/**
+ * Is this a section about the reply rather than about the work?
+ *
+ * @param {string} title
+ * @param {string[]} body
+ * @returns {boolean}
+ */
+function isReporting(title, body) {
+  if (!REPORTING_HEADING.test(title)) return false;
+  return REPORTING_VERB.test(title) || body.some((line) => REPORTING_VERB.test(line));
+}
 
 /** One filename. Linear, and counted rather than repeated inside the pattern. */
 const FILENAME_TOKEN = /[\w-]+\.[a-z]{2,4}\b/gi;
@@ -282,7 +311,7 @@ function fromRequest(request) {
     // A section that names the reply rather than the work. Dropped rather than kept as
     // a constraint: it is an instruction, just not one that changes the workspace, and
     // repeating it under every item would have each one try to write a summary.
-    if (REPORTING_HEADING.test(section.title)) {
+    if (isReporting(section.title, body)) {
       dropped.push(section.title);
       continue;
     }

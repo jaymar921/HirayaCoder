@@ -144,6 +144,48 @@ describe('requestPlan.fromRequest — heading depth', () => {
   });
 });
 
+describe('requestPlan.fromRequest — what counts as a report', () => {
+  it('drops a section that asks to be told what happened', () => {
+    assert.match(requestPlan.fromRequest(BRIEF).reason, /dropping "Output" as reporting/);
+  });
+
+  it('keeps a section about what the program should print', () => {
+    // The heading alone cannot decide this. *Output* heads the benchmark brief's
+    // closing "when done, summarize:", and it also heads a perfectly ordinary section
+    // about what a program prints — dropping the second silently deletes a requirement.
+    const request = [
+      'Build a small ledger tool.',
+      '',
+      '## Structure',
+      '',
+      '- Keep the store and the report in separate modules, so one can be tested without',
+      '  standing the other up.',
+      '',
+      '## Output format',
+      '',
+      '- Print one line per entry, date left-aligned and amount right-aligned in a',
+      '  fixed-width column, so a column of figures can be scanned down.',
+      '- Show the running total at the foot, and say explicitly when the ledger is empty',
+      '  rather than printing a bare zero that reads like a balanced account.',
+      '',
+      '## Rounding',
+      '',
+      '- Round every figure to two decimal places before it is printed. The totals are',
+      '  read aloud in a meeting and pennies of drift start arguments that take longer to',
+      '  settle than the meeting itself.',
+      '- Keep full precision in the stored data, so the rounding is a presentation choice',
+      '  and not a lossy write that cannot be undone later.',
+    ].join('\n');
+
+    const plan = requestPlan.fromRequest(request);
+    assert.strictEqual(/as reporting/.test(plan.reason), false, plan.reason);
+    assert.ok(
+      plan.items.some((item) => /Output format/.test(item.text)),
+      'the output-format section should be work'
+    );
+  });
+});
+
 describe('requestPlan.hasInstruction', () => {
   it('reads a constraint list as having nothing to do', () => {
     assert.strictEqual(

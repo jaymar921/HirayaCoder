@@ -265,12 +265,16 @@ const MAX_TARGET_PATH_CHARS = 400;
  * `.svg` is deliberately absent — it is text, a model can write one, and a request that
  * asks for an icon means it.
  */
-const BINARY_EXTENSIONS = new Set([
-  'png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp', 'ico', 'icns',
-  'pdf', 'zip', 'gz', 'tar', 'jar', 'war', 'class', 'exe', 'dll', 'so', 'dylib', 'bin', 'wasm',
-  'woff', 'woff2', 'ttf', 'otf', 'eot',
-  'mp3', 'mp4', 'wav', 'ogg', 'webm', 'mov', 'avi',
-  'db', 'sqlite', 'lock',
+const WRITABLE_EXTENSIONS = new Set([
+  // Web and JavaScript
+  'js', 'jsx', 'mjs', 'cjs', 'ts', 'tsx', 'vue', 'svelte', 'html', 'htm',
+  'css', 'scss', 'sass', 'less', 'svg',
+  // Data and configuration
+  'json', 'yml', 'yaml', 'toml', 'ini', 'cfg', 'conf', 'xml', 'csv', 'properties', 'gradle',
+  // Prose
+  'md', 'markdown', 'txt', 'rst', 'adoc',
+  // Other languages
+  'py', 'pyi', 'java', 'kt', 'kts', 'go', 'rb', 'rs', 'php', 'cs', 'cpp', 'hpp', 'sql', 'sh', 'bash',
 ]);
 
 /**
@@ -326,7 +330,20 @@ function isDictatableFilename(target) {
   // misleading name. Found while tracing the README section of the benchmark brief,
   // which contains the placeholder `![screenshot](./screenshot.png)` — a real path, a
   // real extension, and nothing a dictation could ever produce.
-  if (BINARY_EXTENSIONS.has(extension.toLowerCase())) return false;
+  // An allow-list, not a deny-list, and the Python brief is why.
+  //
+  // A dotted identifier is shaped exactly like a filename, and Python prose is full of
+  // them. Measured on the POS-in-Python sweep: "Use `pathlib.Path` for file handling"
+  // and "abstract base class (`abc.ABC`)" were both taken as files and both consumed a
+  // dictation slot — so `qwen3.5:0.8b` and `llama3.2:1b` spent their budget writing
+  // `pathlib.Path` and finished with **zero project files on disk**. `tkinter.ttk`,
+  // `unittest.mock` and `json.dumps` are all the same shape.
+  //
+  // No deny-list can cover that: the space of module paths is open and the space of
+  // file types is not. Naming what a model can usefully write is the honest direction,
+  // and the cost is that a file type nobody listed is left to the loop rather than
+  // dictated — a much smaller failure than writing a file called `pathlib.Path`.
+  if (!WRITABLE_EXTENSIONS.has(extension.toLowerCase())) return false;
 
   let wordChars = 0;
   for (const character of stem) {
@@ -1699,7 +1716,12 @@ class AgentSession {
     const targets = [];
     const seen = new Set();
     for (const entry of named) {
-      const target = String(entry.path || '').replace(/^\.\//, '');
+      // A path written at the end of a sentence keeps the sentence's punctuation —
+      // "…in pos_app/repository/file_product_repository.py." — and the full stop turns
+      // a real file into one with no extension, which is then silently skipped.
+      const target = String(entry.path || '')
+        .replace(/^\.\//, '')
+        .replace(/[.,;:!?)\]]+$/, '');
       if (!target || seen.has(target)) continue;
       seen.add(target);
       if (UNDICTATABLE.test(target)) continue;

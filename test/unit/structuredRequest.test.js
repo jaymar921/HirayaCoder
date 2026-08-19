@@ -334,6 +334,97 @@ describe('a structured request, split and dictated', () => {
     assert.strictEqual(client.appWrites, 2, 'the assembly check should have asked for App.jsx a second time');
   });
 
+  it('does not mistake a dotted module path for a file', async () => {
+    // The finding from the POS-in-Python sweep, and the most expensive one yet: a
+    // dotted identifier is shaped exactly like a filename, Python prose is full of
+    // them, and each one consumed a dictation slot. `qwen3.5:0.8b` and `llama3.2:1b`
+    // both spent their budget writing `pathlib.Path` and `abc.ABC`, and finished with
+    // zero project files on disk.
+    const request = [
+      'Build a small ledger tool in Python.',
+      '',
+      '## Structure',
+      '',
+      'Use this layout and do not flatten it:',
+      '',
+      '```',
+      'ledger-app/',
+      '├── ledger/',
+      '│   ├── store.py       # Holds entries, backed by a file',
+      '│   └── report.py      # Turns entries into a printable summary',
+      '└── README.md',
+      '```',
+      '',
+      '## Detailed Requirements',
+      '',
+      '- Use `pathlib.Path` for every file operation, never bare `open` with a string,',
+      '  so the tool behaves the same on Windows as it does on Linux.',
+      '- Define the repository as an abstract base class using `abc.ABC`, and keep the',
+      '  concrete file-backed one separate from it.',
+      '- Serialise with `json.dumps` and sort the keys, so a committed data file has a',
+      '  stable diff rather than a reordered one every save.',
+    ].join('\n');
+
+    fs.mkdirSync(path.join(root, 'ledger-app', 'ledger'), { recursive: true });
+
+    const client = dictatingClient();
+    await makeSession(client).run(request, { mode: 'agent' });
+
+    for (const target of client.dictatedPaths) {
+      assert.strictEqual(
+        /(?:pathlib\.Path|abc\.ABC|json\.dumps)$/.test(target),
+        false,
+        `dictated a module path: ${target}`
+      );
+    }
+    assert.strictEqual(fs.existsSync(path.join(root, 'pathlib.Path')), false);
+    assert.strictEqual(fs.existsSync(path.join(root, 'ledger-app', 'abc.ABC')), false);
+  });
+
+  it('reads a path written at the end of a sentence', async () => {
+    // "…in ledger/store.py." — the full stop belongs to the sentence, and leaving it on
+    // turns a real file into one with no extension, which is then silently skipped.
+    const request = [
+      'Extend the ledger tool.',
+      '',
+      '## Structure',
+      '',
+      'Keep this layout:',
+      '',
+      '```',
+      'ledger-app/',
+      '└── ledger/',
+      '    └── store.py       # Holds entries, backed by a file',
+      '```',
+      '',
+      '## Detailed Requirements',
+      '',
+      '- Put the running total in ledger/report.py, and read it from ledger/store.py.',
+      '- Round every figure to two decimal places before it is printed, because the',
+      '  totals are read aloud in a meeting and pennies of drift start arguments.',
+      '',
+      '## Output format',
+      '',
+      '- Print one line per entry, with the date left-aligned and the amount right-aligned',
+      '  in a fixed-width column, so a column of figures can be scanned down rather than',
+      '  read across.',
+      '- Show the running total on its own line at the foot, separated by a rule, and say',
+      '  explicitly when the ledger is empty rather than printing a bare zero that reads',
+      '  like a balanced account.',
+    ].join('\n');
+
+    fs.mkdirSync(path.join(root, 'ledger-app', 'ledger'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'ledger'), { recursive: true });
+
+    const client = dictatingClient();
+    await makeSession(client).run(request, { mode: 'agent' });
+
+    assert.ok(
+      client.dictatedPaths.includes('ledger/report.py'),
+      `report.py was never asked for; got ${JSON.stringify(client.dictatedPaths)}`
+    );
+  });
+
   it('does not try to write a PNG', async () => {
     // The benchmark brief's README section carries the placeholder
     // `![screenshot](./screenshot.png)` — a real path with a real extension, and nothing
