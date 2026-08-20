@@ -53,6 +53,17 @@ class JsonlLog {
     /** @type {Promise<void>} Tail of the serialized write chain. */
     this._queue = Promise.resolve();
     this._enabled = true;
+    /** Set once the containing directory is known to exist. */
+    this._directoryReady = false;
+    /**
+     * Bytes on disk, counted rather than re-measured on every append.
+     *
+     * Undefined until the file has been measured once, which is also how a rotation or
+     * an external truncation gets noticed: clearing this forces a fresh `stat`.
+     *
+     * @type {number | undefined}
+     */
+    this._bytes = undefined;
   }
 
   /**
@@ -104,24 +115,50 @@ class JsonlLog {
    * @private
    */
   async _write(line) {
-    await fs.promises.mkdir(path.dirname(this.filePath), { recursive: true });
-    await this._rotateIfNeeded();
-    await fs.promises.appendFile(this.filePath, `${line}\n`, 'utf8');
+    // The directory is made once, not once per entry.
+    //
+    // This runs on every agent step, and the three syscalls it used to cost — mkdir,
+    // stat, append — are two more than it needs. On a Windows CI runner the difference
+    // was the difference between a passing test and a two-second timeout: forty
+    // sequential appends took longer than mocha's default, and the writes still in
+    // flight afterwards then raced the temp-directory cleanup into `ENOTEMPTY`.
+    if (!this._directoryReady) {
+      await fs.promises.mkdir(path.dirname(this.filePath), { recursive: true });
+      this._directoryReady = true;
+    }
+
+    const payload = `${line}\n`;
+    await this._rotateIfNeeded(Buffer.byteLength(payload, 'utf8'));
+    await fs.promises.appendFile(this.filePath, payload, 'utf8');
+    // Tracked rather than re-measured. `_rotateIfNeeded` still stats when it has no
+    // count to go on, so an externally truncated or replaced file is picked up.
+    if (typeof this._bytes === 'number') this._bytes += Buffer.byteLength(payload, 'utf8');
   }
 
   /**
    * @returns {Promise<void>}
    * @private
    */
-  async _rotateIfNeeded() {
+  async _rotateIfNeeded(incoming = 0) {
     try {
-      const stats = await fs.promises.stat(this.filePath);
-      if (stats.size < this.maxBytes) return;
+      // Measure once, then count. A `stat` per append is the expensive half of writing
+      // one line, and the size is something this class already knows every time it adds
+      // to it. The file is re-measured after a rotation and whenever the count has been
+      // lost, so a file truncated or replaced underneath us is still noticed.
+      if (typeof this._bytes !== 'number') {
+        const stats = await fs.promises.stat(this.filePath);
+        this._bytes = stats.size;
+      }
+      if (this._bytes + incoming < this.maxBytes) return;
+
       await fs.promises.rename(this.filePath, `${this.filePath}.1`);
+      this._bytes = 0;
       logger.info(`Rotated the HirayaCoder ${this.label}.`);
     } catch (err) {
       const code = /** @type {NodeJS.ErrnoException} */ (err).code;
       if (code !== 'ENOENT') throw err;
+      // No file yet: the next append creates it, and it starts empty.
+      this._bytes = 0;
     }
   }
 
