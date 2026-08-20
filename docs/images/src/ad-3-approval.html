@@ -1,0 +1,161 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>HirayaCoder ad 3 — you approve every change</title>
+<style>
+  /* Square ad, 1080x1080. Same palette and accent as the rest of the set. Self-contained. */
+  :root {
+    --bg: #0b1220;
+    --line: rgba(148, 163, 184, 0.16);
+    --fg: #e8ecf1;
+    --muted: #94a3b8;
+    --sunrise-a: #ff9a3c;
+    --sunrise: linear-gradient(115deg, #ff9a3c, #ff5f6d);
+    --add: #4ade80;
+    --del: #f87171;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1080px; height: 1080px; }
+  body {
+    background: var(--bg); color: var(--fg); overflow: hidden; position: relative;
+    font-family: "Segoe UI", -apple-system, system-ui, sans-serif;
+  }
+  .glow { position: absolute; border-radius: 50%; filter: blur(110px); }
+  .glow-a { width: 700px; height: 700px; right: -240px; top: -300px; background: #ff7a45; opacity: 0.17; }
+  .glow-b { width: 620px; height: 620px; left: -260px; bottom: -300px; background: #2b6cb0; opacity: 0.26; }
+
+  .wrap { position: relative; z-index: 1; height: 100%; padding: 60px 64px; display: flex; flex-direction: column; justify-content: space-between; }
+
+  header { display: flex; align-items: center; gap: 16px; }
+  .brand-name { font-size: 27px; font-weight: 700; letter-spacing: -0.3px; }
+  .ver { font-size: 15px; font-weight: 700; padding: 6px 14px; border-radius: 999px; color: #1b1205; background: var(--sunrise); }
+
+  h1 { font-size: 68px; line-height: 1.04; letter-spacing: -2.1px; font-weight: 700; margin-top: 42px; }
+  h1 .grad { background: var(--sunrise); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .lede { font-size: 23px; color: var(--muted); line-height: 1.45; margin-top: 24px; max-width: 880px; }
+  .lede b { color: var(--fg); font-weight: 600; }
+
+  /* The approval prompt, laid out the way the panel puts it in front of you. */
+  .card {
+    margin-top: 38px; border: 1px solid var(--line); border-radius: 17px; overflow: hidden;
+    background: linear-gradient(180deg, rgba(148,163,184,0.075), rgba(148,163,184,0.03));
+  }
+  .card-bar {
+    display: flex; align-items: center; gap: 14px; padding: 18px 22px; border-bottom: 1px solid var(--line);
+  }
+  .card-bar .q { font-size: 20px; font-weight: 600; }
+  .path { font-family: Consolas, "Cascadia Mono", monospace; font-size: 17px; color: var(--sunrise-a); }
+  .count { margin-left: auto; font-size: 16px; color: var(--muted); }
+  .count .a { color: var(--add); font-weight: 600; }
+  .count .d { color: var(--del); font-weight: 600; }
+
+  .diff { font-family: Consolas, "Cascadia Mono", monospace; font-size: 16px; line-height: 1.7; padding: 14px 22px; }
+  .diff div { white-space: pre; }
+  .diff .a { color: var(--add); }
+  .diff .d { color: var(--del); }
+  .diff .c { color: var(--muted); }
+
+  .actions { display: flex; align-items: center; gap: 12px; padding: 15px 22px; border-top: 1px solid var(--line); }
+  .btn { font-size: 17px; font-weight: 600; padding: 12px 22px; border-radius: 10px; border: 1px solid var(--line); color: var(--muted); }
+  .btn.primary { background: var(--sunrise); color: #1b1205; border-color: transparent; font-weight: 700; }
+  .note { margin-left: auto; font-size: 16px; color: var(--muted); }
+
+  .strip { margin-top: 30px; display: flex; gap: 12px; }
+  .fact {
+    flex: 1; border: 1px solid var(--line); border-radius: 14px; padding: 17px 18px;
+    background: linear-gradient(180deg, rgba(148,163,184,0.075), rgba(148,163,184,0.03));
+  }
+  .fact .t { font-size: 18px; font-weight: 700; margin-bottom: 5px; }
+  .fact .s { font-size: 15px; color: var(--muted); line-height: 1.42; }
+
+  footer {
+    margin-top: 0; padding-top: 26px; border-top: 1px solid var(--line);
+    display: flex; align-items: center; gap: 22px; font-size: 18px; color: var(--muted);
+  }
+  footer b { color: var(--fg); font-weight: 600; }
+  .pill { margin-left: auto; font-size: 17px; font-weight: 700; padding: 10px 20px; border-radius: 999px; background: var(--sunrise); color: #1b1205; }
+</style>
+</head>
+<body>
+  <div class="glow glow-a"></div>
+  <div class="glow glow-b"></div>
+
+  <div class="wrap">
+    <header>
+      <svg width="46" height="46" viewBox="0 0 128 128">
+        <defs>
+          <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#FF7A45"/><stop offset="55%" stop-color="#FFB020"/><stop offset="100%" stop-color="#2B6CB0"/>
+          </linearGradient>
+        </defs>
+        <rect width="128" height="128" rx="24" fill="#101826"/>
+        <g transform="translate(64,50)">
+          <circle r="14" fill="url(#g)"/>
+          <g stroke="url(#g)" stroke-width="4" stroke-linecap="round">
+            <line x1="0" y1="-26" x2="0" y2="-34"/><line x1="0" y1="26" x2="0" y2="34"/>
+            <line x1="-26" y1="0" x2="-34" y2="0"/><line x1="26" y1="0" x2="34" y2="0"/>
+            <line x1="-18" y1="-18" x2="-24" y2="-24"/><line x1="18" y1="18" x2="24" y2="24"/>
+            <line x1="-18" y1="18" x2="-24" y2="24"/><line x1="18" y1="-18" x2="24" y2="-24"/>
+          </g>
+        </g>
+        <g stroke="#94a3b8" stroke-width="5" stroke-linecap="round" opacity="0.85">
+          <line x1="40" y1="98" x2="56" y2="98"/><line x1="66" y1="98" x2="88" y2="98"/>
+        </g>
+      </svg>
+      <span class="brand-name">HirayaCoder</span>
+      <span class="ver">v1.0.0</span>
+    </header>
+
+    <h1>Nothing is saved<br />without <span class="grad">your say-so.</span></h1>
+
+    <p class="lede">
+      Every write shows you the diff first. <b>You approve it, or it does not happen.</b>
+    </p>
+
+    <div class="card">
+      <div class="card-bar">
+        <span class="q">Apply this change to</span>
+        <span class="path">src/components/TodoItem.jsx</span>
+        <span class="count"><span class="a">+5</span> &nbsp;<span class="d">-1</span></span>
+      </div>
+      <div class="diff">
+        <div class="c">  export function TodoItem({ todo, onToggle }) {</div>
+        <div class="d">-   return &lt;li&gt;{todo.title}&lt;/li&gt;;</div>
+        <div class="a">+   return (</div>
+        <div class="a">+     &lt;li className="row"&gt;</div>
+        <div class="a">+       &lt;input type="checkbox" onChange={onToggle} /&gt; {todo.title}</div>
+        <div class="a">+     &lt;/li&gt;</div>
+        <div class="a">+   );</div>
+        <div class="c">  }</div>
+      </div>
+      <div class="actions">
+        <span class="btn primary">Approve</span>
+        <span class="btn">Review diff</span>
+        <span class="btn">Reject</span>
+        <span class="note">Logged either way</span>
+      </div>
+    </div>
+
+    <div class="strip">
+      <div class="fact">
+        <div class="t">Deletes always ask</div>
+        <div class="s">Even with Auto Edit on. A wrong write is in the diff; a wrong delete is not.</div>
+      </div>
+      <div class="fact">
+        <div class="t">It cannot leave your folder</div>
+        <div class="s">Every file operation is confined to the folder you opened.</div>
+      </div>
+      <div class="fact">
+        <div class="t">Commands are allow-listed</div>
+        <div class="s">No shell. One command at a time. The AI cannot extend the list.</div>
+      </div>
+    </div>
+
+    <footer>
+      <span>Damaged-write guards exist because <b>four models produced six broken files</b> in one sweep</span>
+      <span class="pill">You stay in charge</span>
+    </footer>
+  </div>
+</body>
+</html>

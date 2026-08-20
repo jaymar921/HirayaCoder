@@ -1,0 +1,131 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>HirayaCoder ad 1 — offline</title>
+<style>
+  /*
+    Square ad, 1080x1080. Shares the palette and the sunrise accent with the README
+    images so the set reads as one product, and is self-contained for the same reason
+    they are: no font, script, or image is fetched, and the icon is inlined SVG.
+  */
+  :root {
+    --bg: #0b1220;
+    --line: rgba(148, 163, 184, 0.16);
+    --fg: #e8ecf1;
+    --muted: #94a3b8;
+    --sunrise-a: #ff9a3c;
+    --sunrise: linear-gradient(115deg, #ff9a3c, #ff5f6d);
+    --ok: #4ade80;
+    --no: #f87171;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1080px; height: 1080px; }
+  body {
+    background: var(--bg); color: var(--fg); overflow: hidden; position: relative;
+    font-family: "Segoe UI", -apple-system, system-ui, sans-serif;
+  }
+  .glow { position: absolute; border-radius: 50%; filter: blur(110px); }
+  .glow-a { width: 700px; height: 700px; right: -240px; top: -300px; background: #ff7a45; opacity: 0.17; }
+  .glow-b { width: 620px; height: 620px; left: -260px; bottom: -300px; background: #2b6cb0; opacity: 0.26; }
+
+  .wrap { position: relative; z-index: 1; height: 100%; padding: 60px 64px; display: flex; flex-direction: column; justify-content: space-between; }
+
+  header { display: flex; align-items: center; gap: 16px; }
+  .brand-name { font-size: 27px; font-weight: 700; letter-spacing: -0.3px; }
+  .ver { font-size: 15px; font-weight: 700; padding: 6px 14px; border-radius: 999px; color: #1b1205; background: var(--sunrise); }
+
+  h1 { font-size: 76px; line-height: 1.02; letter-spacing: -2.4px; font-weight: 700; margin-top: 54px; }
+  h1 .grad { background: var(--sunrise); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .lede { font-size: 24px; color: var(--muted); line-height: 1.45; margin-top: 26px; max-width: 850px; }
+  .lede b { color: var(--fg); font-weight: 600; }
+
+  .proof { margin-top: 0; display: flex; flex-direction: column; gap: 14px; }
+  .row {
+    display: flex; align-items: center; gap: 18px;
+    border: 1px solid var(--line); border-radius: 15px; padding: 20px 24px;
+    background: linear-gradient(180deg, rgba(148,163,184,0.075), rgba(148,163,184,0.03));
+  }
+  .mark { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; flex: none; font-size: 19px; font-weight: 700; }
+  .mark.yes { background: rgba(74, 222, 128, 0.15); color: var(--ok); }
+  .mark.no { background: rgba(248, 113, 113, 0.14); color: var(--no); }
+  .row .t { font-size: 21px; font-weight: 600; }
+  .row .s { font-size: 17px; color: var(--muted); margin-top: 3px; }
+  .row code { font-family: Consolas, "Cascadia Mono", monospace; color: var(--sunrise-a); }
+
+  footer {
+    margin-top: 46px; padding-top: 26px; border-top: 1px solid var(--line);
+    display: flex; align-items: center; gap: 20px; font-size: 18px; color: var(--muted);
+  }
+  footer b { color: var(--fg); font-weight: 600; }
+  .pill { margin-left: auto; font-size: 17px; font-weight: 700; padding: 10px 20px; border-radius: 999px; background: var(--sunrise); color: #1b1205; }
+</style>
+</head>
+<body>
+  <div class="glow glow-a"></div>
+  <div class="glow glow-b"></div>
+
+  <div class="wrap">
+    <header>
+      <svg width="46" height="46" viewBox="0 0 128 128">
+        <defs>
+          <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#FF7A45"/><stop offset="55%" stop-color="#FFB020"/><stop offset="100%" stop-color="#2B6CB0"/>
+          </linearGradient>
+        </defs>
+        <rect width="128" height="128" rx="24" fill="#101826"/>
+        <g transform="translate(64,50)">
+          <circle r="14" fill="url(#g)"/>
+          <g stroke="url(#g)" stroke-width="4" stroke-linecap="round">
+            <line x1="0" y1="-26" x2="0" y2="-34"/><line x1="0" y1="26" x2="0" y2="34"/>
+            <line x1="-26" y1="0" x2="-34" y2="0"/><line x1="26" y1="0" x2="34" y2="0"/>
+            <line x1="-18" y1="-18" x2="-24" y2="-24"/><line x1="18" y1="18" x2="24" y2="24"/>
+            <line x1="-18" y1="18" x2="-24" y2="24"/><line x1="18" y1="-18" x2="24" y2="-24"/>
+          </g>
+        </g>
+        <g stroke="#94a3b8" stroke-width="5" stroke-linecap="round" opacity="0.85">
+          <line x1="40" y1="98" x2="56" y2="98"/><line x1="66" y1="98" x2="88" y2="98"/>
+        </g>
+      </svg>
+      <span class="brand-name">HirayaCoder</span>
+      <span class="ver">v1.0.0</span>
+    </header>
+
+    <h1>Your code never<br /><span class="grad">leaves your laptop.</span></h1>
+
+    <p class="lede">
+      An AI coding agent that runs entirely on your own machine through Ollama.
+      <b>No account. No subscription. No internet.</b>
+    </p>
+
+    <div class="proof">
+      <div class="row">
+        <span class="mark yes">✓</span>
+        <div>
+          <div class="t">Works with your Wi-Fi off</div>
+          <div class="s">Try it — that is the proof, not a promise.</div>
+        </div>
+      </div>
+      <div class="row">
+        <span class="mark no">✕</span>
+        <div>
+          <div class="t">Cannot reach the internet, by construction</div>
+          <div class="s">A non-loopback address is refused in code, before any connection opens.</div>
+        </div>
+      </div>
+      <div class="row">
+        <span class="mark no">✕</span>
+        <div>
+          <div class="t">No telemetry, and no third-party code</div>
+          <div class="s">Zero production dependencies. Nobody is counting your keystrokes.</div>
+        </div>
+      </div>
+    </div>
+
+    <footer>
+      <span>Free and open source · <b>MIT</b></span>
+      <span class="pill">Free forever</span>
+    </footer>
+  </div>
+</body>
+</html>
