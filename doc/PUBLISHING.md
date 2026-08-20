@@ -1,8 +1,40 @@
 # Publishing HirayaCoder to the VS Code Marketplace
 
-*A clear, step-by-step guide for `jaymar921` to follow once HirayaCoder is fully built, tested, and ready to ship. No prior Marketplace-publishing experience assumed.*
+*A clear, step-by-step guide for `jaymar921`. No prior Marketplace-publishing experience assumed.*
 
-Follow these steps **in order**. Steps 1–3 are one-time setup you only do once per publisher account. Steps 4 onward repeat for every new version you release.
+## Which half of this do I need?
+
+There are two jobs in this document and they are not the same size.
+
+| | What it covers | Read |
+|---|---|---|
+| **Publishing 1.0.0 for the first time** | Creating the publisher, getting a token, and getting the listing to exist at all. Done once, ever. | Steps 1–3, then 4–11 |
+| **Shipping an update** | Bump, package, test, publish, tag. Twenty minutes once you have done it once. | [Part B](#part-b--shipping-an-update) — Steps 4–11 only |
+
+Steps 1–3 are **one-time setup per publisher account**. If `vsce login jaymar921`
+already works on this machine, skip straight to Part B.
+
+> **First time?** The order that matters most: **do not tag before the version is right.**
+> Step 5 bumps `package.json`, and the tag push in Step 10 is compared against it. A tag
+> that disagrees fails the release job rather than shipping something mislabelled — which
+> is the design working, but it is easier to get right the first time.
+
+---
+
+## What "publishing" actually means here
+
+Three things happen at a release and they are independent. Confusing them is the main
+way this goes wrong.
+
+| | Who does it | When | Reversible? |
+|---|---|---|---|
+| **GitHub Release** — the `.vsix` attached to a tag | **CI, automatically** on any `v*.*.*` tag | Step 10 | Yes, delete the release |
+| **Marketplace listing** — the one-click install | **You, by hand** (`vsce publish`) | Step 8 | **No** — see Step 11 |
+| **Version number** in `package.json` | You | Step 5 | Yes, until it is published |
+
+The GitHub Release is automated because it is safe to repeat. Marketplace publishing is
+deliberately manual and **no Marketplace token is stored in this repository**: pushing a
+tag should not be able to ship to every installed user.
 
 ---
 
@@ -13,8 +45,9 @@ Don't proceed to packaging until every box here is checked — publishing a brok
 - [ ] All features in `/setup/PROMPT.md` that are in scope for this version are implemented and working.
 - [ ] `npm run test:all` passes locally (lint + unit + integration), and **CI is green on
       all three platforms** — the Actions run for the commit you are about to tag.
-- [ ] SAST suite has been run and a filled-out report exists in `/security/` (see
-      `sast-report-2026-08-12.md`) with no unresolved Critical/High findings.
+- [ ] SAST suite has been run and a filled-out report exists in `/security/` — the most
+      recent is `sast-report-2026-08-20-1.0.0.md` — with no unresolved Critical/High
+      findings. Copy `sast-report-template.md` rather than editing the previous report.
 - [ ] Smoke-tested manually on Windows, macOS, and Linux. CI covers the automated suites
       on all three; this box is about a human using the packaged `.vsix` — see Step 7b
       for the short list of things that actually differ per platform.
@@ -23,8 +56,24 @@ Don't proceed to packaging until every box here is checked — publishing a brok
 - [ ] `CHANGELOG.md` has an entry for this version.
 - [ ] `LICENSE` file exists and its content matches what `README.md` links to.
 - [ ] `docs/assets/icon-128.png` exists and looks correct at both small and large sizes.
+- [ ] **The version badge in the marketing images matches this release.** They are
+      rendered from `docs/images/src/*.html` and every one carries the version — see that
+      folder's `README.md` for what to bump and, just as importantly, what not to.
+- [ ] **Nothing in the repo claims a Marketplace listing that does not exist yet.** The
+      hero image's CTA, `capabilities.html`'s footer, `ad-4-launch.html`'s footer, and
+      the README's banner all describe how to install. Through 0.7.0 one of them said
+      *Search "HirayaCoder" in the Extensions view*, months before that could work.
+- [ ] **The release will not be published as a pre-release.** CI derives this from the
+      version: `0.x` and any `-rc`/`-beta` suffix are flagged, everything else is not.
+      `test/unit/releaseWorkflow.test.js` asserts it for the current `package.json`, so a
+      green suite is the check — there is no checkbox to get wrong.
 
 ---
+
+# Part A — First Publish (one-time setup)
+
+*Steps 1–3. Done once per publisher account, ever. If `vsce login jaymar921` already
+works on this machine, skip to [Part B](#part-b--shipping-an-update).*
 
 ## Step 1 — Create a Publisher (one-time)
 
@@ -77,26 +126,50 @@ Paste the PAT when prompted. You only need to do this once per machine (or again
 
 ---
 
+# Part B — Shipping an Update
+
+*Everything from here repeats for every release. Steps 1–3 above are done.*
+
 ## Step 4 — Make Sure `package.json` Is Marketplace-Ready
 
-Before every release, confirm these fields are correct in `package.json`:
+Before every release, confirm these fields are correct in `package.json`. This is the
+current manifest, copied verbatim — if yours differs, yours is the one that ships:
 
 ```json
 {
   "name": "hirayacoder",
   "displayName": "HirayaCoder",
-  "description": "A local Filipino-inspired AI programmer that generates, refactors, and understands code directly inside VS Code — fully offline, powered by Ollama.",
+  "description": "A fully offline, privacy-first AI coding agent powered by your local Ollama instance. Agentic on every model — even 1B.",
   "version": "1.0.0",
   "publisher": "jaymar921",
-  "author": "jaymar921",
-  "license": "SEE LICENSE IN LICENSE",
-  "engines": { "vscode": "^1.85.0" },
-  "categories": ["Machine Learning", "Programming Languages", "Other"],
-  "keywords": ["ai", "ollama", "offline", "agent", "coding assistant", "local llm"],
+  "author": {
+    "name": "jaymar921",
+    "url": "https://github.com/jaymar921"
+  },
+  "license": "MIT",
   "icon": "docs/assets/icon-128.png",
+  "engines": {
+    "vscode": "^1.85.0",
+    "node": ">=18"
+  },
+  "categories": [
+    "AI",
+    "Programming Languages",
+    "Machine Learning",
+    "Other"
+  ],
+  "keywords": [
+    "ollama",
+    "offline",
+    "local llm",
+    "ai agent",
+    "privacy",
+    "copilot alternative",
+    "code assistant"
+  ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/jaymar921/HirayaCoder"
+    "url": "https://github.com/jaymar921/HirayaCoder.git"
   }
 }
 ```
@@ -119,7 +192,44 @@ Pick the right bump based on what changed since the last release:
 npm version patch   # or: minor / major
 ```
 
-This updates `package.json`'s `version` field and creates a git commit + tag automatically. Update `CHANGELOG.md` with a short entry for this version before or right after this step.
+This updates `package.json`'s `version` field and creates a git commit + tag automatically.
+
+> **Careful with `npm version` here.** It tags immediately, and the release workflow
+> compares that tag against `package.json`. That is fine when the bump is the last thing
+> you do — but if you still have documentation or images to update, use
+> `npm version <type> --no-git-tag-version` and tag by hand in Step 10, once everything
+> that mentions the version agrees.
+
+### The rest of the bump — everything else that names the version
+
+`package.json` is one of several places the version appears, and the others do not fail
+loudly when they go stale; they just quietly ship a picture saying `v0.9.0` on a 1.2.0
+release. Work down this list:
+
+| What | Where | Notes |
+|---|---|---|
+| Version | `package.json` | The one CI enforces against the tag |
+| Changelog entry | `CHANGELOG.md` | Dated, with a real summary — see below |
+| Version badge, ×6 | `docs/images/src/*.html` | Then **re-render** — `docs/images/src/README.md` has the command |
+| Version badge, ×4 | `docs/images/src/ad-*.html` | The social ads. Same re-render, different window size |
+| Hero alt text | `README.md` | Names the version in the `alt` attribute, where nobody looks |
+| SAST report | `security/sast-report-<date>-<version>.md` | New file from the template, not an edit of the last one |
+| CI test counts | this file, Step 10 | Only when they have moved enough to mislead |
+
+Two rules that have already caught mistakes here:
+
+- **Not every version string is the current version.** `knows-what-it-has.html` contains
+  a badge labelling the release a *measurement* was taken on. Bumping that makes the
+  image claim a number it never measured. When in doubt, read the surrounding text.
+- **The "New in …" tag moves to the card the release actually changed, or comes off.**
+  Only ever one card carries it. For 1.0.0 it came off, because 1.0.0 rewrote none of
+  them.
+
+### Writing the changelog entry
+
+Keep-a-Changelog format, and **date it** — several older entries in this file are marked
+`unreleased` despite having been tagged and shipped, which makes the history harder to
+read than it needs to be. The heading should be `## [1.2.0] — 2026-08-20`.
 
 ---
 
@@ -216,6 +326,27 @@ Publishing typically shows up on the Marketplace within a few minutes.
 2. Check: the icon renders correctly, the README renders correctly (headings, images, badges), the description and categories look right, and the version number matches what you just published.
 3. Install it fresh from within VS Code (`Extensions` → search "HirayaCoder") on a clean profile if possible, to see exactly what a new user sees.
 
+### Step 9b — Flip the install route (the very first publish only)
+
+**Do this only once the listing above is actually live and installable.** Until 1.0.0 the
+repo deliberately told everyone to download a `.vsix` from GitHub Releases, because that
+was the only thing that worked. Once "search the Extensions view" is true, four places
+should say so:
+
+| File | What to change |
+|---|---|
+| `README.md` | The banner near the top, and Step 4 of *Getting started* |
+| `docs/images/src/hero-offline-agent.html` | The CTA button and the note beside it |
+| `docs/images/src/capabilities.html` | The footer |
+| `docs/images/src/ad-4-launch.html` | The footer, and the matching caption in `docs/images/ADS-1.0.0.md` |
+
+Re-render the three images afterwards. Keep GitHub Releases mentioned as well rather than
+replacing it — VSCodium users and anyone on a locked-down machine still need the `.vsix`.
+
+**Do not do this ahead of time.** `capabilities.html` shipped a footer reading
+*Search "HirayaCoder" in the Extensions view* through 0.7.0, when there was nothing to
+find, and that is a worse first impression than a `.vsix` download.
+
 ---
 
 ## Step 10 — Tag the Release in Git & Publish on GitHub
@@ -228,15 +359,25 @@ git push origin main --tags
 
 That one push triggers, in order:
 
-1. **Verify** — lint, 573 unit tests, and the 12 integration tests against a real VS
-   Code, on **Ubuntu, macOS, and Windows** in parallel, plus a production dependency
-   audit. Packaging does not start unless all three platforms pass.
+1. **Verify** — lint, the full unit suite (1,545 tests at 1.0.0), and the 16 integration
+   tests against a real VS Code, on **Ubuntu, macOS, and Windows** in parallel, plus a
+   production dependency audit. Packaging does not start unless all three platforms pass.
 2. **Guard** — the tag is compared against `package.json`. A `v0.2.0` tag on a manifest
    still saying `0.1.0` fails here, rather than producing a `.vsix` whose filename
    disagrees with the release it hangs from.
 3. **Package** — `npm run package`, into `builds/v<version>/`.
 4. **Publish** — a GitHub Release for the tag, with the `.vsix` attached, its SHA-256
    recorded, install instructions, and auto-generated commit notes.
+
+**Release or pre-release is decided by the version, not by a checkbox.** A `0.x` version
+or one with a `-rc`/`-beta` suffix is published as a GitHub pre-release and gets an extra
+"offered to try, not to depend on" note appended. Anything else — 1.0.0 onward — is
+published as a full release and marked `--latest`, which is what
+`/releases/latest` resolves to and therefore what install instructions point at.
+
+Nothing to set: `test/unit/releaseWorkflow.test.js` asserts the classification for
+whatever is currently in `package.json`, so a green suite already tells you which one
+this tag will produce.
 
 It uses the runner's built-in `GITHUB_TOKEN`. **No Personal Access Token is stored in
 this repository**, and the workflow is read-only except for the single job that creates
@@ -267,16 +408,23 @@ This gives users (and you) a durable, versioned home for every `.vsix` you've ev
 ## Quick Reference (once you've done Steps 1–3 once)
 
 ```bash
-npm version patch                      # bump version + tag
-npm test                               # confirm green
-vsce package                           # produces hirayacoder-<version>.vsix
-mkdir -p builds/v<version>
-mv hirayacoder-<version>.vsix builds/v<version>/
+npm version patch --no-git-tag-version   # bump package.json only
+# ...then update CHANGELOG.md, the 10 image sources, and the README alt text (Step 5)
+npm run test:all                         # lint + unit + integration, all green
+npm run package                          # builds/v<version>/hirayacoder-<version>.vsix
+
 code --install-extension builds/v<version>/hirayacoder-<version>.vsix   # smoke test
-vsce publish --packagePath builds/v<version>/hirayacoder-<version>.vsix
-git push origin main --tags
-# then create a GitHub Release for the pushed tag and attach the .vsix
+code --uninstall-extension jaymar921.hirayacoder                        # then remove it
+
+vsce publish --packagePath builds/v<version>/hirayacoder-<version>.vsix  # the manual bit
+
+git commit -S -am "chore: v<version>"
+git tag -s v<version> -m "HirayaCoder v<version>"
+git push origin main --tags              # CI builds and creates the GitHub Release
 ```
+
+The tag push is the last step, and it is the one that is hard to undo — everything above
+it is reversible.
 
 ---
 

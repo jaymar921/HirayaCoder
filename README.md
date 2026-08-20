@@ -5,16 +5,17 @@
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/jaymar921/HirayaCoder/main/docs/images/hero-offline-agent.png" width="900" alt="HirayaCoder v0.9.0 — your AI pair programmer, fully offline. A VS Code chat panel showing the agent reading two files, writing two files, and asking for approval before running npm run build." />
+  <img src="https://raw.githubusercontent.com/jaymar921/HirayaCoder/main/docs/images/hero-offline-agent.png" width="900" alt="HirayaCoder v1.0.0 — your AI pair programmer, fully offline. A VS Code chat panel showing the agent reading two files, writing two files, and asking for approval before running npm run build." />
 </p>
 
 *A local Filipino-inspired AI coder that brings imagination and speed to your VS Code workflow.*
 
-> **Pre-release.** HirayaCoder is not on the VS Code Marketplace yet. Releases are
-> published as a `.vsix` on the
+> **1.0.0 is here.** Everything described below is implemented, tested on Windows, macOS
+> and Linux in CI, and stable enough to put a 1.0 on. The one thing still missing is the
+> one-click install: the Marketplace listing is not up yet, so releases are published as
+> a `.vsix` on the
 > [Releases page](https://github.com/jaymar921/HirayaCoder/releases) and installed by
-> hand — [Step 4](#step-4--install-hirayacoder) has the one command it takes. Everything
-> described below works today; what is missing is the one-click install.
+> hand — [Step 4](#step-4--install-hirayacoder) has the one command it takes.
 
 **HirayaCoder is a free AI coding assistant that runs entirely on your own computer.**
 You type what you want in plain English, and it writes and edits the files for you — no
@@ -131,6 +132,11 @@ Good first things to type:
 - `make a webpage that says hello with a big blue button`
 - `create a simple to-do list app in one HTML file`
 - `explain what this project does` *(in a folder that already has code)*
+
+**If anything above is unclear once you are in there, press *Guide* in the chat header.**
+It opens the same four setup steps and — more usefully — what to expect: how long a task
+takes, why a refusal is usually the checks working, and what a small model is and is not
+good at.
 
 There is a longer, friendlier walkthrough in
 [TUTORIAL.md](https://github.com/jaymar921/HirayaCoder/blob/main/doc/TUTORIAL.md).
