@@ -18,7 +18,19 @@ const fs = require('fs');
 const path = require('path');
 
 const root = path.join(__dirname, '..', '..');
-const workflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'release.yml'), 'utf8');
+
+/*
+  Newlines are normalised because this file is matched as text and the repository has no
+  `.gitattributes` pinning line endings. On a Windows checkout git hands back CRLF, so a
+  pattern written with `\n` matches on the author's working copy — where the file was
+  just written with LF — and fails on Windows CI against the identical content. That is
+  precisely what happened: 1,544 passing, one failing, on the one platform not used to
+  write it.
+*/
+const workflow = fs
+  .readFileSync(path.join(root, '.github', 'workflows', 'release.yml'), 'utf8')
+  .replace(/\r\n/g, '\n');
+
 const { version } = require('../../package.json');
 
 /**
@@ -71,7 +83,13 @@ describe('release workflow — release vs pre-release', () => {
   it('only attaches the pre-release warning when it is actually a pre-release', () => {
     // The warning block and the flag are driven by the same variable. If they ever came
     // apart, a full release could ship notes telling people not to depend on it.
-    const guard = workflow.indexOf('if [ "$PRERELEASE" = "true" ]; then\n          cat >> notes.md');
-    assert.ok(guard > -1, 'the pre-release notes block is no longer guarded by $PRERELEASE');
+    //
+    // Matched as a pattern rather than a fixed string so it survives the block being
+    // re-indented, which is a formatting change and should not fail a release check.
+    assert.match(
+      workflow,
+      /if \[ "\$PRERELEASE" = "true" \]; then\s+cat >> notes\.md/,
+      'the pre-release notes block is no longer guarded by $PRERELEASE'
+    );
   });
 });
