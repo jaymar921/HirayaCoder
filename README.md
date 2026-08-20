@@ -359,7 +359,23 @@ rather than on the descriptions.
 | `qwen3.5:4b` | 3.4 GB | 8–16 GB RAM | Good, smaller download |
 | `llama3.2:1b` | 1.3 GB | 8 GB RAM | For low-spec machines. Simple single-file jobs only |
 | `gemma4:e4b` | 9.6 GB | 32 GB RAM or a Mac | The strongest, if you have room |
-| `qwen3.5:0.8b` | 1.0 GB | — | **Avoid.** Too small to finish even simple tasks |
+| `qwen3.5:0.8b` | 1.0 GB | — | Last resort. Writes files correctly; does not finish an app |
+
+### What a very small model will and will not do
+
+Worth setting expectations, because the honest answer is more useful than the
+encouraging one. Measured on a 98-line brief for a complete React app:
+
+- **A 0.8B model now scaffolds the project, writes every file the request named, and
+  installs the dependencies.** In the previous release the same model spent its whole
+  session listing the directory and wrote nothing.
+- **It does not get the app working.** The build still fails, and no model at this size
+  finished the app in any of our runs.
+
+So a very small model is genuinely useful for *"write me this file"* and for the parts of
+a big request that are mechanical. Handing it a whole application and walking away is not
+something we can recommend yet, and the numbers behind that are in
+[the evaluation notes](https://github.com/jaymar921/HirayaCoder/blob/main/doc/SESSION-ANALYSIS-0.9.0.md).
 
 Switch models any time from the dropdown at the top of the chat — no reinstall needed.
 
@@ -405,13 +421,23 @@ documented properly elsewhere.
 Measured on three named machines, with the delete declined at the prompt on purpose — a
 model that claims it deleted the file has failed the task whatever else it got right.
 There are four harnesses: editing an existing project, building one from an empty folder,
-wiring an existing project together, and — new in 0.9.0 — building a whole React app from
-one brief and then **driving it in a headless browser**, clicking every control the brief
-asked for.
+wiring an existing project together, and — new in 0.9.0 — building a whole application
+from one brief and then **driving the finished thing**, either by clicking every control
+in a headless browser or by calling its service layer directly.
 
-That last one exists because of a result worth stating plainly: a model passed the
-scaffold, structure, install and build checks, and shipped an app whose only button
-incremented Vite's demo counter. Four green gates and nothing that worked. The full
+That last harness runs four briefs, so a model's trouble with the work can be told apart
+from its trouble with the language it was asked to work in:
+
+| Brief | Stack | Graded by |
+|---|---|---|
+| TODO app | React + Vite + Tailwind | 12 features, clicked in a browser |
+| Contact manager | React + Vite + Vitest | 12 features, clicked in a browser |
+| Point of sale | Java + Swing + Maven | 8 features, through the service layer |
+| Point of sale | Python + Tkinter, stdlib only | 8 features, through the service layer |
+
+It exists because of a result worth stating plainly: a model passed the scaffold,
+structure, install and build checks, and shipped an app whose only button incremented
+Vite's demo counter. Four green gates and nothing that worked. The full
 tables, including what each model broke and how, are in
 [MODELS.md](https://github.com/jaymar921/HirayaCoder/blob/main/doc/MODELS.md) and
 [benchmarks/](https://github.com/jaymar921/HirayaCoder/blob/main/benchmarks/README.md).

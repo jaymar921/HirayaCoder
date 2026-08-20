@@ -45,12 +45,15 @@ writes nothing, so check the file timestamps rather than the exit code:
 ## When these need updating
 
 - **The version badge**, on every release. It appears once per file, as `v0.9.0`.
+  All six sources were bumped together for 0.9.0.
 - **The "New in …" line**, whenever a release changes what a card is claiming. It moves
   to whichever card the release actually changed rather than staying put — it sat on
   *Knows your machine* for 0.6.1, moved to *Big requests become a checklist* for 0.7.0,
   and to *Agentic on every model* for 0.8.0, which is the card that release actually
-  changed. Only ever one card carries it; two "New in" tags read as a changelog rather
-  than as a highlight.
+  changed. For 0.9.0 it moved again, to *Big requests become a checklist*, because that
+  is the card 0.9.0 rewrote — the checklist now comes from your own headings rather than
+  from a planning call. Only ever one card carries it; two "New in" tags read as a
+  changelog rather than as a highlight.
 - **The mock chat transcript** in the hero, if the panel's real layout changes enough that
   the picture stops being an honest one. It is a mock, not a screenshot — but it should
   never show something the extension does not do.
