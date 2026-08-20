@@ -11,6 +11,7 @@ import { createMessage, appendImages, TraceView, renderTodos, renderChanges } fr
 import { ThinkingIndicator } from './components/thinkingIndicator.js';
 import { renderPlanChecklist } from './components/planChecklist.js';
 import { renderClarification } from './components/clarificationCard.js';
+import { renderGuide } from './components/guideCard.js';
 import { render } from './components/markdown.js';
 
 const vscode = acquireVsCodeApi();
@@ -30,6 +31,7 @@ const el = {
   stepSessions: document.getElementById('step-sessions'),
   addFile: document.getElementById('add-file'),
   addImage: document.getElementById('add-image'),
+  guide: document.getElementById('guide'),
   status: document.getElementById('status'),
   sessionBadge: document.getElementById('session-badge'),
 };
@@ -80,6 +82,37 @@ function showWelcome() {
 function clearWelcome() {
   const welcome = document.getElementById('welcome');
   if (welcome) welcome.remove();
+}
+
+/* ------------------------------------------------------------------- guide */
+
+/*
+  The guide sits at the end of the transcript and scrolls with it, so it can be read
+  alongside whatever prompted the reader to open it. It is removed rather than hidden:
+  a stale copy halfway up a long conversation reads as part of the run.
+*/
+function toggleGuide() {
+  const open = document.getElementById('guide-card');
+  if (open) {
+    closeGuide();
+    return;
+  }
+
+  clearWelcome();
+  const card = renderGuide(closeGuide);
+  card.id = 'guide-card';
+  el.messages.appendChild(card);
+  el.guide.setAttribute('aria-pressed', 'true');
+  scrollToEnd();
+}
+
+function closeGuide() {
+  const card = document.getElementById('guide-card');
+  if (card) card.remove();
+  el.guide.setAttribute('aria-pressed', 'false');
+  // The welcome screen is the empty state, so it comes back only if closing the guide
+  // has actually left the transcript empty — not on top of a conversation.
+  if (el.messages.children.length === 0) showWelcome();
 }
 
 /* ------------------------------------------------------------------- chips */
@@ -431,6 +464,7 @@ el.stepSessions.addEventListener('click', () => {
   vscode.postMessage({ type: 'step-sessions', enabled: state.stepSessions });
 });
 
+el.guide.addEventListener('click', toggleGuide);
 el.permissions.addEventListener('click', () => vscode.postMessage({ type: 'permissions' }));
 el.addFile.addEventListener('click', () => vscode.postMessage({ type: 'attach-file' }));
 el.addImage.addEventListener('click', () => vscode.postMessage({ type: 'attach-image' }));

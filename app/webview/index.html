@@ -68,6 +68,21 @@
       <button class="control" id="permissions" type="button" aria-haspopup="true">
         <span id="perm-summary">Edits: Approve · Scripts: Approve</span>
       </button>
+
+      <!--
+        The guide is static text, so it is rendered here rather than fetched from the
+        host — see `components/guideCard.js`. It is a toggle rather than a one-way open
+        so the same button that summoned it puts it away.
+      -->
+      <button
+        class="control"
+        id="guide"
+        type="button"
+        aria-pressed="false"
+        title="How to set up HirayaCoder, and what to expect from it"
+      >
+        Guide
+      </button>
     </header>
 
     <main class="messages" id="messages" aria-live="polite" aria-relevant="additions"></main>

@@ -5,7 +5,92 @@ All notable changes to HirayaCoder are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.9.0] — unreleased
+## [1.0.0] — 2026-08-20
+
+The version number is the news, and it is a claim about stability rather than about
+features: 1.0.0 adds no tool, no permission, no network call, and no dependency. What it
+adds is the things a release has to have before strangers install it — a guide inside the
+panel, a test that every control in that panel is wired to something, and a security pass
+that measured what previous passes had only read.
+
+### Added — a setup guide in the panel
+
+A **Guide** button in the chat header opens a card covering the four setup steps and,
+more usefully, what to expect once they are done: that a task takes one to five minutes
+on a laptop, that a refused write is usually the checks working, and that a small model
+is good at one file at a time and bad at a whole application.
+
+The panel previously assumed its reader had read the README. For the release where
+strangers arrive that is the wrong assumption: the most likely reader is someone whose
+first run went nowhere because Ollama is not running, or who is four minutes into a task
+and does not know whether that is normal. The card renders locally rather than asking the
+host for anything — unlike every other control here, it has nothing to ask for — and sits
+in the transcript rather than over it, so it can be read beside the run that prompted it.
+
+### Fixed — 85 seconds of frozen editor, from a paste
+
+`stepBrief.PATH_TOKEN` scans an item's text for filenames, and scanning for a token that
+is not there costs one attempt per start position, so an unbroken run of word characters
+was O(n²). On a single run of `a` — which is what a pasted data URI, minified line or
+hash looks like to that expression — 3,200 characters took 23 ms, 51,200 took 6.1 s, and
+204,800 took **85.2 seconds**, with the extension host frozen throughout.
+
+`core/commonSense` holds the same expression and has bounded it since it was measured
+there. `stepBrief` had inherited the comment explaining that a single match is linear —
+which is true, and answered a different question than the one that mattered. Bounding
+each segment to 120 characters returns the sweep to linear: 244 ms at 204,800 characters.
+Output is unchanged on every path in this repository, and the timing is now pinned by a
+test. Tracked as SAST-014.
+
+### Fixed — a 1.0.0 could have been published as a pre-release
+
+The release workflow already derived release-vs-pre-release from the version, so 1.0.0
+was always going to come out unflagged on the normal path. The hole was the other path:
+where a release for the tag already exists, the flag was only ever *added*, never
+cleared, so a hand-drafted pre-release would have stayed one. Both directions are now
+stated explicitly, the edit is unconditional, and full releases are marked `--latest` —
+which is what `/releases/latest` resolves to, and therefore what install instructions
+point at. Pinned by a test, since this is checkable exactly once per tag.
+
+### Added — a test that every button does something
+
+`test/unit/webviewWiring.test.js` reads `index.html`, `main.js` and `chatTab.js` as text
+and checks the seams: every interactive element is resolved, every button has a way to be
+activated (its own listener, a delegated container, or the form it submits), and the
+message protocol closes in both directions — 13 webview-to-host types and 16 coming back.
+
+A dead button was the one UI defect nothing here could see. The component tests build
+nodes and assert their shape; the integration tests drive the host. Neither notices a
+control nobody listened to, and neither looks wrong on screen until someone clicks.
+
+### Security
+
+Full report in `security/sast-report-2026-08-20-1.0.0.md`. Zero production dependencies,
+zero advisories, no Critical or High findings.
+
+The pass measured all 22 expressions ESLint flags as `detect-unsafe-regex` in `app/`,
+timing each against an input built to be its worst case rather than reasoning about the
+shape. Twenty of them are linear; one was already found and bounded; one was SAST-014
+above. ESLint still reports the same 22 warnings after the fix, which is the clearest
+case this codebase has for why they are reviewed rather than counted.
+
+### Changed — the marketing set
+
+Version badges to v1.0.0 across the six README images, plus four new 1:1 launch ads with
+captions in `docs/images/ADS-1.0.0.md`. "Pre-release" is gone from the images: it
+described distribution rather than stability, and a 1.0.0 calling itself a pre-release
+reads as a mistake. The install route deliberately still points at GitHub Releases —
+the tag is cut before the Marketplace listing exists, and `doc/PUBLISHING.md` Step 9b
+says what to swap on the day it is live.
+
+### Documentation
+
+`doc/PUBLISHING.md` is split into a one-time first publish and the repeating update, with
+a full account of what a version bump touches beyond `package.json` — ten image sources,
+the README's hero alt text, the changelog, and a new SAST report, none of which fail
+loudly when they go stale.
+
+## [0.9.0] — 2026-08-20
 
 0.8.0 gave the agent a record of what it had already done. Running the same React +
 Vite + Tailwind brief again, graded this time **in a browser**, showed that the record

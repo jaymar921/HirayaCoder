@@ -134,9 +134,22 @@ jobs:
           # Kept at the same indentation as the block above: inside `run: |`, YAML strips
           # only the common indentation, so a further-indented heredoc body would arrive
           # in the notes with leading spaces and render as a code block.
-          FLAGS=""
+          # Both directions are stated outright rather than one of them relying on a
+          # default. `gh release create` defaults to "not a pre-release", so an empty
+          # FLAGS was correct on the create path — but the same variable is reused on the
+          # path below where the release already exists, and there an empty FLAGS meant a
+          # release someone had hand-drafted as a pre-release stayed one permanently.
+          # 1.0.0 is precisely the release where that would be wrong, and the sort of
+          # wrong nobody thinks to check for.
           if [ "$PRERELEASE" = "true" ]; then
-          FLAGS="--prerelease"
+          CREATE_FLAGS="--prerelease"
+          EDIT_FLAGS="--prerelease=true"
+          else
+          CREATE_FLAGS="--latest"
+          EDIT_FLAGS="--prerelease=false --latest"
+          fi
+
+          if [ "$PRERELEASE" = "true" ]; then
           cat >> notes.md <<'EOF'
 
           ---
@@ -161,12 +174,12 @@ jobs:
           if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
             echo "::notice::Release ${GITHUB_REF_NAME} already exists — attaching the .vsix to it."
             gh release upload "${GITHUB_REF_NAME}" "$VSIX" --clobber
-            if [ -n "$FLAGS" ]; then gh release edit "${GITHUB_REF_NAME}" $FLAGS; fi
+            gh release edit "${GITHUB_REF_NAME}" $EDIT_FLAGS
             echo "::notice::Existing release notes were left unchanged. SHA-256 ${SHA256}"
           else
             gh release create "${GITHUB_REF_NAME}" "$VSIX" \
               --title "HirayaCoder ${GITHUB_REF_NAME}" \
               --notes-file notes.md \
               --generate-notes \
-              $FLAGS
+              $CREATE_FLAGS
           fi

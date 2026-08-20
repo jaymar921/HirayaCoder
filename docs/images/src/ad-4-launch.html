@@ -1,0 +1,135 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>HirayaCoder ad 4 — 1.0 launch</title>
+<style>
+  /* Square ad, 1080x1080. The launch card, so this is the one that carries the CTA. */
+  :root {
+    --bg: #0b1220;
+    --line: rgba(148, 163, 184, 0.16);
+    --fg: #e8ecf1;
+    --muted: #94a3b8;
+    --sunrise-a: #ff9a3c;
+    --sunrise: linear-gradient(115deg, #ff9a3c, #ff5f6d);
+    --ok: #4ade80;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1080px; height: 1080px; }
+  body {
+    background: var(--bg); color: var(--fg); overflow: hidden; position: relative;
+    font-family: "Segoe UI", -apple-system, system-ui, sans-serif;
+  }
+  .glow { position: absolute; border-radius: 50%; filter: blur(110px); }
+  .glow-a { width: 760px; height: 760px; right: -220px; top: -320px; background: #ff7a45; opacity: 0.2; }
+  .glow-b { width: 640px; height: 640px; left: -260px; bottom: -300px; background: #2b6cb0; opacity: 0.26; }
+
+  .wrap { position: relative; z-index: 1; height: 100%; padding: 62px 64px; display: flex; flex-direction: column; justify-content: space-between; }
+
+  header { display: flex; align-items: center; gap: 16px; }
+  .brand-name { font-size: 27px; font-weight: 700; letter-spacing: -0.3px; }
+  .tag { margin-left: auto; font-size: 17px; color: var(--muted); }
+
+  .badge {
+    align-self: flex-start; margin-top: 46px;
+    font-size: 17px; font-weight: 700; letter-spacing: 1.4px; text-transform: uppercase;
+    padding: 9px 18px; border-radius: 999px; background: var(--sunrise); color: #1b1205;
+  }
+  h1 { font-size: 104px; line-height: 0.98; letter-spacing: -3.6px; font-weight: 700; margin-top: 22px; }
+  h1 .grad { background: var(--sunrise); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .lede { font-size: 25px; color: var(--muted); line-height: 1.45; margin-top: 26px; max-width: 880px; }
+  .lede b { color: var(--fg); font-weight: 600; }
+
+  /* Three modes: the one product decision a new user meets first. */
+  .modes { display: flex; gap: 12px; margin-top: 40px; }
+  .mode {
+    flex: 1; border: 1px solid var(--line); border-radius: 15px; padding: 20px;
+    background: linear-gradient(180deg, rgba(148,163,184,0.075), rgba(148,163,184,0.03));
+  }
+  .mode.on { border-color: transparent; background: var(--sunrise); color: #1b1205; }
+  .mode .n { font-size: 24px; font-weight: 700; margin-bottom: 6px; }
+  .mode .s { font-size: 16px; color: var(--muted); line-height: 1.4; }
+  .mode.on .s { color: #4a2f0a; }
+
+  .steps { margin-top: 34px; display: flex; flex-direction: column; gap: 11px; }
+  .st { display: flex; align-items: center; gap: 15px; font-size: 20px; }
+  .st .n { width: 30px; height: 30px; border-radius: 9px; flex: none; display: grid; place-items: center;
+           font-size: 14px; font-weight: 700; background: rgba(255,154,60,0.16); color: var(--sunrise-a); }
+  .st code { font-family: Consolas, "Cascadia Mono", monospace; font-size: 19px; color: var(--sunrise-a); }
+  .st .m { color: var(--muted); }
+
+  footer {
+    margin-top: 0; padding-top: 28px; border-top: 1px solid var(--line);
+    display: flex; align-items: center; gap: 22px; font-size: 19px;
+  }
+  footer .l { color: var(--muted); }
+  footer b { color: var(--fg); font-weight: 600; }
+  .cta { margin-left: auto; font-size: 19px; font-weight: 700; padding: 13px 26px; border-radius: 999px; background: var(--sunrise); color: #1b1205; }
+</style>
+</head>
+<body>
+  <div class="glow glow-a"></div>
+  <div class="glow glow-b"></div>
+
+  <div class="wrap">
+    <header>
+      <svg width="46" height="46" viewBox="0 0 128 128">
+        <defs>
+          <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#FF7A45"/><stop offset="55%" stop-color="#FFB020"/><stop offset="100%" stop-color="#2B6CB0"/>
+          </linearGradient>
+        </defs>
+        <rect width="128" height="128" rx="24" fill="#101826"/>
+        <g transform="translate(64,50)">
+          <circle r="14" fill="url(#g)"/>
+          <g stroke="url(#g)" stroke-width="4" stroke-linecap="round">
+            <line x1="0" y1="-26" x2="0" y2="-34"/><line x1="0" y1="26" x2="0" y2="34"/>
+            <line x1="-26" y1="0" x2="-34" y2="0"/><line x1="26" y1="0" x2="34" y2="0"/>
+            <line x1="-18" y1="-18" x2="-24" y2="-24"/><line x1="18" y1="18" x2="24" y2="24"/>
+            <line x1="-18" y1="18" x2="-24" y2="24"/><line x1="18" y1="-18" x2="24" y2="-24"/>
+          </g>
+        </g>
+        <g stroke="#94a3b8" stroke-width="5" stroke-linecap="round" opacity="0.85">
+          <line x1="40" y1="98" x2="56" y2="98"/><line x1="66" y1="98" x2="88" y2="98"/>
+        </g>
+      </svg>
+      <span class="brand-name">HirayaCoder</span>
+      <span class="tag"><em>Hiraya</em> — the spark of an idea before it becomes real</span>
+    </header>
+
+    <span class="badge">Version 1.0 — out now</span>
+    <h1>Offline AI coding,<br /><span class="grad">finally 1.0.</span></h1>
+
+    <p class="lede">
+      Built for <b>16 GB laptops with no graphics card</b>, not for top-spec dev machines.
+      Free, open source, and yours.
+    </p>
+
+    <div class="modes">
+      <div class="mode on">
+        <div class="n">Agent</div>
+        <div class="s">Reads and writes. The normal choice.</div>
+      </div>
+      <div class="mode">
+        <div class="n">Plan</div>
+        <div class="s">Looks first, touches nothing, hands back a checklist.</div>
+      </div>
+      <div class="mode">
+        <div class="n">Ask</div>
+        <div class="s">Answers a question. No tools at all.</div>
+      </div>
+    </div>
+
+    <div class="steps">
+      <div class="st"><span class="n">1</span><span>Install <b>Ollama</b> <span class="m">and leave it running</span></span></div>
+      <div class="st"><span class="n">2</span><span><code>ollama pull gemma4:e2b</code></span></div>
+      <div class="st"><span class="n">3</span><span>Install HirayaCoder, open a folder, press <b>Ctrl+Shift+H</b></span></div>
+    </div>
+
+    <footer>
+      <span class="l">Free and MIT-licensed &middot; <b>requires Ollama</b> running locally</span>
+      <span class="cta">github.com/jaymar921/HirayaCoder</span>
+    </footer>
+  </div>
+</body>
+</html>

@@ -117,7 +117,16 @@ function installStubDom() {
     setAttribute(name, value) {
       this.attributes[name] = String(value);
     },
-    addEventListener() {},
+    // Recorded rather than ignored: a button whose handler is never attached looks
+    // identical to a wired one in a structural assertion, and that is precisely the
+    // bug worth catching in a card made of buttons.
+    listeners: {},
+    addEventListener(event, handler) {
+      this.listeners[event] = handler;
+    },
+    click() {
+      if (this.listeners.click) this.listeners.click();
+    },
   });
 
   const previous = global.document;
@@ -361,5 +370,92 @@ describe('thinking indicator lines', () => {
   it('copes with a single-line pool', () => {
     assert.strictEqual(mod.pickLine(['only'], 'only'), 'only');
     assert.strictEqual(mod.pickLine([], 'x'), '');
+  });
+});
+
+describe('the setup guide card', () => {
+  /** @type {(onDismiss: () => void) => any} */
+  let renderGuide;
+  /** @type {{SETUP: any[], EXPECT: any[]}} */
+  let sections;
+  /** @type {() => void} */
+  let restore;
+
+  before(async () => {
+    // See the note above — the specifier is local and literal.
+    // eslint-disable-next-line no-unsanitized/method
+    ({ renderGuide, sections } = await import(moduleUrl('components/guideCard.js')));
+  });
+
+  beforeEach(() => {
+    restore = installStubDom();
+  });
+
+  afterEach(() => restore());
+
+  /** Every node in the tree carrying this class. */
+  const allWithClass = (node, className) => {
+    const found = node.className === className ? [node] : [];
+    for (const child of node.children) found.push(...allWithClass(child, className));
+    return found;
+  };
+
+  const firstWithClass = (node, className) => allWithClass(node, className)[0];
+
+  it('renders one item per documented step and expectation', () => {
+    const card = renderGuide(() => {});
+    const items = allWithClass(card, 'guide-item');
+    assert.strictEqual(items.length, sections.SETUP.length + sections.EXPECT.length);
+  });
+
+  it('gives every item both a title and the detail under it', () => {
+    const card = renderGuide(() => {});
+    for (const item of allWithClass(card, 'guide-item')) {
+      assert.ok(firstWithClass(item, 'guide-item-title').textContent.length > 0);
+      assert.ok(firstWithClass(item, 'guide-item-detail').textContent.length > 0);
+    }
+  });
+
+  it('closes through the callback rather than by touching the DOM itself', () => {
+    // The card does not know where it was appended, so dismissal has to go back to
+    // whoever put it there. A close button that removed its own wrapper would leave
+    // the header button still reading "pressed".
+    let closed = 0;
+    const card = renderGuide(() => {
+      closed += 1;
+    });
+
+    const close = allWithClass(card, 'chip-remove')[0];
+    assert.ok(close, 'the card has a close button');
+    assert.strictEqual(close.attributes['aria-label'], 'Close the guide');
+
+    close.click();
+    assert.strictEqual(closed, 1);
+  });
+
+  it('puts a command in a code element, not in prose', () => {
+    const card = renderGuide(() => {});
+    const commands = allWithClass(card, 'guide-command');
+    assert.ok(commands.length > 0, 'at least one step has a command to paste');
+    for (const command of commands) assert.strictEqual(command.tagName, 'CODE');
+  });
+
+  /*
+    Content assertions, because this card is the only place a first-time user is told
+    these things, and a well-meaning edit that drops one of them costs a user their
+    first session. Each is checked as a fact the guide states, not as exact wording.
+  */
+  it('names what has to be installed and the one command that installs a model', () => {
+    const text = renderGuide(() => {}).textContent;
+    assert.match(text, /Ollama/);
+    assert.match(text, /ollama pull/);
+    assert.match(text, /Open Folder/i);
+  });
+
+  it('sets expectations about speed, approval, and the three modes', () => {
+    const text = renderGuide(() => {}).textContent;
+    assert.match(text, /1–5 minutes/);
+    assert.match(text, /approve/i);
+    for (const mode of ['Agent', 'Plan', 'Ask']) assert.match(text, new RegExp(mode));
   });
 });

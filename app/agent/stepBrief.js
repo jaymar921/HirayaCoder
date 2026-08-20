@@ -74,10 +74,24 @@ const MAX_CONSTRAINT_CHARS = 500;
  * A path, or a path-like token, inside an item's text.
  *
  * The repeated group is separated by a mandatory `/`, which the character class
- * excludes, so no two iterations can claim the same characters and the match is linear
- * despite the nested quantifier the linter flags.
+ * excludes, so no two iterations can claim the same characters and *one* match is
+ * linear despite the nested quantifier the linter flags.
+ *
+ * The cost that is not linear is scanning with `/g` for matches that are not there.
+ * Every start position inside an unbroken run of word characters gets its own scan,
+ * which makes the sweep O(n²) in the length of that run — the same shape
+ * `core/commonSense` documents and bounds, in the module that copied its comment and
+ * not its bound. Measured on a single run of `a`, which is what a pasted data URI,
+ * minified line or hash looks like to this expression: 23 ms at 3,200 characters,
+ * 6.1 s at 51,200, and **85 s at 204,800**. That is a hard freeze of the extension
+ * host, reached by a paste rather than by an attack.
+ *
+ * Bounding the segment is what fixes it: work per start position is capped, so the
+ * sweep is linear again — 244 ms at 204,800 characters. 120 is far past any real path
+ * segment, and the filter below still requires an extension or a `/`, so nothing this
+ * repo has ever matched is affected. Pinned by a test rather than left to the comment.
  */
-const PATH_TOKEN = /[\w@.-]+(?:\/[\w@.-]+)+|[\w@-]+\.[a-z0-9]{1,6}\b/gi;
+const PATH_TOKEN = /[\w@.-]{1,120}(?:\/[\w@.-]{1,120})+|[\w@-]{1,120}\.[a-z0-9]{1,6}\b/gi;
 
 /**
  * The files an item names outright.

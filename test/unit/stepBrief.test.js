@@ -34,6 +34,32 @@ describe('stepBrief', () => {
     it('finds nothing in an item that names no file', () => {
       assert.deepStrictEqual(stepBrief.namedFiles('Install the dependencies'), []);
     });
+
+    /*
+      SAST-014. Scanning for a token that is not there costs one attempt per start
+      position, so an unbroken run of word characters — a pasted data URI, a minified
+      line, a hash — used to cost O(n²): 6.1 s at 51,200 characters and 85 s at 204,800,
+      with the extension host frozen for the duration.
+
+      Timed rather than asserted on shape, because the bound in the expression is the
+      only thing standing between this input and the freeze, and a well-meant edit that
+      removes it would leave every other assertion here passing. The threshold is loose
+      on purpose: it needs to catch a return to quadratic (tens of seconds), not to
+      police CI's timing jitter.
+    */
+    it('sweeps a long unbroken token in linear time', () => {
+      const started = Date.now();
+      assert.deepStrictEqual(stepBrief.namedFiles('a'.repeat(204800)), []);
+      const elapsed = Date.now() - started;
+      assert.ok(elapsed < 3000, `took ${elapsed}ms — the segment bound on PATH_TOKEN is gone`);
+    });
+
+    it('still reads the paths the bound could have truncated', () => {
+      // The other half of the same finding: the fix must not change what is matched.
+      assert.deepStrictEqual(stepBrief.namedFiles('read docs/images/src/hero-offline-agent.html'), [
+        'docs/images/src/hero-offline-agent.html',
+      ]);
+    });
   });
 
   describe('renderPriorItems', () => {
