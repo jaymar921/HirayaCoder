@@ -1,0 +1,628 @@
+{
+  "schemaVersion": 1,
+  "benchmark": "vision",
+  "model": "qwen3.5:0.8b",
+  "machine": "B",
+  "params": "873.44M",
+  "capabilities": [
+    "vision",
+    "completion",
+    "tools",
+    "thinking"
+  ],
+  "purposes": [
+    "answer",
+    "task"
+  ],
+  "repeat": 2,
+  "coldStart": true,
+  "startedAt": "2026-08-20T17:28:53.238Z",
+  "durationMs": 309927,
+  "notes": "Machine B, CPU-only, model unloaded between samples for honest timings.",
+  "summary": {
+    "graded": 24,
+    "passed": 23,
+    "failed": 1,
+    "confused": 0,
+    "detailScore": 0.958,
+    "detailGot": 46,
+    "detailMax": 48,
+    "textImages": 8,
+    "textRead": 8,
+    "errored": 0,
+    "skipped": 0,
+    "meanMs": 12837,
+    "coldMeanMs": 12853,
+    "coldSamples": 12,
+    "totalMs": 308091
+  },
+  "results": [
+    {
+      "id": "cat",
+      "file": "cat.jpg",
+      "purpose": "answer",
+      "attempt": 1,
+      "durationMs": 8017,
+      "ok": true,
+      "description": "The main subject is a small kitten with striking blue eyes and tabby markings on its fur. It has long white whiskers and pink nose, giving it a curious expression as it lies down on a soft green surface. The kitten’s ears are perked up, suggesting attentiveness or alertness. Its body stretches out to the right side of the frame, while its head rests prominently in the foreground.\n\nThe setting appears to be indoors, with a blurred background that suggests an indoor environment like a living room or bedroom. The colors are muted but vibrant: greens dominate the lower portion of the image, contrasting with the brownish-gray tones of the kitten’s fur. There is no text visible in the frame.",
+      "expected": "A tabby kitten lying down, head on a green surface, facing the camera.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "kitten"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "tabby",
+        "rest"
+      ],
+      "readText": null,
+      "textMatched": [],
+      "confused": []
+    },
+    {
+      "id": "cat",
+      "file": "cat.jpg",
+      "purpose": "answer",
+      "attempt": 2,
+      "durationMs": 7827,
+      "ok": true,
+      "description": "The main subject is a curious kitten with striking blue eyes and tabby markings on its fur. It lies down on a soft green surface, possibly a blanket or mat, with its head resting gently against the edge. Its ears are perked up, and it appears to be looking directly at the viewer with an attentive expression. The background is softly blurred, drawing attention to the kitten's face and whiskers.\n\nThe kitten is lying down on a green surface, likely a blanket or mat. It has blue eyes and tabby markings on its fur. Its ears are perked up, and it appears to be looking directly at the viewer with an attentive expression. The background is softly blurred, drawing attention to the kitten's face and whiskers.",
+      "expected": "A tabby kitten lying down, head on a green surface, facing the camera.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "kitten"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "tabby",
+        "lying"
+      ],
+      "readText": null,
+      "textMatched": [],
+      "confused": []
+    },
+    {
+      "id": "dog",
+      "file": "dog.jpg",
+      "purpose": "answer",
+      "attempt": 1,
+      "durationMs": 23385,
+      "ok": true,
+      "description": "The main subject consists of two golden retriever puppies sitting side by side on a grassy field scattered with fallen autumn leaves. The puppy on the left has its tongue hanging out in a happy expression, while the one on the right is panting with its mouth open wide. Both dogs appear joyful and energetic, embodying innocence and playfulness.\n\nThey are arranged closely together, facing forward toward the viewer, creating an intimate and friendly composition. The background is softly blurred, emphasizing the subjects and adding depth to the image. The colors are warm and natural, dominated by greens from the grass and leaves, with golden hues reflecting the puppies' fur tones. There are no visible text or numbers in the frame.",
+      "expected": "Two golden retriever puppies sitting in grass strewn with orange petals.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "dog"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "two",
+        "grass"
+      ],
+      "readText": null,
+      "textMatched": [],
+      "confused": []
+    },
+    {
+      "id": "dog",
+      "file": "dog.jpg",
+      "purpose": "answer",
+      "attempt": 2,
+      "durationMs": 23090,
+      "ok": true,
+      "description": "The image features two golden retriever puppies sitting side by side on a grassy field scattered with fallen autumn leaves. The puppy on the left has its tongue out in a happy expression, while the one on the right also panting happily. Both dogs look joyful and energetic, embodying innocence and playfulness. The background is softly blurred green, suggesting an open outdoor space like a park or meadow during fall season. Colors dominate with warm yellows, oranges, and soft greens from the grass and foliage. There are no visible text or numbers in the frame.",
+      "expected": "Two golden retriever puppies sitting in grass strewn with orange petals.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "dog"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "two",
+        "grass"
+      ],
+      "readText": null,
+      "textMatched": [],
+      "confused": []
+    },
+    {
+      "id": "dog-1",
+      "file": "dog-1.jpg",
+      "purpose": "answer",
+      "attempt": 1,
+      "durationMs": 7542,
+      "ok": true,
+      "description": "The main subject is a cheerful Corgi lying on the grass, its ears perked up and mouth open in a happy expression. It wears a green collar with a buckle visible. The setting appears to be an outdoor park or field during the day, bathed in warm sunlight that creates a soft glow around the dog. The background features blurred greenery, suggesting trees or bushes, enhancing the peaceful atmosphere. Colors dominate the scene: vibrant greens from the grass and foliage, warm yellows and oranges from the sunlight, and the white fur of the Corgi. There are no text, numbers, or labels visible in the image.",
+      "expected": "A single corgi lying in sunlit grass, wearing a green collar.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "dog"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "grass",
+        "collar"
+      ],
+      "readText": null,
+      "textMatched": [],
+      "confused": []
+    },
+    {
+      "id": "dog-1",
+      "file": "dog-1.jpg",
+      "purpose": "answer",
+      "attempt": 2,
+      "durationMs": 7267,
+      "ok": true,
+      "description": "The main subject is a cheerful Corgi dog lying on green grass with its tongue out in a happy expression. The setting appears to be outdoors during the day, bathed in warm sunlight that creates a soft glow around the scene. The background features blurred trees and foliage, suggesting a natural park or garden environment. The colors are vibrant greens from the grass, tan and white fur on the dog, and golden hues from the sunlight. There is no visible text or numbers within the image itself.",
+      "expected": "A single corgi lying in sunlit grass, wearing a green collar.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "dog"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "grass",
+        "white"
+      ],
+      "readText": null,
+      "textMatched": [],
+      "confused": []
+    },
+    {
+      "id": "car",
+      "file": "car.jpg",
+      "purpose": "answer",
+      "attempt": 1,
+      "durationMs": 24097,
+      "ok": true,
+      "description": "The main subject is a vibrant yellow BMW M4 coupe in motion on a paved road. It features sleek headlights, distinctive kidney grilles, and aerodynamic design elements like side skirts and a front splitter. The car's glossy paint reflects sunlight, emphasizing its sporty appeal.\n\nIt appears to be driving at speed, as indicated by the blurred background trees and road markings. This creates a sense of dynamism and performance.\n\nThe setting is an open road with autumnal trees in the distance, suggesting a rural or suburban environment. The colors are dominated by the car's bright yellow, contrasting with the muted greens and browns of the foliage. A clear blue sky adds to the serene yet dynamic atmosphere.\n\nThere is no visible text or numbers within the image itself.",
+      "expected": "A yellow BMW M4 coupe on a road, panning shot, bare trees behind.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "car"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "yellow",
+        "road"
+      ],
+      "readText": true,
+      "textMatched": [
+        "bmw"
+      ],
+      "confused": []
+    },
+    {
+      "id": "car",
+      "file": "car.jpg",
+      "purpose": "answer",
+      "attempt": 2,
+      "durationMs": 23611,
+      "ok": true,
+      "description": "The main subject is a vibrant yellow BMW M4 coupe in motion on a paved road. It features sleek headlights, distinctive kidney grilles, and sporty alloy wheels. The car appears to be driving at speed, as indicated by the blurred background trees and road surface. This setup suggests an action shot capturing the vehicle's dynamic movement.\n\nThe setting is outdoors with a backdrop of tall, leafless trees under a clear sky. The colors are dominated by the bright yellow of the car against the muted greens and browns of the forest. There are no visible text or numbers in the image.",
+      "expected": "A yellow BMW M4 coupe on a road, panning shot, bare trees behind.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "car"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "yellow",
+        "road"
+      ],
+      "readText": true,
+      "textMatched": [
+        "bmw"
+      ],
+      "confused": []
+    },
+    {
+      "id": "plane",
+      "file": "plane.jpg",
+      "purpose": "answer",
+      "attempt": 1,
+      "durationMs": 5359,
+      "ok": true,
+      "description": "The main subject is a Cebu Pacific airplane in flight against a clear sky backdrop. The aircraft features distinctive yellow and blue livery with the airline's name prominently displayed on its fuselage. Its wings are extended, suggesting it may be preparing for landing or has just taken off. The tail fin displays a vibrant gradient of yellow to blue, complemented by teal accents along the side. Text visible includes \"CP-4407\" near the rear of the plane and \"Image Copyright Javier Rodriguez - BERIAN SPOTTERS\" at the bottom right corner.",
+      "expected": "A Cebu Pacific Airbus A320 on approach, gear down, against grey sky.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "plane"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "yellow",
+        "sky"
+      ],
+      "readText": true,
+      "textMatched": [
+        "cebu"
+      ],
+      "confused": []
+    },
+    {
+      "id": "plane",
+      "file": "plane.jpg",
+      "purpose": "answer",
+      "attempt": 2,
+      "durationMs": 5558,
+      "ok": true,
+      "description": "The main subject is a Cebu Pacific airplane in flight against a clear sky backdrop. It appears to be flying at low altitude with landing gear deployed. The aircraft features distinctive branding with the airline name prominently displayed on its fuselage in blue lettering. The livery includes yellow and teal accents along the tail fin, wings, and engine area. Text visible on the side reads \"RP-C407\". The overall composition highlights the plane's design and branding while emphasizing its operational status within the aviation industry.",
+      "expected": "A Cebu Pacific Airbus A320 on approach, gear down, against grey sky.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "plane"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "yellow",
+        "sky"
+      ],
+      "readText": true,
+      "textMatched": [
+        "cebu"
+      ],
+      "confused": []
+    },
+    {
+      "id": "tree",
+      "file": "tree.jpg",
+      "purpose": "answer",
+      "attempt": 1,
+      "durationMs": 7959,
+      "ok": true,
+      "description": "The main subject is a majestic oak tree with sprawling branches and lush green foliage, standing prominently in the foreground of a serene landscape. It stands alone amidst vibrant fields of wildflowers, creating a striking contrast between its ancient form and the natural beauty surrounding it. The tree casts long shadows across the grassy field, indicating that the sun is low on the horizon, suggesting either sunrise or sunset.\n\nThe setting features expansive open fields bathed in warm sunlight, with distant hills faintly visible under a clear blue sky. The colors are vivid: deep blues of the sky, rich greens of the tree and grass, golden hues from the sunlight, and delicate purple blooms scattered throughout the meadow. There is no text or numbers present in the image.",
+      "expected": "One large green tree alone in a grassy field at sunset, blue sky above.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "tree"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "field",
+        "sky"
+      ],
+      "readText": null,
+      "textMatched": [],
+      "confused": []
+    },
+    {
+      "id": "tree",
+      "file": "tree.jpg",
+      "purpose": "answer",
+      "attempt": 2,
+      "durationMs": 8064,
+      "ok": true,
+      "description": "The main subject is a majestic oak tree with sprawling branches, standing alone in a vibrant field bathed in golden light. It appears to be thriving, its leaves glistening under the sun's rays. The tree dominates the foreground, while the expansive grassy landscape stretches out behind it, dotted with wildflowers and other small plants.\n\nThe setting is a serene countryside scene, characterized by lush greenery and open fields. The sky above is a brilliant blue, transitioning to a soft yellow near the horizon where the sun appears to be setting or rising. This warm light casts long shadows across the field, enhancing the tranquil atmosphere of the moment.\n\nThere are no visible text, numbers, or labels in the image. The colors are vivid: deep blues, lush greens, and golden yellows create a harmonious and peaceful composition.",
+      "expected": "One large green tree alone in a grassy field at sunset, blue sky above.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "tree"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "field",
+        "sky"
+      ],
+      "readText": null,
+      "textMatched": [],
+      "confused": []
+    },
+    {
+      "id": "cat",
+      "file": "cat.jpg",
+      "purpose": "task",
+      "attempt": 1,
+      "durationMs": 9362,
+      "ok": true,
+      "description": "The image captures a close-up portrait of a young tabby kitten with striking blue eyes and white markings on its muzzle. The kitten is lying down, resting its head on a soft, textured green surface that appears to be a rug or blanket. Its ears are perked up, and it gazes directly at the camera with an alert expression.\n\nThe background is softly blurred, drawing focus to the kitten's face. This shallow depth of field creates a sense of intimacy and immediacy. The lighting is natural and diffused, highlighting the texture of the fur and the vibrant blue of the eyes.\n\nIn terms of layout, the kitten dominates the frame from left to right. Its head occupies the upper portion, while its body extends diagonally into the lower right corner. The green surface serves as a base for the composition, anchoring the subject below. There are no buttons or panels visible; instead, the focus is entirely on the animal's features and expression.\n\nThe color palette consists primarily of earthy tones—browns, greys, and greens—with a pop of blue from the kitten’s eyes. The green surface provides a contrasting base that makes the kitten stand out. The overall composition feels calm and serene, capturing a quiet moment in nature.",
+      "expected": "A tabby kitten lying down, head on a green surface, facing the camera.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "kitten"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "tabby",
+        "lying"
+      ],
+      "readText": null,
+      "textMatched": [],
+      "confused": []
+    },
+    {
+      "id": "cat",
+      "file": "cat.jpg",
+      "purpose": "task",
+      "attempt": 2,
+      "durationMs": 7480,
+      "ok": true,
+      "description": "I cannot see this image. I am an AI model designed to process text and provide information, but I do not have the ability to view or interpret visual content like screenshots, photos, or UI elements. Therefore, I cannot identify what kind of image this is, extract any text or code from it, describe its layout, or analyze its colors and spacing.\n\nIf you can provide the text describing this image (e.g., a screenshot description), I would be happy to help you with that.",
+      "expected": "A tabby kitten lying down, head on a green surface, facing the camera.",
+      "passed": false,
+      "subject": false,
+      "subjectMatched": [],
+      "detail": 0,
+      "detailTotal": 2,
+      "detailMatched": [],
+      "readText": null,
+      "textMatched": [],
+      "confused": []
+    },
+    {
+      "id": "dog",
+      "file": "dog.jpg",
+      "purpose": "task",
+      "attempt": 1,
+      "durationMs": 24525,
+      "ok": true,
+      "description": "The image is a photograph of two golden retriever puppies sitting on grass scattered with fallen autumn leaves. The puppy on the left has its tongue hanging out, while the one on the right is panting with its mouth open. Both dogs are looking towards the camera. The background is a soft-focus green field, and the foreground features vibrant orange and yellow flowers.\n\nThe layout places the two puppies in the center of the frame, flanking each other. They occupy the middle ground, while the grass and flowers fill the foreground. The background extends to the edges of the image, creating depth through blur. There are no buttons, fields, panels, or UI elements visible. No text, code, numbers, or labels appear in the image.\n\nThe dominant colors are shades of green (background), golden yellow (puppies and flowers), and orange (leaves). The puppies' fur is a light golden color, contrasting with the darker brown leaves. The overall composition suggests a peaceful outdoor scene, likely taken during fall.",
+      "expected": "Two golden retriever puppies sitting in grass strewn with orange petals.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "dog"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "two",
+        "grass"
+      ],
+      "readText": null,
+      "textMatched": [],
+      "confused": []
+    },
+    {
+      "id": "dog",
+      "file": "dog.jpg",
+      "purpose": "task",
+      "attempt": 2,
+      "durationMs": 24630,
+      "ok": true,
+      "description": "The image is a photograph of two golden retriever puppies sitting on the grass in a field with scattered orange and yellow flowers. The background is a soft, out-of-focus green. The dogs are positioned side by side, facing forward but looking slightly to the right. Both have their tongues hanging out, appearing happy or panting. The lighting is bright and natural, suggesting daytime.\n\nThe layout consists of two main subjects (the puppies) in the foreground, with a blurred background behind them. There are no buttons, fields, panels, or UI elements visible. No text, code, numbers, or labels appear anywhere in the image. The colors are primarily green, yellow, orange, and brown tones.\n\nThe image is a photo of two golden retriever puppies sitting on the grass in a field with scattered flowers.",
+      "expected": "Two golden retriever puppies sitting in grass strewn with orange petals.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "dog"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "two",
+        "grass"
+      ],
+      "readText": null,
+      "textMatched": [],
+      "confused": []
+    },
+    {
+      "id": "dog-1",
+      "file": "dog-1.jpg",
+      "purpose": "task",
+      "attempt": 1,
+      "durationMs": 7391,
+      "ok": true,
+      "description": "The image is a screenshot of a photo of a Corgi dog lying on grass in the foreground, with a blurred background of trees and foliage. The text \"Corgi\" appears above the dog's head. There are no code snippets or UI elements visible. The layout shows the dog centered in the frame, with its ears perked up and mouth slightly open, conveying a happy expression. The lighting is soft and warm, suggesting it was taken during the day.",
+      "expected": "A single corgi lying in sunlit grass, wearing a green collar.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "dog"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "grass",
+        "ears"
+      ],
+      "readText": null,
+      "textMatched": [],
+      "confused": []
+    },
+    {
+      "id": "dog-1",
+      "file": "dog-1.jpg",
+      "purpose": "task",
+      "attempt": 2,
+      "durationMs": 7428,
+      "ok": true,
+      "description": "The image shows a Corgi lying on green grass with its tongue out in a happy expression. The background is blurred, suggesting depth of field. The dog has a collar and large ears. There are no buttons, fields, panels, or UI elements visible. No text, code, numbers, or labels appear anywhere in the image.",
+      "expected": "A single corgi lying in sunlit grass, wearing a green collar.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "dog"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "grass",
+        "collar"
+      ],
+      "readText": null,
+      "textMatched": [],
+      "confused": []
+    },
+    {
+      "id": "car",
+      "file": "car.jpg",
+      "purpose": "task",
+      "attempt": 1,
+      "durationMs": 23860,
+      "ok": true,
+      "description": "The image is a photograph of a yellow BMW M4 coupe in motion on a paved road, captured with a panning shutter effect to emphasize speed. The car features a prominent front grille, sleek headlights, and aerodynamic bodywork. Trees and foliage are blurred in the background, indicating movement. The scene is well-lit, likely during daylight hours.\n\nThe layout centers the car prominently in the frame, with the road stretching into the distance. The composition uses motion blur to convey speed, while the car's details remain sharp. No text, code, or labels are present.",
+      "expected": "A yellow BMW M4 coupe on a road, panning shot, bare trees behind.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "car"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "yellow",
+        "road"
+      ],
+      "readText": true,
+      "textMatched": [
+        "bmw"
+      ],
+      "confused": []
+    },
+    {
+      "id": "car",
+      "file": "car.jpg",
+      "purpose": "task",
+      "attempt": 2,
+      "durationMs": 24606,
+      "ok": true,
+      "description": "The image is a photograph of a yellow BMW M4 Coupe in motion on a paved road, with blurred trees and sky in the background indicating speed. The car features a black front grille, sleek headlights, and silver multi-spoke wheels. It appears to be a screenshot from a video or photo album capturing the vehicle's dynamic performance.\n\nThe layout places the car centrally in the frame, angled slightly towards the left. The road occupies the lower portion of the image, while the background consists of out-of-focus trees and sky. There are no buttons, fields, panels, or UI elements visible. No text, code, numbers, or labels appear anywhere in the image.\n\nThe colors are predominantly yellow for the car, black for the grille and mirrors, silver for wheels, and muted tones for the background foliage and sky. The spacing is natural, with the road stretching horizontally across the bottom and the tree line forming a backdrop behind the vehicle. The overall composition emphasizes motion and speed through the use of blur in the background elements.",
+      "expected": "A yellow BMW M4 coupe on a road, panning shot, bare trees behind.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "car"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "yellow",
+        "road"
+      ],
+      "readText": true,
+      "textMatched": [
+        "bmw"
+      ],
+      "confused": []
+    },
+    {
+      "id": "plane",
+      "file": "plane.jpg",
+      "purpose": "task",
+      "attempt": 1,
+      "durationMs": 5188,
+      "ok": true,
+      "description": "The image is a screenshot of a Cebu Pacific airplane in flight against a gray sky. The text on the fuselage reads \"cebu pacific\" in blue letters. The aircraft has landing gear deployed, and its registration number appears to be RP-C4407. The layout groups the text on the fuselage with the plane's body and wings. The colors are yellow, white, and blue. The image is a photo of an airplane.",
+      "expected": "A Cebu Pacific Airbus A320 on approach, gear down, against grey sky.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "plane"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "yellow",
+        "sky"
+      ],
+      "readText": true,
+      "textMatched": [
+        "cebu"
+      ],
+      "confused": []
+    },
+    {
+      "id": "plane",
+      "file": "plane.jpg",
+      "purpose": "task",
+      "attempt": 2,
+      "durationMs": 5313,
+      "ok": true,
+      "description": "The image is a screenshot of a commercial airplane in flight against a gray sky. The text on the fuselage reads \"cebu-pacific\" in blue letters. The aircraft has yellow and blue livery with a wave design. The landing gear is deployed, indicating the plane is either taking off or landing. The photo captures the entire aircraft from front to back.",
+      "expected": "A Cebu Pacific Airbus A320 on approach, gear down, against grey sky.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "plane"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "yellow",
+        "sky"
+      ],
+      "readText": true,
+      "textMatched": [
+        "cebu"
+      ],
+      "confused": []
+    },
+    {
+      "id": "tree",
+      "file": "tree.jpg",
+      "purpose": "task",
+      "attempt": 1,
+      "durationMs": 7550,
+      "ok": true,
+      "description": "1. A photo of a large tree in a field under a blue sky.\n2. \"large tree\", \"field\", \"blue sky\", \"tree trunk\".\n3. The tree is the main subject, with branches spreading out to the left and right.\n4. The tree is positioned on the left side of the image.\n5. The grassy field extends from the bottom to the horizon line.\n6. The sky takes up the top half of the image.",
+      "expected": "One large green tree alone in a grassy field at sunset, blue sky above.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "tree"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "field",
+        "sky"
+      ],
+      "readText": null,
+      "textMatched": [],
+      "confused": []
+    },
+    {
+      "id": "tree",
+      "file": "tree.jpg",
+      "purpose": "task",
+      "attempt": 2,
+      "durationMs": 8982,
+      "ok": true,
+      "description": "1. A photograph of a solitary tree in a field under a clear blue sky.\n2. The tree has green leaves and a thick trunk.\n3. The image is a screenshot of a landscape scene.\n4. Colors are vibrant greens, blues, and yellows. Spacing is natural with no deliberate borders or buttons.",
+      "expected": "One large green tree alone in a grassy field at sunset, blue sky above.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "tree"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "field",
+        "sky"
+      ],
+      "readText": null,
+      "textMatched": [],
+      "confused": []
+    }
+  ]
+}

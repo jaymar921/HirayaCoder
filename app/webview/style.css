@@ -314,6 +314,34 @@ select.control {
   content: '▾ ';
 }
 
+/*
+ * What the vision model read out of an attached image. Same shape as the trace above,
+ * because it is the same kind of thing — evidence for the answer, kept out of the way
+ * until someone wants it.
+ */
+.vision-note > summary::before {
+  content: '▸ ';
+}
+
+.vision-note[open] > summary::before {
+  content: '▾ ';
+}
+
+.vision-name {
+  margin-top: var(--sp-2);
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+.vision-text {
+  margin: var(--sp-1) 0 0;
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  /* A describer that emits one long unbroken line must not widen the panel. */
+  overflow-wrap: anywhere;
+}
+
 .step {
   display: flex;
   gap: var(--sp-2);

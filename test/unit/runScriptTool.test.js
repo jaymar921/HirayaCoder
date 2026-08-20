@@ -426,17 +426,25 @@ describe('what the model is told about a run', () => {
 describe('the allow-list', () => {
   const { DEFAULT_ALLOWED_BINARIES } = require('../../app/security/scriptRunner');
 
-  it('is documented in full, so the README cannot drift out of date', () => {
-    // The README's Requirements section tells users which toolchains to install for
-    // `run_script` to be able to do anything. A binary added here and not there is a
-    // capability nobody knows they have; one removed here and left there is advice to
-    // install something that will still be refused.
+  it('is documented in full, so the docs cannot drift out of date', () => {
+    // Users are told which toolchains to install for `run_script` to be able to do
+    // anything. A binary added here and not there is a capability nobody knows they
+    // have; one removed here and left there is advice to install something that will
+    // still be refused.
+    //
+    // The list moved out of the README and into TROUBLESHOOTING.md in 1.1.0, when the
+    // README was cut down to the things a first-time reader needs. Both files are read
+    // here rather than only the new one: the table is free to move again, and a test
+    // that pins its location would fail the next time it does, for no security reason.
     const fs = require('fs');
     const path = require('path');
-    const readme = fs.readFileSync(path.join(__dirname, '..', '..', 'README.md'), 'utf8');
+    const root = path.join(__dirname, '..', '..');
+    const documented = ['README.md', path.join('doc', 'TROUBLESHOOTING.md')]
+      .map((file) => fs.readFileSync(path.join(root, file), 'utf8'))
+      .join('\n');
 
-    const undocumented = DEFAULT_ALLOWED_BINARIES.filter((binary) => !readme.includes(`\`${binary}\``));
-    assert.deepStrictEqual(undocumented, [], `not listed in README.md: ${undocumented.join(', ')}`);
+    const undocumented = DEFAULT_ALLOWED_BINARIES.filter((binary) => !documented.includes(`\`${binary}\``));
+    assert.deepStrictEqual(undocumented, [], `not listed in README.md or doc/TROUBLESHOOTING.md: ${undocumented.join(', ')}`);
   });
 
   it('permits the plain Java toolchain, since it already permits Maven and Gradle', () => {

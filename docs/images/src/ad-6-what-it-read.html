@@ -1,0 +1,154 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>HirayaCoder ad 6 — what it read</title>
+<style>
+  /*
+    Square ad, 1080x1080. Same palette and accent as the rest of the set.
+
+    This one argues the *check*, not the capability, so the centrepiece is a mock of the
+    panel itself rather than a claim about it. The failure being sold against is quiet:
+    a model that misreads an image writes a confident paragraph about the wrong thing, and
+    there is no tell. Showing the paragraph is the whole product decision, so the ad shows
+    the paragraph.
+
+    The numbers under it are from `benchmarks/results/B/vision__*` and must be re-checked
+    against a fresh sweep before this is re-rendered for a later release. An ad quoting a
+    score the harness no longer produces is worse than one quoting none.
+  */
+  :root {
+    --bg: #0b1220;
+    --line: rgba(148, 163, 184, 0.16);
+    --fg: #e8ecf1;
+    --muted: #94a3b8;
+    --sunrise-a: #ff9a3c;
+    --sunrise: linear-gradient(115deg, #ff9a3c, #ff5f6d);
+    --ok: #4ade80;
+    --warn: #fbbf24;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1080px; height: 1080px; }
+  body {
+    background: var(--bg); color: var(--fg); overflow: hidden; position: relative;
+    font-family: "Segoe UI", -apple-system, system-ui, sans-serif;
+  }
+  .glow { position: absolute; border-radius: 50%; filter: blur(110px); }
+  .glow-a { width: 700px; height: 700px; right: -240px; top: -300px; background: #ff7a45; opacity: 0.17; }
+  .glow-b { width: 620px; height: 620px; left: -260px; bottom: -300px; background: #2b6cb0; opacity: 0.26; }
+
+  .wrap { position: relative; z-index: 1; height: 100%; padding: 60px 64px; display: flex; flex-direction: column; justify-content: space-between; }
+
+  header { display: flex; align-items: center; gap: 16px; }
+  .brand-name { font-size: 27px; font-weight: 700; letter-spacing: -0.3px; }
+  .ver { font-size: 15px; font-weight: 700; padding: 6px 14px; border-radius: 999px; color: #1b1205; background: var(--sunrise); }
+
+  h1 { font-size: 70px; line-height: 1.03; letter-spacing: -2.2px; font-weight: 700; margin-top: 40px; }
+  h1 .grad { background: var(--sunrise); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .lede { font-size: 22px; color: var(--muted); line-height: 1.45; margin-top: 20px; max-width: 900px; }
+  .lede b { color: var(--fg); font-weight: 600; }
+
+  /* A mock of the panel, not a screenshot. It must never show something the extension
+     does not do — the label and the disclosure triangle are the real ones. */
+  .panel { border: 1px solid var(--line); border-radius: 15px; background: rgba(148,163,184,0.05); padding: 22px 26px; }
+  .panel .head { font-size: 17px; color: var(--muted); display: flex; align-items: center; gap: 9px; }
+  .panel .head .tri { color: var(--sunrise-a); }
+  .panel .head b { color: var(--fg); font-weight: 600; }
+  .panel .desc {
+    margin-top: 14px; font-size: 19px; line-height: 1.52; color: #cfd8e3;
+    border-left: 3px solid rgba(255, 154, 60, 0.55); padding-left: 18px;
+  }
+  .panel .desc em { color: var(--fg); font-style: normal; font-weight: 600; }
+
+  .scores { display: flex; gap: 14px; margin-top: 18px; }
+  .score { flex: 1; border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; background: rgba(148,163,184,0.045); }
+  .score .n { font-size: 34px; font-weight: 700; letter-spacing: -1px; }
+  .score .n.good { color: var(--ok); }
+  .score .n.mixed { color: var(--warn); }
+  .score .l { font-size: 15px; color: var(--muted); margin-top: 5px; line-height: 1.35; }
+
+  .honest { margin-top: 16px; font-size: 18px; color: var(--muted); line-height: 1.45; }
+  .honest b { color: var(--fg); font-weight: 600; }
+
+  footer {
+    margin-top: 30px; padding-top: 22px; border-top: 1px solid var(--line);
+    display: flex; align-items: center; gap: 20px; font-size: 18px; color: var(--muted);
+  }
+  footer b { color: var(--fg); font-weight: 600; }
+  .pill { margin-left: auto; font-size: 17px; font-weight: 700; padding: 10px 20px; border-radius: 999px; background: var(--sunrise); color: #1b1205; }
+</style>
+</head>
+<body>
+  <div class="glow glow-a"></div>
+  <div class="glow glow-b"></div>
+
+  <div class="wrap">
+    <header>
+      <svg width="46" height="46" viewBox="0 0 128 128">
+        <defs>
+          <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#FF7A45"/><stop offset="55%" stop-color="#FFB020"/><stop offset="100%" stop-color="#2B6CB0"/>
+          </linearGradient>
+        </defs>
+        <rect width="128" height="128" rx="24" fill="#101826"/>
+        <g transform="translate(64,50)">
+          <circle r="14" fill="url(#g)"/>
+          <g stroke="url(#g)" stroke-width="4" stroke-linecap="round">
+            <line x1="0" y1="-26" x2="0" y2="-34"/><line x1="0" y1="26" x2="0" y2="34"/>
+            <line x1="-26" y1="0" x2="-34" y2="0"/><line x1="26" y1="0" x2="34" y2="0"/>
+            <line x1="-18" y1="-18" x2="-24" y2="-24"/><line x1="18" y1="18" x2="24" y2="24"/>
+            <line x1="-18" y1="18" x2="-24" y2="24"/><line x1="18" y1="-18" x2="24" y2="-24"/>
+          </g>
+        </g>
+        <g stroke="#94a3b8" stroke-width="5" stroke-linecap="round" opacity="0.85">
+          <line x1="40" y1="98" x2="56" y2="98"/><line x1="66" y1="98" x2="88" y2="98"/>
+        </g>
+      </svg>
+      <span class="brand-name">HirayaCoder</span>
+      <span class="ver">v1.1.0</span>
+    </header>
+
+    <h1>A model that misreads<br /><span class="grad">your screenshot says so.</span></h1>
+
+    <p class="lede">
+      It writes a confident paragraph about the wrong thing instead. So HirayaCoder shows
+      you the paragraph. <b>Every image you attach comes with what was read out of it.</b>
+    </p>
+
+    <div class="panel">
+      <div class="head"><span class="tri">&#9662;</span> What <b>minicpm-v4.6</b> saw in <b>checkout.png</b></div>
+      <div class="desc">
+        A screenshot of a checkout form. Three fields, labelled <em>Card number</em>,
+        <em>Expiry</em>, and <em>CVC</em>. Below them a red banner reading
+        <em>"Card declined: insufficient funds"</em>. The pay button is greyed out.
+      </div>
+    </div>
+
+    <div class="scores">
+      <div class="score">
+        <div class="n good">47/48</div>
+        <div class="l">named the subject correctly, across two sub-1B models</div>
+      </div>
+      <div class="score">
+        <div class="n good">0</div>
+        <div class="l">described something the photo does not contain</div>
+      </div>
+      <div class="score">
+        <div class="n mixed">12/16</div>
+        <div class="l">read the text printed in the picture</div>
+      </div>
+    </div>
+
+    <p class="honest">
+      <b>That third number is the one that moves.</b> One of the two read every word.
+      The other, almost the same size, read half. You cannot tell which you have without
+      looking at what it read, so we published the number and built the panel.
+    </p>
+
+    <footer>
+      <span>Measured, not claimed · <b>benchmarks/</b></span>
+      <span class="pill">See what it read</span>
+    </footer>
+  </div>
+</body>
+</html>

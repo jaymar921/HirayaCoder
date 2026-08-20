@@ -5,6 +5,135 @@ All notable changes to HirayaCoder are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] — 2026-08-21
+
+HirayaCoder can look at pictures. Attach a screenshot, a photo, or a sketch of a screen
+you want built, and what is in it becomes part of the conversation — in Ask mode as the
+subject of the answer, in Agent and Plan mode as part of the job.
+
+The release also cuts the README down to what a first-time reader needs and moves
+everything else into `doc/`.
+
+### Added — image recognition
+
+`core/imageRecognition` asks a vision model what is in an attached image and returns the
+answer as plain text. Three separate reasons that indirection exists, and each would be
+enough on its own:
+
+**Most models cannot see.** `llama3.2` is what a lot of people are actually running, and
+it has no vision capability at all. Attaching an image to it used to be refused outright.
+Now the picture goes to whichever installed model *can* see, the description comes back,
+and the coding model works from that. Nobody has to switch models to use a screenshot,
+and the attach button is gated on the machine having a vision model rather than on the
+selected one being it.
+
+**The picture does not survive the loop.** Images ride on the first message only —
+re-uploading 5 MB of base64 on every turn of an eight-step run spends more time on the
+upload than on the thinking. So by turn four the model was reasoning about an image it
+could no longer see. A description is a hundred tokens and is carried on every turn,
+which is why one is produced even for a model with perfectly good vision.
+
+**A description can be checked.** A model that hallucinates an image is invisible when
+the image is a blob on a message. As a paragraph in the transcript, the user reads "a red
+error dialog" over their green one and knows immediately.
+
+The describer is chosen automatically: the selected model when it can see, since that
+costs no extra load, and otherwise the **smallest** installed vision model. Smallest
+because Ollama holds one model resident at a time, so a second model is paid for in load
+time, and describing a picture is a read rather than a piece of reasoning.
+`hirayacoder.vision.describeModel` overrides the choice; `hirayacoder.vision.enabled`
+turns the pass off.
+
+### Added — you can see what it read
+
+Every message with an image gets a collapsed panel holding the exact description the
+vision model produced.
+
+This is the part that makes the feature usable rather than merely present. When an answer
+about a picture is wrong there are two causes — the picture was misread, or it was read
+correctly and the reasoning went wrong — and they need opposite fixes. Without the
+description on screen they are indistinguishable, and the user's only move is to try
+again and hope.
+
+### Fixed — a redraft that argued the model out of a correct answer
+
+`agentSession._rethink` sends a mismatched reply back for one correction. It was sending
+the context and **not** the images, so a reply written from a photograph was being
+corrected by a model that could not see the photograph. The redraft turned good answers
+into hedges about not being able to see anything. It now carries whatever the draft
+carried.
+
+### Fixed — "I cannot see this image", stored as the description
+
+Found by the new benchmark, once in twenty-four runs of `qwen3.5:0.8b`: a model that
+reports the `vision` capability, that was sent the image, and that had described the same
+photograph correctly one sample earlier, replied *"I cannot see this image. I am an AI
+model designed to process text…"*. A small model's text-only training reasserting itself
+over what it was actually handed.
+
+Left alone, that paragraph becomes the description — stored, put in front of the coding
+model as "what is in this picture", and shown in the panel. Reasoning from a statement
+that no image exists is worse than being told the read failed, so the shape is now
+recognised and reported as a failure.
+
+The detector is narrow on purpose. The recognition prompt asks the describer to say when
+it cannot make something out, so *"I cannot see the licence plate clearly"* is the
+instruction working. It requires a first-person inability **plus** a visual object, and
+examines only the opening 400 characters, so a real description that ends with a
+boilerplate disclaimer survives.
+
+### Added — the image-recognition benchmark
+
+`tools/bench-vision.js`, graded against six photographs in `docs/test-images/` on four
+axes: subject, detail, text read, and confusion. Confusion can only be lost, because
+vague is usable and wrong is worse than nothing.
+
+The 1.1.0 baseline, machine B, 24 graded descriptions per model:
+
+| Model | Params | Subject | Detail | Text read | Confused | Cold |
+|---|---|---|---|---|---|---|
+| `minicpm-v4.6` | 752M | **24/24** | 42/48 | 4/8 | 0 | 11s |
+| `qwen3.5:0.8b` | 873M | 23/24 | **46/48** | **8/8** | 0 | 13s |
+
+Naming the subject is solved at this size. Reading text is not, and it turns out to
+depend on the size of the *text* rather than of the model: all four of `minicpm-v4.6`'s
+text failures are the same photograph, whose only text is a small badge on a car grille,
+and it read a large clear airline logo on every attempt.
+
+The timings needed a `--cold` flag to mean anything. Ollama caches the tokenized prompt,
+and for these requests the prompt is mostly the image, so the second sample of a picture
+returned in one second where the first took fifteen — and the cache survived between
+runs, reporting one second for everything half an hour later. `--cold` unloads the model
+between samples. None of it touches the accuracy scores.
+
+### Changed — the README is a fifth of the size
+
+514 lines to 259, cut to what somebody deciding whether to install this needs: what it
+does, what it cannot do, whether their machine will run it, and four steps. Everything
+else moved, whole, into `doc/`:
+
+| New file | What moved into it |
+|---|---|
+| `doc/GETTING-STARTED.md` | The full first-run walkthrough |
+| `doc/USING-IT.md` | Modes, watching a run, request habits |
+| `doc/LIMITATIONS.md` | **New.** Everything it cannot do, by design and otherwise |
+| `doc/IMAGE-RECOGNITION.md` | **New.** Images, in full |
+| `doc/TROUBLESHOOTING.md` | When something goes wrong, and the command allow-list |
+| `doc/CHOOSING-A-MODEL.md` | Which model to download |
+| `doc/DEVELOPING.md` | The engineering, benchmarks, building, contributing |
+
+`LIMITATIONS.md` is the one worth calling out. The limits were previously spread across
+five sections and phrased apologetically where they were phrased at all, and the two
+kinds — deliberate design choices, and things a small model is simply not good at — were
+mixed together. They are separated now, because the first kind is the reason to choose
+this tool and the second is the reason not to.
+
+### Security
+
+Full report in `security/sast-report-2026-08-21-1.1.0.md`. Zero production dependencies,
+zero advisories, no Critical or High findings. One ordering hardening applied in
+`agentSession`, and the `imageRecognition` regex measured rather than assumed.
+
 ## [1.0.0] — 2026-08-20
 
 The version number is the news, and it is a claim about stability rather than about

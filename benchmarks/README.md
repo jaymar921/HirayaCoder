@@ -60,7 +60,7 @@ node tools/bench-build.js ornith:9b  --machine C --lang java,python --keep
 | `--out <dir>` | Results root, default `benchmarks/results` |
 
 Requires Ollama running with the model pulled. See
-[the requirements section of the README](../README.md#requirements).
+[Getting started](../doc/GETTING-STARTED.md).
 
 ### Recording the CPU/GPU split
 
@@ -198,6 +198,102 @@ run-to-run variance on these models is real and worth seeing.
 The compiled, human-readable tables are generated from these files afterwards and live in
 [README.md](../README.md) and [doc/MODELS.md](../doc/MODELS.md). Those are the derived
 artefacts; this directory is the source of truth.
+
+## The image-recognition benchmark — `vision__*.json`
+
+*New in 1.1.0.* `tools/bench-vision.js`. Where every other harness here asks whether a
+model can do the work, this asks whether it can **see** — because 1.1.0 lets an attached
+image reach a text-only model as a written description, and if that description is wrong
+nothing downstream can tell.
+
+That is the failure worth designing a harness around. A vision model that cannot see does
+not error and does not hedge. It writes a fluent, confident paragraph about something
+else, that paragraph is stored as "what is in this picture", and the coding model works
+from it. So this benchmark exists to catch a describer that is **wrong while sounding
+right**.
+
+### The fixtures
+
+Six photographs in `docs/test-images/`, each with a hand-written expectation of what is
+actually in it. Written by looking at them rather than by reading the filenames:
+`dog-1.jpg` is one corgi and `dog.jpg` is two retriever puppies, and grading both against
+"dog" would hide a model that cannot count.
+
+### Four axes, because they fail separately
+
+| Axis | What it asks | How it is scored |
+|---|---|---|
+| **subject** | Did it name the right thing? | Any accepted synonym counts. `puppy` passes for `dog` |
+| **detail** | Colour, setting, count | One word from each expectation group has to appear |
+| **text** | Did it read the words printed in the image? | Only scored on the two fixtures that have any |
+| **confusion** | Did it assert something the photo contradicts? | Can only be lost. A cat called a dog fails outright |
+
+A confusion sinks the fixture whatever else it scored, and that is the distinction the
+harness exists for: **vague is usable, wrong is worse than nothing**, because the user
+cannot tell.
+
+Matching is a word list, deliberately. Grading one local model's output with another
+local model would make the benchmark's own reliability the thing in question, and a word
+list cannot be talked into a false positive. It is word-boundary matched, which is not
+pedantry: the first draft used `includes` and scored a description of a cat on a *carpet*
+as having identified a car.
+
+### The timings need `--cold`
+
+Ollama caches the tokenized prompt, and for these requests the prompt is mostly the
+image. So the second sample of a picture returns in about a second where the first took
+fifteen, **and the cache survives between runs** — re-running this harness half an hour
+later reported one second for everything, for a model that genuinely takes eleven.
+
+`--cold` unloads the model between samples, which makes the `cold` column mean what it
+says. Without it, treat that column as a lower bound and nothing more. None of this
+touches the accuracy scores: a cached answer is the same answer.
+
+### Running it
+
+```bash
+node tools/bench-vision.js <model> --machine <A|B|C> [options]
+
+node tools/bench-vision.js minicpm-v4.6:latest --machine B --purpose both --repeat 2 --cold
+node tools/bench-vision.js qwen3.5:2b --machine A --images cat,plane
+```
+
+| Flag | Meaning |
+|---|---|
+| `--machine <A\|B\|C>` | **Required.** Which device this is; picks the results directory |
+| `--purpose <p>` | `answer` (default), `task`, or `both`. The two prompts in `core/imageRecognition` |
+| `--images <list>` | Fixture ids, comma separated. Default: all six |
+| `--repeat <n>` | Samples per image, default 1. These models are not stable across samples |
+| `--cold` | Unload the model between samples. Slower, and the only way the timings mean anything |
+| `--notes "..."` | Free text stored in the record |
+| `--out <dir>` | Results root, default `benchmarks/results` |
+
+A model that does not report Ollama's `vision` capability is refused **before** the run
+rather than scored zero, because a zero there would look like a capability result and is
+actually a configuration mistake.
+
+### The 1.1.0 baseline
+
+Machine B, `--purpose both --repeat 2 --cold`, so 24 graded descriptions per model.
+
+| Model | Params | Subject | Detail | Text read | Confused | Cold |
+|---|---|---|---|---|---|---|
+| `minicpm-v4.6` | 752M | **24/24** | 42/48 | 4/8 | 0 | 11s |
+| `qwen3.5:0.8b` | 873M | 23/24 | **46/48** | **8/8** | 0 | 13s |
+
+Two findings worth carrying forward, both of which changed the shipped code:
+
+- **`minicpm-v4.6` missed the same text every time.** All four of its text failures are
+  `car.jpg`, whose only text is a small BMW badge on the grille. It read `cebu pacific`
+  off the aeroplane, in a large clear typeface, on all four attempts. So the axis is not
+  measuring "can it read" but "how small is the text", which is exactly the limitation
+  [doc/IMAGE-RECOGNITION.md](../doc/IMAGE-RECOGNITION.md) now warns about.
+- **`qwen3.5:0.8b` denied having vision once in twenty-four.** Sent the image, reporting
+  the capability, having described the same photograph correctly one sample earlier, it
+  replied *"I cannot see this image. I am an AI model designed to process text…"*. Left
+  alone that paragraph becomes the description. `core/imageRecognition` now recognises
+  the shape and reports a failed read instead, which is how a benchmark is supposed to
+  earn its keep.
 
 ## The machines
 

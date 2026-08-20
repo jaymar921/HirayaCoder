@@ -82,6 +82,8 @@ let lastActiveSessionId = null;
  * @property {{autoEdit: boolean, autoApproveScripts: boolean}} permissions
  * @property {boolean} statusBarEnabled
  * @property {{enabled: boolean, hintThreshold: number}} adaptation
+ * @property {{enabled: boolean, describeModel: string}} vision
+ *   Image recognition. See `core/imageRecognition`.
  * @property {boolean} stepSessions   Experimental; see `agent/stepBrief`.
  * @property {import('./utils/logger').LogLevel} logLevel
  */
@@ -115,6 +117,13 @@ function readSettings() {
     adaptation: {
       enabled: cfg.get('adaptation.enabled', true),
       hintThreshold: cfg.get('adaptation.hintThreshold', earnedHints.DEFAULT_THRESHOLD),
+    },
+    vision: {
+      enabled: cfg.get('vision.enabled', true),
+      // Empty means "pick one", which is what almost everybody wants. A name here is
+      // honoured only if it is installed and actually reports vision — see
+      // `imageRecognition.pickDescriber`, which logs rather than silently substituting.
+      describeModel: cfg.get('vision.describeModel', ''),
     },
     stepSessions: cfg.get('experimental.stepSessions', false),
     logLevel: cfg.get('logLevel', 'info'),

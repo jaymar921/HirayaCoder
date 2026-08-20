@@ -60,6 +60,54 @@ export function appendImages(body, images) {
 }
 
 /**
+ * What the vision model read out of the attached images.
+ *
+ * ## Why this is on screen at all, rather than only in the log
+ *
+ * Everything the reply says about a picture is downstream of this paragraph. When the
+ * answer is wrong, there are two very different causes — the describer misread the
+ * image, or it read it correctly and the answering model went wrong afterwards — and
+ * they need opposite fixes. Without the description on screen the two are
+ * indistinguishable, and the user's only move is to try again and hope.
+ *
+ * Collapsed by default and styled like the agent trace, because it is the same kind of
+ * thing: evidence for the answer, not the answer.
+ *
+ * @param {HTMLElement} body
+ * @param {string} model
+ * @param {Array<{name: string, description: string}>} descriptions
+ */
+export function appendVisionNote(body, model, descriptions) {
+  if (!descriptions || descriptions.length === 0) return;
+
+  const box = document.createElement('details');
+  box.className = 'trace vision-note';
+
+  const summary = document.createElement('summary');
+  summary.textContent =
+    descriptions.length === 1
+      ? `What ${model} saw in ${descriptions[0].name}`
+      : `What ${model} saw in ${descriptions.length} images`;
+  box.appendChild(summary);
+
+  for (const entry of descriptions) {
+    if (descriptions.length > 1) {
+      const name = document.createElement('div');
+      name.className = 'vision-name';
+      name.textContent = entry.name;
+      box.appendChild(name);
+    }
+    const text = document.createElement('p');
+    text.className = 'vision-text';
+    // Model output. `textContent`, never markup — see the note at the top of this file.
+    text.textContent = entry.description;
+    box.appendChild(text);
+  }
+
+  body.appendChild(box);
+}
+
+/**
  * What each tool call is called, in the language of the thing it does.
  *
  * The trace used to print the tool name verbatim — `read_file`, `run_script`. That is

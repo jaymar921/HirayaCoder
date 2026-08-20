@@ -7,7 +7,14 @@
  * nonsense and no more.
  */
 
-import { createMessage, appendImages, TraceView, renderTodos, renderChanges } from './components/messageBubble.js';
+import {
+  createMessage,
+  appendImages,
+  appendVisionNote,
+  TraceView,
+  renderTodos,
+  renderChanges,
+} from './components/messageBubble.js';
 import { ThinkingIndicator } from './components/thinkingIndicator.js';
 import { renderPlanChecklist } from './components/planChecklist.js';
 import { renderClarification } from './components/clarificationCard.js';
@@ -355,14 +362,24 @@ const handlers = {
     scrollToEnd();
   },
 
+  'images-described'(msg) {
+    if (!state.body) return;
+    appendVisionNote(state.body, msg.model || 'the vision model', msg.descriptions || []);
+    scrollToEnd();
+  },
+
   vision(msg) {
     el.addImage.dataset.unsupported = msg.supported ? 'false' : 'true';
     el.addImage.disabled = !msg.supported || state.running;
-    el.addImage.title = msg.supported
-      ? 'Attach an image'
-      : `${msg.model || 'This model'} cannot read images. Pick a vision model such as gemma4 or qwen3.5.`;
+    // Three states, not two. "Supported by another model" is the new one, and saying so
+    // up front is what stops the extra model load from looking like a stall later.
+    el.addImage.title = !msg.supported
+      ? 'No installed model can read images. Pull one, such as minicpm-v4.6 or qwen3.5:2b.'
+      : msg.viaOtherModel
+        ? `Attach an image — ${msg.model} cannot read one, so ${msg.describer} will describe it first`
+        : 'Attach an image';
     if (!msg.supported) {
-      // Images already staged would be silently ignored by a text-only model.
+      // Images already staged have nothing left that could look at them.
       const dropped = attachments.filter((a) => a.kind === 'image');
       if (dropped.length > 0) {
         attachments = attachments.filter((a) => a.kind !== 'image');

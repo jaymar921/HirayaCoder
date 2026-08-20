@@ -28,6 +28,7 @@ const fs = require('fs');
 const logger = require('../utils/logger');
 const pathGuard = require('../security/pathGuard');
 const promptRouter = require('../core/promptRouter');
+const imageRecognition = require('../core/imageRecognition');
 const requestPlan = require('../core/requestPlan');
 const fileTree = require('../core/fileTree');
 const fileSpec = require('../core/fileSpec');
@@ -611,6 +612,46 @@ class AgentSession {
      * trace and observations carry the conversation from there.
      */
     this.images = Array.isArray(options.images) ? options.images : [];
+    /**
+     * The same images, with their names and their bytes, for recognition.
+     *
+     * `images` is base64 alone because that is the shape Ollama's message format wants.
+     * Describing one needs a name to put in front of the description — "screenshot.png:
+     * a login form" is readable where three unlabelled paragraphs are not — so the
+     * fuller records are carried alongside rather than reconstructed.
+     *
+     * Falls back to wrapping `images` when only those were given, which is what every
+     * existing caller and every older test does.
+     *
+     * @type {Array<{name?: string, base64: string}>}
+     */
+    this.imageFiles =
+      Array.isArray(options.imageFiles) && options.imageFiles.length > 0
+        ? options.imageFiles
+        : this.images.map((base64, index) => ({ name: `image ${index + 1}`, base64 }));
+    /**
+     * How an attached image is turned into words, and by which model.
+     *
+     * `{ enabled, describeModel }` — `describeModel` is the name chosen by
+     * `imageRecognition.pickDescriber`, resolved by the caller because only it has the
+     * list of installed models. Null or absent means no vision model is installed, in
+     * which case an image reaches the model only if the selected model can see it
+     * directly, and otherwise not at all.
+     *
+     * `activeCanSee` is stated separately rather than inferred from
+     * `describeModel === model`, because the two answer different questions: whether
+     * the raw picture may ride on the message, and who writes the description. A user
+     * who pins a describer in settings makes those diverge.
+     *
+     * @type {{enabled?: boolean, describeModel?: string | null, activeCanSee?: boolean} | null}
+     */
+    this.vision = options.vision || null;
+    /**
+     * This turn's descriptions, produced once and carried on every turn after.
+     *
+     * @type {import('../core/imageRecognition').ImageDescription[]}
+     */
+    this._imageDescriptions = [];
     this.scriptTimeoutMs = options.scriptTimeoutMs;
     /**
      * Where this session's evidence goes, and where the previous ones' came from.
@@ -841,6 +882,11 @@ class AgentSession {
         logger.info('This message asks to look, not to change; the mutating tools are not offered this turn.');
       }
 
+      // Before the first context is built and before any loop starts, so every turn
+      // downstream sees the same words. Routed first because what the description is
+      // for — answering a question, or doing a job — depends on which strategy won.
+      const imageNotes = await this._describeImages(activeRoute, task, emit);
+
       emit({
         type: 'start',
         mode,
@@ -854,7 +900,9 @@ class AgentSession {
       // Ask mode, and Agent mode answering conversation: one response, no loop, no
       // tools in existence.
       if (activeRoute.strategy === 'none' || activeRoute.strategy === 'chat') {
-        const askContext = await this._buildContext(task, activeRoute, options.editor);
+        const askContext = await this._buildContext(task, activeRoute, options.editor, {
+          imageDescriptions: imageNotes,
+        });
         const summary = await this._answerDirectly(task, activeRoute, askContext);
         // Nothing else records a conversational turn: no steps, no change set, no file
         // history. Without this the whole exchange leaves memory empty.
@@ -892,7 +940,9 @@ class AgentSession {
               client: this.client,
               model: this.model,
               task,
-              context: await this._buildContext(task, activeRoute, options.editor),
+              context: await this._buildContext(task, activeRoute, options.editor, {
+                imageDescriptions: imageNotes,
+              }),
               signal: this._controller.signal,
             })
           : null;
@@ -904,7 +954,9 @@ class AgentSession {
       // Tier B budget is a measurable waste and reads to the model as emphasis it
       // was never meant to carry.
       const effectiveTask = plan && plan.length > 0 ? `${task}\n\nYour plan:\n${plan.join('\n')}` : task;
-      const context = await this._buildContext(effectiveTask, activeRoute, options.editor);
+      const context = await this._buildContext(effectiveTask, activeRoute, options.editor, {
+        imageDescriptions: imageNotes,
+      });
 
       const loop = activeRoute.strategy === 'native' ? nativeToolLoop : reactLoop;
       const outcome = await loop.run({
@@ -919,7 +971,7 @@ class AgentSession {
         verifyDone: mode === 'agent' ? this._doneVerifier(task, changeSet, 0) : undefined,
         onEvent: emit,
         signal: this._controller.signal,
-        images: this.images,
+        images: this._visibleImages(),
       });
 
       await this._remember(outcome.steps);
@@ -1758,8 +1810,17 @@ class AgentSession {
         .replace(/[.,;:!?)\]]+$/, '');
       if (!target || seen.has(target)) continue;
       seen.add(target);
-      if (UNDICTATABLE.test(target)) continue;
+      // Length-bounded check first, then the pattern.
+      //
+      // Both are `continue` guards with no side effects, so the order is free to
+      // choose — and this way the only unbounded regex in this path never sees a string
+      // longer than `MAX_TARGET_PATH_CHARS`. `UNDICTATABLE` measures linear even on a
+      // 40,000-character adversarial input (0.03 ms), so this is not a fix for a live
+      // ReDoS; it is the cheap ordering that means one is never reachable here if the
+      // pattern is ever edited into an ambiguous one. `target` is model output, which
+      // is the input class this project does not extend trust to.
       if (!isDictatableFilename(target)) continue;
+      if (UNDICTATABLE.test(target)) continue;
 
       // You cannot fill in a project that has not been created yet.
       //
@@ -2391,9 +2452,11 @@ class AgentSession {
    * @param {string} task
    * @param {import('../core/promptRouter').Route} activeRoute
    * @param {object} [editor]
-   * @param {{recallAbout?: string}} [opts]  What this turn is about, for targeted
-   *   memory recall. Empty means recency, which is the behaviour everywhere but a
-   *   briefed step.
+   * @param {{recallAbout?: string, imageDescriptions?: string}} [opts]
+   *   `recallAbout` is what this turn is about, for targeted memory recall; empty means
+   *   recency, which is the behaviour everywhere but a briefed step. `imageDescriptions`
+   *   is the rendered block from `_describeImages`, threaded through rather than read
+   *   off the session so a briefed step can decide for itself whether to carry it.
    * @returns {Promise<string>}
    * @private
    */
@@ -2440,6 +2503,10 @@ class AgentSession {
       // "There are no files listed in your workspace" — in a workspace of several
       // hundred files. Naming what exists is not an action; it is the answer.
       workspaceFiles: await this._workspaceFiles(activeRoute),
+      // Carried on every turn of the run, unlike the image itself. That is the whole
+      // point of producing it: the picture reaches turn one and the words reach all of
+      // them.
+      imageDescriptions: opts.imageDescriptions || '',
     });
 
     return built.text;
@@ -2582,6 +2649,9 @@ class AgentSession {
    * @param {string} [opts.systemPrompt]   Reused for the redraft, so the corrected answer
    *   is bound by the same mode rules as the draft. Falls back to a minimal instruction.
    * @param {string} [opts.context]        The context the draft was written from.
+   * @param {boolean} [opts.images]        Re-attach this turn's images to the redraft.
+   *   Set by the Ask path, where the draft was written from a picture; a redraft
+   *   without it argues the model out of an answer it got right.
    * @returns {Promise<string>}
    * @private
    */
@@ -2607,7 +2677,15 @@ class AgentSession {
                 opts.systemPrompt ||
                 'You are HirayaCoder. Answer the user\'s question directly and concisely, in prose.',
             },
-            ...(opts.context ? [{ role: 'user', content: opts.context }] : []),
+            ...(opts.context
+              ? [
+                  {
+                    role: 'user',
+                    content: opts.context,
+                    ...(opts.images && this._visibleImages().length > 0 ? { images: this._visibleImages() } : {}),
+                  },
+                ]
+              : []),
             {
               role: 'user',
               content:
@@ -2648,6 +2726,114 @@ class AgentSession {
   }
 
   /**
+   * The base64 images that may ride on an Ollama message this turn.
+   *
+   * Empty whenever the selected model has no vision capability. Sending an image to a
+   * model that cannot see one is not an error at the API level — it is silently
+   * dropped, after being uploaded — so the only effect is a slower turn. The picture
+   * still reaches such a model, as the description assembled by `_describeImages`.
+   *
+   * @returns {string[]}
+   * @private
+   */
+  _visibleImages() {
+    if (this.images.length === 0) return [];
+    // Absent vision config is the pre-1.1.0 shape, where the caller had already refused
+    // to attach an image to a model that could not see it. Trusting it keeps every
+    // existing caller and test working unchanged.
+    if (!this.vision) return this.images;
+    return this.vision.activeCanSee === false ? [] : this.images;
+  }
+
+  /**
+   * Turn this turn's attached images into text, once.
+   *
+   * ## Why Ask mode on a vision model skips this entirely
+   *
+   * There the picture itself goes on the message and the model answers from it
+   * directly. A description pass would be a second full generation — a minute or more
+   * on CPU — to produce a paraphrase that is strictly worse than the original for the
+   * one model that was going to look at the original anyway.
+   *
+   * Every other combination needs it. Agent and Plan run a loop whose later turns have
+   * no picture, and a model without vision has no picture on any turn.
+   *
+   * @param {import('../core/promptRouter').Route} activeRoute
+   * @param {string} task
+   * @param {(event: object) => void} emit
+   * @returns {Promise<string>} The rendered prompt block, or '' when there is none.
+   * @private
+   */
+  async _describeImages(activeRoute, task, emit) {
+    this._imageDescriptions = [];
+    if (this.imageFiles.length === 0) return '';
+
+    const vision = this.vision || {};
+    if (vision.enabled === false) {
+      logger.info('Image recognition is turned off in settings; the attached image is not being read.');
+      return '';
+    }
+
+    const loopless = activeRoute.strategy === 'none' || activeRoute.strategy === 'chat';
+    const purpose = loopless ? 'answer' : 'task';
+
+    if (loopless && vision.activeCanSee !== false) return '';
+
+    const describer = vision.describeModel || (vision.activeCanSee === false ? null : this.model);
+    if (!describer) {
+      logger.warn('An image was attached but no installed model can read one.');
+      return '';
+    }
+
+    const started = Date.now();
+    this._imageDescriptions = await imageRecognition.describeAll({
+      client: this.client,
+      model: describer,
+      images: this.imageFiles,
+      purpose,
+      // Only the answering purpose gets the question. A task-purpose description is
+      // read by the loop on every turn, and steering it with turn one's wording makes
+      // it progressively less useful as the run moves on to the other items.
+      question: purpose === 'answer' ? task : '',
+      signal: this._controller ? this._controller.signal : undefined,
+      onProgress: ({ index, total, name }) => {
+        // A vision pass on CPU is thirty seconds to two minutes with no step counter
+        // moving, which reads as a hang. This is the only thing on screen during it.
+        emit({
+          type: 'status',
+          text:
+            total === 1
+              ? `Reading ${name} with ${describer}…`
+              : `Reading ${name} with ${describer} (${index} of ${total})…`,
+        });
+      },
+    });
+
+    const failed = this._imageDescriptions.filter((entry) => !entry.ok);
+    if (failed.length > 0) {
+      logger.warn(`${failed.length} of ${this._imageDescriptions.length} image(s) could not be described.`);
+    }
+
+    const readable = this._imageDescriptions.filter((entry) => entry.ok);
+    logger.info(
+      `Described ${readable.length} image(s) with ${describer} in ${Math.round((Date.now() - started) / 1000)}s.`
+    );
+
+    // Shown in the transcript rather than only logged: the description is the whole
+    // basis of the answer that follows, and a user who can read it can tell a
+    // misreading from a bad answer. That distinction is invisible otherwise.
+    if (readable.length > 0) {
+      emit({
+        type: 'images-described',
+        model: describer,
+        descriptions: readable.map((entry) => ({ name: entry.name, description: entry.description })),
+      });
+    }
+
+    return imageRecognition.renderForPrompt(readable);
+  }
+
+  /**
    * Ask mode. One call, no tools offered at all.
    *
    * @param {string} task
@@ -2664,7 +2850,10 @@ class AgentSession {
           messages: [
             { role: 'system', content: activeRoute.systemPrompt },
             // Ollama takes images as base64 on the message itself.
-            { role: 'user', content: context, ...(this.images.length > 0 ? { images: this.images } : {}) },
+            ...(() => {
+              const visible = this._visibleImages();
+              return [{ role: 'user', content: context, ...(visible.length > 0 ? { images: visible } : {}) }];
+            })(),
           ],
           options: { temperature: 0.3 },
         },
@@ -2673,7 +2862,16 @@ class AgentSession {
       const draft =
         String((response && response.message && response.message.content) || '').trim() || 'No answer was produced.';
       // Nothing this path does can change a file, so a changelog here is always wrong.
-      return this._rethink(task, draft, { changedFiles: false, systemPrompt: activeRoute.systemPrompt, context });
+      return this._rethink(task, draft, {
+        changedFiles: false,
+        systemPrompt: activeRoute.systemPrompt,
+        context,
+        // The redraft used to go out blind. A reply about a photograph, sent back to be
+        // corrected without the photograph, was rewritten into a hedge about not being
+        // able to see it — the check firing on a good answer and replacing it with a
+        // worse one. Whatever the draft could see, the redraft sees too.
+        images: true,
+      });
     } catch (err) {
       return `The model could not be reached: ${/** @type {Error} */ (err).message}`;
     }
