@@ -1,0 +1,306 @@
+{
+  "schemaVersion": 1,
+  "benchmark": "realworld-todo-glass-app",
+  "model": "qwen3.5:2b",
+  "tier": "B",
+  "params": 2.3,
+  "startedAt": "2026-08-18T14:49:12.369Z",
+  "durationMs": 3891790,
+  "turnsUsed": 2,
+  "turnsAllowed": 11,
+  "stepSessions": false,
+  "workspace": "F:\\important stuff\\Programming\\JAVASCRIPT\\hirayacoder\\.ignore\\0.9.0-baseline\\qwen3.5-2b",
+  "turns": [
+    {
+      "turn": 1,
+      "userMessage": "You are an autonomous coding agent. Build a complete, working **TODO application** from scratch. Follow every instruction below in order. Do not stop until the app builds successfully and all features are verified working.\n\n### 1. Tech Stack\n- React (functional components + hooks only)\n- Vite as the build tool\n- Tailwind CSS for styling\n- No backend — use in-memory React state (optionally persist to `localStorage`)\n- No external UI/component libraries — build the glass UI with Tailwind utility classes only\n\n### 2. Project Setup\n1. Scaffold a new project with `npm create vite@latest todo-glass-",
+      "durationMs": 2579147,
+      "claimed": {
+        "stopReason": "done",
+        "summary": "6 of 6 item(s) completed. 6 of those changed files without the model confirming it had finished — check them.\n\n1. Scaffold Vite React project with Tailwind CSS and Lucide icons. — done, with a caveat (changes landed, but the model never closed the item off (repeating))\n2. Create `src/hooks/useTodos.js` for state management and localStorage sync. — done, with a caveat (changes landed, but the model never closed the item off (repeating))\n3. Implement `src/components/TodoInput.jsx` for adding/editing todos. — done, with a caveat (changes landed, but the model never closed the item off (repeating))\n4. Implement `src/components/TodoItem.jsx` for single todo rows with edit/delete toggles. — done, with a caveat (changes landed, but the model never closed the item off (repeating))\n5. Implement `sr"
+      },
+      "actions": {
+        "run_script": 2,
+        "write_file": 9,
+        "list_files": 1,
+        "read_file": 4
+      },
+      "steps": 16,
+      "failures": [],
+      "commands": [
+        {
+          "command": "npm create vite@latest todo-glass-app -- --template react",
+          "ok": true
+        },
+        {
+          "command": "npm create vite@latest todo-glass-app -- --template react",
+          "ok": true
+        }
+      ],
+      "filesTouched": [
+        {
+          "path": "src/hooks/useTodos.js",
+          "kind": "create"
+        },
+        {
+          "path": "src/components/TodoInput.jsx",
+          "kind": "create"
+        },
+        {
+          "path": "src/components/TodoItem.jsx",
+          "kind": "edit"
+        },
+        {
+          "path": "src/components/TodoList.jsx",
+          "kind": "create"
+        },
+        {
+          "path": "src/components/ClearButton.jsx",
+          "kind": "edit"
+        }
+      ],
+      "gates": {
+        "scaffold": {
+          "ok": true,
+          "detail": "todo-glass-app/package.json exists"
+        },
+        "structure": {
+          "ok": true,
+          "detail": "all 13 required files present"
+        },
+        "install": {
+          "ok": true,
+          "detail": "node_modules already present"
+        },
+        "build": {
+          "ok": true,
+          "detail": "npm run build exited 0"
+        }
+      },
+      "features": {
+        "mounted": true,
+        "emptyState": true,
+        "addEnter": false,
+        "addButton": false,
+        "inputClears": false,
+        "ignoresEmpty": false,
+        "liveCount": false,
+        "toggleComplete": false,
+        "editTodo": false,
+        "deleteTodo": false,
+        "clearCompleted": false,
+        "clearAll": false
+      },
+      "featureScore": 2
+    },
+    {
+      "turn": 2,
+      "userMessage": "I opened the built app in a browser and tried it. These are not working:\n\n- addEnter: no visible text input on the page\n- addButton: no visible text input on the page\n- inputClears: not reached — an earlier feature failed hard\n- ignoresEmpty: not reached — an earlier feature failed hard\n- liveCount: not reached — an earlier feature failed hard\n- toggleComplete: not reached — an earlier feature failed hard\n- editTodo: not reached — an earlier feature failed hard\n- deleteTodo: not reached — an earlier feature failed hard\n- clearCompleted: not reached — an earlier feature failed hard\n- clearAll: ",
+      "durationMs": 1312642,
+      "claimed": {
+        "stopReason": "partial",
+        "summary": "1 of 3 item(s) completed. 1 of those changed files without the model confirming it had finished — check them.\n\n1. Fix `src/components/TodoInput.jsx` to render visible text inputs for `addEnter` and `addButton`. — not completed (stopped early (repeating) after making changes)\n2. Implement the missing features (`inputClears`, `ignoresEmpty`, `liveCount`, etc.) in `src/hooks/useTodos.js`. — done, with a caveat (changes landed, but the model never closed the item off (error))\n3. Correct the logic flow in `src/App.jsx` so that all new features trigger their respective UI elements. — not completed (stopped: repeating)\n\nWhat kept going wrong:\n- read_file failed 2 times: src/App.jsx does not exist. Use list_files or search_workspace to find the right path.\n\nDetail:\n1. I stopped because I kept repe"
+      },
+      "actions": {
+        "read_file": 8,
+        "write_file": 3
+      },
+      "steps": 11,
+      "failures": [
+        "read_file: src/App.jsx does not exist. Use list_files or search_workspace to find the right path.",
+        "read_file: src/App.jsx does not exist. Use list_files or search_workspace to find the right path."
+      ],
+      "commands": [],
+      "filesTouched": [
+        {
+          "path": "src/components/TodoInput.jsx",
+          "kind": "edit"
+        },
+        {
+          "path": "src/hooks/useTodos.js",
+          "kind": "edit"
+        }
+      ],
+      "gates": {
+        "scaffold": {
+          "ok": true,
+          "detail": "todo-glass-app/package.json exists"
+        },
+        "structure": {
+          "ok": true,
+          "detail": "all 13 required files present"
+        },
+        "install": {
+          "ok": true,
+          "detail": "node_modules already present"
+        },
+        "build": {
+          "ok": true,
+          "detail": "npm run build exited 0"
+        }
+      },
+      "features": {
+        "mounted": true,
+        "emptyState": true,
+        "addEnter": false,
+        "addButton": false,
+        "inputClears": false,
+        "ignoresEmpty": false,
+        "liveCount": false,
+        "toggleComplete": false,
+        "editTodo": false,
+        "deleteTodo": false,
+        "clearCompleted": false,
+        "clearAll": false
+      },
+      "featureScore": 2
+    }
+  ],
+  "gates": {
+    "scaffold": {
+      "ok": true,
+      "detail": "todo-glass-app/package.json exists"
+    },
+    "structure": {
+      "ok": true,
+      "detail": "all 13 required files present"
+    },
+    "install": {
+      "ok": true,
+      "detail": "node_modules already present"
+    },
+    "build": {
+      "ok": true,
+      "detail": "npm run build exited 0"
+    }
+  },
+  "buildOutput": "\n> todo-glass-app@0.0.0 build\n> vite build\n\nvite v8.2.1 building client environment for production...\n\u001b[2K\rtransforming...✓ 20 modules transformed.\nrendering chunks...\ncomputing gzip size...\ndist/index.html                   0.46 kB │ gzip:  0.29 kB\ndist/assets/react-CHdo91hT.svg    4.12 kB │ gzip:  2.06 kB\ndist/assets/vite-BF8QNONU.svg     8.70 kB │ gzip:  1.60 kB\ndist/assets/hero-CLDdwZDr.png    13.05 kB\ndist/assets/index-DykytF2W.css    4.10 kB │ gzip:  1.47 kB\ndist/assets/index-Bnpwovj6.js   193.27 kB │ gzip: 60.62 kB\n\n✓ built in 188ms\n",
+  "features": {
+    "mounted": {
+      "ok": true,
+      "detail": "root rendered 5 child element(s)"
+    },
+    "emptyState": {
+      "ok": true,
+      "detail": "text on an empty list: Get started Edit src/App.jsx and save to test HMR Count is 0 Documentation Your questions, answered Explore Vite Lea"
+    },
+    "addEnter": {
+      "ok": false,
+      "detail": "no visible text input on the page"
+    },
+    "addButton": {
+      "ok": false,
+      "detail": "no visible text input on the page"
+    },
+    "inputClears": {
+      "ok": false,
+      "detail": "not reached — an earlier feature failed hard"
+    },
+    "ignoresEmpty": {
+      "ok": false,
+      "detail": "not reached — an earlier feature failed hard"
+    },
+    "liveCount": {
+      "ok": false,
+      "detail": "not reached — an earlier feature failed hard"
+    },
+    "toggleComplete": {
+      "ok": false,
+      "detail": "not reached — an earlier feature failed hard"
+    },
+    "editTodo": {
+      "ok": false,
+      "detail": "not reached — an earlier feature failed hard"
+    },
+    "deleteTodo": {
+      "ok": false,
+      "detail": "not reached — an earlier feature failed hard"
+    },
+    "clearCompleted": {
+      "ok": false,
+      "detail": "not reached — an earlier feature failed hard"
+    },
+    "clearAll": {
+      "ok": false,
+      "detail": "not reached — an earlier feature failed hard"
+    }
+  },
+  "featureScore": 2,
+  "featureTotal": 12,
+  "consoleErrors": [],
+  "pageErrors": [],
+  "delivered": false,
+  "filesInWorkspace": [
+    ".hirayacoder/audit.log",
+    ".hirayacoder/history.jsonl",
+    ".hirayacoder/memory/session1.txt",
+    ".hirayacoder/outcomes.jsonl",
+    "src/components/ClearButton.jsx",
+    "src/components/TodoInput.jsx",
+    "src/components/TodoItem.jsx",
+    "src/components/TodoList.jsx",
+    "src/hooks/useTodos.js",
+    "todo-glass-app/.gitignore",
+    "todo-glass-app/.oxlintrc.json",
+    "todo-glass-app/README.md",
+    "todo-glass-app/dist/assets/hero-CLDdwZDr.png",
+    "todo-glass-app/dist/assets/index-Bnpwovj6.js",
+    "todo-glass-app/dist/assets/index-DykytF2W.css",
+    "todo-glass-app/dist/assets/react-CHdo91hT.svg",
+    "todo-glass-app/dist/assets/vite-BF8QNONU.svg",
+    "todo-glass-app/dist/favicon.svg",
+    "todo-glass-app/dist/icons.svg",
+    "todo-glass-app/dist/index.html",
+    "todo-glass-app/index.html",
+    "todo-glass-app/package-lock.json",
+    "todo-glass-app/package.json",
+    "todo-glass-app/public/favicon.svg",
+    "todo-glass-app/public/icons.svg",
+    "todo-glass-app/src/App.css",
+    "todo-glass-app/src/App.jsx",
+    "todo-glass-app/src/assets/hero.png",
+    "todo-glass-app/src/assets/react.svg",
+    "todo-glass-app/src/assets/vite.svg",
+    "todo-glass-app/src/components/ClearButton.jsx",
+    "todo-glass-app/src/components/TodoInput.jsx",
+    "todo-glass-app/src/components/TodoItem.jsx",
+    "todo-glass-app/src/components/TodoList.jsx",
+    "todo-glass-app/src/components/TodoStats.jsx",
+    "todo-glass-app/src/hooks/useTodos.js",
+    "todo-glass-app/src/index.css",
+    "todo-glass-app/src/main.jsx",
+    "todo-glass-app/todo-glass-app/.gitignore",
+    "todo-glass-app/todo-glass-app/.oxlintrc.json",
+    "todo-glass-app/todo-glass-app/README.md",
+    "todo-glass-app/todo-glass-app/index.html",
+    "todo-glass-app/todo-glass-app/package.json",
+    "todo-glass-app/todo-glass-app/public/favicon.svg",
+    "todo-glass-app/todo-glass-app/public/icons.svg",
+    "todo-glass-app/todo-glass-app/src/App.css",
+    "todo-glass-app/todo-glass-app/src/App.jsx",
+    "todo-glass-app/todo-glass-app/src/assets/hero.png",
+    "todo-glass-app/todo-glass-app/src/assets/react.svg",
+    "todo-glass-app/todo-glass-app/src/assets/vite.svg",
+    "todo-glass-app/todo-glass-app/src/index.css",
+    "todo-glass-app/todo-glass-app/src/main.jsx",
+    "todo-glass-app/todo-glass-app/vite.config.js",
+    "todo-glass-app/vite.config.js"
+  ],
+  "confirmations": [
+    "npm create vite@latest todo-glass-app -- --template react",
+    "npm create vite@latest todo-glass-app -- --template react"
+  ],
+  "auditDecisions": {
+    "auto-approved": 196,
+    "approved": 4
+  },
+  "machine": {
+    "platform": "win32",
+    "cpu": "AMD Ryzen 5 3600X 6-Core Processor             ",
+    "cores": 12,
+    "totalMemGb": 32,
+    "node": "v24.11.1"
+  },
+  "machineId": "B",
+  "notes": "0.9.0 baseline, before any translator/memory work"
+}

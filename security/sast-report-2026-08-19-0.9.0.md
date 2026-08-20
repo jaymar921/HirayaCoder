@@ -142,3 +142,91 @@ against `app/` and `tools/` report nothing.
 
 **Reviewer:** 0.9.0 release pass
 **Date:** 2026-08-19
+
+---
+
+## 8. Addendum — the code added after this report was first written
+
+The release continued past the pass above: three more briefs, two more probes, and six
+more agent-side modules. This addendum covers them so the report describes the branch as
+it stands rather than as it stood halfway through.
+
+### Re-run of every scan
+
+| Tool | Result |
+|---|---|
+| `npm audit --omit=dev` | **0 vulnerabilities** |
+| `npm audit` | **0 vulnerabilities** |
+| `npx retire --path app` | nothing |
+| `npx retire --path tools` | nothing |
+| `npm run lint` | 0 errors, 38 warnings (all `security/detect-non-literal-fs-filename` in `tools/`, reviewed) |
+| `npm run test:unit` | 1,480 passing |
+
+The production dependency tree is still empty. Nothing was added to `package.json` in
+this release.
+
+### Every regex added since §4, measured
+
+The 0.7.0 report's standing instruction is to measure a flagged expression rather than
+dismiss it, and SAST-011 in this report was a quadratic expression written *during* it.
+So each pattern added afterwards was timed rather than reasoned about:
+
+| Pattern | Input | Time |
+|---|---|---|
+| `fileTree.PREFIX` | 4,000 chars | 0.04 ms |
+| `dictation.FENCE` | 20,006 chars | 0.13 ms |
+| `dictation.LITERAL_TOKENS` | 4,000 chars | 0.06 ms |
+| `requestPlan.FILENAME_TOKEN` | 24,000 chars | 0.37 ms |
+| `pythonExports` | 16,000 chars | 0.07 ms |
+| `jvmExports` | 21,000 chars | 0.20 ms |
+| `fileSpec.words` | 16,000 chars | 0.13 ms |
+
+All linear. Two were written deliberately to avoid the shape that caused SAST-011:
+`requestPlan.namesFilesIn` counts matches in a loop rather than repeating a group in the
+pattern, and `isDictatableFilename` does no regex matching on the variable-length part
+at all.
+
+### New surface, and why it is narrower than it looks
+
+**`agent/dictation` now writes files in four more situations** — a marker file created
+empty, an assembly rewrite, a requirement-driven retry, and a project directory created
+when the request names no scaffold command. Every one of them goes through
+`AgentSession._execute`, which is the same path a model-chosen write takes: `pathGuard`,
+the permission gate, the change set, the file history, the audit log. No new `fs.write*`
+call was added to `/app` in this release.
+
+The path a dictation may target got **narrower**, not wider, and each restriction is
+pinned by a test in `test/unit/structuredRequest.test.js`:
+
+- An allow-list of writable extensions replaced the deny-list of binary ones — the space
+  of dotted module paths is open and the space of file types is not, so `pathlib.Path`
+  and `tkinter.ttk` are no longer candidates.
+- `..` and `.` segments are refused by `fileTree.looksLikeEntry` (SAST-012).
+- Manifests, lockfiles and `.env` remain excluded outright.
+- A file that already exists is untouched unless the user annotated it in their own tree.
+- A directory is created only when the request draws it as the project root *and* names
+  no command that would create it — otherwise the scaffold command owns it.
+
+**`core/namedCommands` extracts a command from the request and runs it.** This is the one
+addition that executes something, and it is worth being precise about what it does not
+change: the command still goes through `_execute` and the gate's allow-list, and a
+scaffold command reaches the network, so it is one the gate *always* confirms regardless
+of auto-approve. What is removed is the transcription step, not the approval. It reads
+only from code spans and fenced blocks — never prose, because acting on a paraphrase is
+how the wrong thing gets run — and returns a command only when it both matches a
+project-creating binary and names the directory in question. On the four shipped briefs
+it fires on one and correctly declines the other three.
+
+**The benchmark harness grew a Java and a Python probe**, both of which compile and run
+code written by a model. Both are developer tooling excluded from the package by
+`.vscodeignore`, both run in a temp directory, and the Python one sets
+`PYTHONDONTWRITEBYTECODE`. They execute model output by design — that is what grading it
+means — and they do so in the same place the model already ran its own build.
+
+### Findings
+
+None. Nothing in the addendum's scope opened a new finding, and SAST-011 through
+SAST-013 stand as recorded.
+
+**Reviewer:** 0.9.0 wrap-up pass
+**Date:** 2026-08-20
