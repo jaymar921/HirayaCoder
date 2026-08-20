@@ -82,6 +82,35 @@ instruction working. It requires a first-person inability **plus** a visual obje
 examines only the opening 400 characters, so a real description that ends with a
 boilerplate disclaimer survives.
 
+### Fixed — the project description drowning the picture
+
+Found by trying the packaged build rather than by any test. In Ask mode on
+`minicpm-v4.6`, "describe the image" with a photograph of a dog attached returned a
+description of HirayaCoder.
+
+Not a vision failure: the same model and the same photograph score 24/24 in
+`tools/bench-vision.js`. It was an instruction-following failure, and the instructions it
+followed were ours. Ask mode's system prompt opens with *"everything below this line is
+what you know about the user's project… Answer from it"*, and underneath sat 2,500
+characters of project description and file listing with `Task: describe the image` on the
+last line. A small model resolves that conflict by weight, and forty file paths outweigh
+one line of task.
+
+Two changes. On a turn with no tools that carries an image, the project overview and the
+workspace listing are left out — they are orientation the model cannot act on, and they
+were the thing being answered from. And every prompt gains a short instruction saying an
+image is attached and is the subject of the question. After both, the user turn went from
+2,510 characters to 24 and the same model answered: *"a cheerful Corgi with a fluffy
+white and tan coat, lying comfortably in a sunlit grassy field… wears a green collar"*.
+
+The listing is kept in Agent and Plan mode, where it is load-bearing: a model asked to
+build the screen in a mockup needs to know which paths exist, and there the picture is a
+fact about the job rather than a competitor to it.
+
+`contextBuilder` already carried a comment describing this exact shape for the chat route
+— a model handed a project description and the message "Hello Hiraya" answers with the
+project description. Same bug, different trigger, and the connection was missed.
+
 ### Added — the image-recognition benchmark
 
 `tools/bench-vision.js`, graded against six photographs in `docs/test-images/` on four

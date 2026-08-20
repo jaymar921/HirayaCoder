@@ -876,6 +876,8 @@ class AgentSession {
         // "Read the README" should not be able to reach `run_script`, whatever the
         // planner decides in between. See `intentRouter.isReadOnlyRequest`.
         readOnlyTurn: intentRouter.isReadOnlyRequest(task, this.conversation),
+        // Changes the instruction, never the tools. See `promptRouter.IMAGE_SUFFIX`.
+        hasImages: this.imageFiles.length > 0,
       });
 
       if (activeRoute.readOnlyTurn) {
@@ -2491,7 +2493,23 @@ class AgentSession {
       // twice in one session, once for a greeting and once for "I'm Jay". The chat
       // route exists for messages that are not about the project, and giving it the
       // one block that is guarantees the reply will be.
-      projectOverview: activeRoute.strategy === 'chat' ? '' : projectOverview.build(this.workspaceRoot),
+      //
+      // Also dropped on a loopless turn that carries an image, which is the same
+      // failure with a different trigger. Measured on `minicpm-v4.6`: "describe the
+      // image" with a photograph attached returned a description of HirayaCoder. The
+      // picture was on the message and the model can see — it scores 24/24 on this
+      // exact photograph in `tools/bench-vision.js` — but it was handed 2,500
+      // characters of project description and file listing with the task on the last
+      // line, and a small model resolves that by weight.
+      //
+      // Only the loopless routes. In Agent and Plan the listing is load-bearing: a
+      // model asked to build the screen in a mockup needs to know which paths exist,
+      // and there the picture is not competing with the project, it is a fact about
+      // the job.
+      projectOverview:
+        activeRoute.strategy === 'chat' || (loopless && this.imageFiles.length > 0)
+          ? ''
+          : projectOverview.build(this.workspaceRoot),
       // A model that has to discover the file tree spends steps on it and, worse,
       // invents paths when it guesses. Seeding the listing costs a fraction of the
       // budget and removes the most common failure on Tier B outright.
@@ -2502,7 +2520,10 @@ class AgentSession {
       // routinely asked what is *in* the project, and with an empty listing it answered
       // "There are no files listed in your workspace" — in a workspace of several
       // hundred files. Naming what exists is not an action; it is the answer.
-      workspaceFiles: await this._workspaceFiles(activeRoute),
+      // Suppressed alongside the project overview, and for the same measured reason: on
+      // a turn with no tools, the listing is orientation the model cannot act on, and
+      // forty file paths outweigh one line of task.
+      workspaceFiles: loopless && this.imageFiles.length > 0 ? [] : await this._workspaceFiles(activeRoute),
       // Carried on every turn of the run, unlike the image itself. That is the whole
       // point of producing it: the picture reaches turn one and the words reach all of
       // them.

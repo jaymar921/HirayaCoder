@@ -139,6 +139,43 @@ answer; "I have no tools" is not, and on its own it is not even true of what you
 Answer the question that was actually asked, directly and concisely.`;
 
 /**
+ * Appended to any prompt when the user attached an image to this message.
+ *
+ * ## Why a prompt was needed at all, when the image is right there on the message
+ *
+ * Because everything else in the turn is about the project, and it drowns the picture.
+ *
+ * Measured on `minicpm-v4.6` in Ask mode, "describe the image" with a photograph of a
+ * dog attached. The image reached the model. The reply described HirayaCoder. That is
+ * not a vision failure — the same model, the same photograph and a bare describe prompt
+ * scores 24/24 in `tools/bench-vision.js`. It is an instruction-following failure, and
+ * the instructions it followed were ours: Ask mode's prompt opens with "everything below
+ * this line is what you know about the user's project… Answer from it", and the context
+ * under it was 2,500 characters of project description and file listing with "Task:
+ * describe the image" on the last line.
+ *
+ * A small model resolves that conflict by weight, and the project block outweighs one
+ * short task line. `contextBuilder` is what stops the block from being there at all on
+ * this kind of turn; this is what re-points the instruction.
+ *
+ * The same shape is already documented in `agentSession._buildContext` for the chat
+ * route — a model handed a project description and the message "Hello Hiraya" answers
+ * with the project description. It is the same bug with a different trigger.
+ */
+const IMAGE_SUFFIX = `
+
+The user has attached an image to this message, and it is the subject of what they
+asked. Answer about the image.
+
+If you were given the picture itself, look at it. If you were given a written
+description of it instead, that description is everything you have — work from it, and
+do not offer to look at the image more closely.
+
+Do not answer with a description of this project, its files, or what it does unless the
+user's message actually asks about those. A question sent with a picture attached is
+almost always about the picture.`;
+
+/**
  * Agent mode, for a message that turned out to be conversation.
  *
  * Deliberately not Ask mode's prompt. Ask is a mode the user chose, and its instruction
@@ -276,6 +313,8 @@ function renderEarnedHints(hints) {
  *   six-item TODO run does not re-detect it per step.
  * @property {string[]} [earnedHints]  Sentences from `agent/earnedHints`, already selected.
  * @property {'chat' | 'task'} [intent]  From `core/intentRouter`. Only consulted in Agent mode.
+ * @property {boolean} [hasImages]  The user attached at least one image to this
+ *   message. Changes the instruction rather than the tools — see `IMAGE_SUFFIX`.
  * @property {boolean} [readOnlyTurn]  From `intentRouter.isReadOnlyRequest`. Drops the
  *   mutating tools for one message. Only consulted in Agent mode — Plan has already
  *   dropped them, and Ask never had any.
@@ -317,7 +356,7 @@ function route(request) {
       tools: [],
       ollamaTools: [],
       allowedActions: new Set(),
-      systemPrompt: withIdentity(ASK_SYSTEM),
+      systemPrompt: withIdentity(ASK_SYSTEM) + (request.hasImages ? IMAGE_SUFFIX : ''),
       budgets: { ...budgets, maxSteps: 0 },
       readOnly: true,
       // Read-only because the user chose a mode, not because this message was a
@@ -341,7 +380,7 @@ function route(request) {
       tools: [],
       ollamaTools: [],
       allowedActions: new Set(),
-      systemPrompt: withIdentity(CHAT_SYSTEM),
+      systemPrompt: withIdentity(CHAT_SYSTEM) + (request.hasImages ? IMAGE_SUFFIX : ''),
       budgets: { ...budgets, maxSteps: 0 },
       readOnly: true,
       readOnlyTurn: false,
@@ -374,6 +413,7 @@ function route(request) {
     withEnvironment(systemPrompt, request.environment, { mutating: toolMode !== 'plan' })
   );
 
+  if (request.hasImages) systemPrompt += IMAGE_SUFFIX;
   if (mode === 'plan') systemPrompt += PLAN_SUFFIX;
   if (readOnlyTurn) systemPrompt += READ_ONLY_SUFFIX;
 

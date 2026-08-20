@@ -213,6 +213,88 @@ describe('images in a turn', () => {
     });
   });
 
+  describe('the project must not drown the picture', () => {
+    // The bug this covers, measured on minicpm-v4.6 in Ask mode: "describe the image"
+    // with a photograph of a dog attached returned a description of HirayaCoder. Not a
+    // vision failure — the same model and photograph score 24/24 in bench-vision. The
+    // model was handed 2,500 characters of project description and file listing with
+    // "Task: describe the image" on the last line, under a system prompt opening with
+    // "everything below this line is what you know about the user's project… Answer
+    // from it". A small model resolves that conflict by weight.
+
+    it('leaves the project overview and file listing out of a no-tools image turn', async () => {
+      const client = twoStageClient(['A corgi in grass.']);
+      const session = makeSession({
+        client,
+        model: 'qwen3.5:4b',
+        vision: { enabled: true, describeModel: 'qwen3.5:4b', activeCanSee: true },
+      });
+
+      await session.run('describe the image', { mode: 'ask' });
+
+      const userTurn = client.mainCalls[0].messages[1].content;
+      assert.ok(!userTurn.includes('Files in this project'), 'no file listing');
+      assert.ok(!userTurn.includes("project's own description of itself"), 'no project overview');
+      assert.ok(userTurn.includes('describe the image'), 'the task still gets there');
+    });
+
+    it('tells the model the question is about the image', async () => {
+      const client = twoStageClient(['A corgi in grass.']);
+      const session = makeSession({
+        client,
+        model: 'qwen3.5:4b',
+        vision: { enabled: true, describeModel: 'qwen3.5:4b', activeCanSee: true },
+      });
+
+      await session.run('describe the image', { mode: 'ask' });
+
+      const system = client.mainCalls[0].messages[0].content;
+      assert.ok(system.includes('attached an image'), 'the instruction is present');
+      assert.ok(system.includes('Answer about the image'));
+    });
+
+    it('says nothing about images on a turn that has none', async () => {
+      const client = twoStageClient(['An answer.']);
+      const modes = new PermissionModes({ initial: { autoEdit: true, autoApproveScripts: false } });
+      const session = new AgentSession({
+        client: /** @type {any} */ (client),
+        model: 'qwen3.5:4b',
+        capability: TIER_B,
+        gate: new PermissionGate({
+          workspaceRoot: root,
+          modes,
+          auditLog: new AuditLog(root),
+          confirm: async () => true,
+        }),
+        workspaceRoot: root,
+        sessionId: '1',
+      });
+
+      await session.run('what is this project?', { mode: 'ask' });
+
+      const system = client.mainCalls[0].messages[0].content;
+      assert.ok(!system.includes('attached an image'));
+      // And the orientation blocks it needs are still there, which is the thing the
+      // suppression above must not break for ordinary questions.
+      assert.ok(client.mainCalls[0].messages[1].content.includes('Files in this project'));
+    });
+
+    it('keeps the file listing in Agent mode, where it is load-bearing', async () => {
+      // A model asked to build the screen in a mockup needs to know which paths exist.
+      // There the picture is not competing with the project, it is a fact about the job.
+      const client = twoStageClient(['{"action":"done","summary":"Done."}']);
+      const session = makeSession({
+        client,
+        model: 'qwen3.5:4b',
+        vision: { enabled: true, describeModel: 'qwen3.5:4b', activeCanSee: true },
+      });
+
+      await session.run('build the screen in this mockup', { mode: 'agent' });
+
+      assert.ok(allText(client).includes('Files in this project'), 'the listing survives in Agent mode');
+    });
+  });
+
   describe('secrets visible in the picture', () => {
     it('redacts a credential the describer read off the screenshot', async () => {
       // Not a hypothetical, and not merely permitted: the recognition prompt asks the
