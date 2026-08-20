@@ -63,8 +63,20 @@ const MAX_CODE_CHARS = 24000;
 /** Shorter than this and the model answered with a shrug rather than a file. */
 const MIN_CODE_CHARS = 40;
 
-/** Long enough for a component with its styling; short enough that a runaway reply ends. */
-const NUM_PREDICT = 2400;
+/**
+ * How much room one file gets.
+ *
+ * 2,400 was set from React components and it was too small for verbose languages. The
+ * evidence took three attempts to get: two theories about truncation were tested and
+ * discarded, and only once the run recorded Ollama's own `done_reason` did the answer
+ * arrive plainly — `qwen3.5:2b` writing `Main.java` and `Validator.java` both stopped at
+ * **`(length, 2400 tokens)`**, exactly on the cap.
+ *
+ * A Swing frame or a Python service with docstrings is simply longer than a React
+ * component. 4,096 is still bounded well below `MAX_CODE_CHARS`, so a runaway reply
+ * still ends; what it stops doing is truncating an honest one.
+ */
+const NUM_PREDICT = 4096;
 
 /** One file's worth of writing, on a CPU-only machine, with headroom. */
 const TIMEOUT_MS = 300000;
