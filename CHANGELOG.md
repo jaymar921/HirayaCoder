@@ -126,11 +126,101 @@ React component.
 A rejected file now gets one retry with the reason attached, and if that fails it is
 reported as not written rather than passed over in silence.
 
+### Added — each file is told what the request asks *of it*
+
+Splitting a long request by its headings is a large improvement and it is split along the
+wrong axis. On the benchmark brief, the section that names fifteen files specifies no
+behaviour, and the section specifying about ten of the twelve graded behaviours names no
+files. So the step writing `TodoItem.jsx` — the file that owns toggle, edit and delete —
+was handed 1,131 characters mentioning neither *Escape*, *blur*, *double-click* nor
+`line-through`.
+
+Chunking helps a small model because it cuts how many constraints must hold at once.
+Chunking along the wrong axis does not cut them, it **drops** them — which looks like the
+same failure and is worse, because no retry recovers a requirement the model never saw.
+
+`core/fileSpec` re-gathers by file, matching the words in a requirement against the words
+in the file's name and your own purpose comment. Two rules make it discriminate rather
+than merely run: the project's subject word (`todo` here, `contact` in the contacts
+brief) is in every filename and every requirement, so a token appearing in most of them
+is discounted; and the composition root gets everything, because it shares vocabulary
+with nothing and is the file the rest are wired into.
+
+### Added — the checks the extension can run without asking
+
+- **The assembly check.** The most expensive failure in two evaluations, and one a build
+  cannot see: five correct components on disk, a clean build, and an `App.jsx` still
+  holding the scaffold's counter demo. The extension knows which files it wrote, which is
+  the composition root, and whether that file imports the others — so when it does not,
+  the file is asked for once more with the missing imports named.
+- **The requirement echo check.** A written file has to mention the literal words its
+  requirements named — an identifier you backticked, or a name the platform spells for
+  you, like `Escape` or `blur`. Anything softer is deliberately not checked, because
+  "with a confirmation state" can be written a dozen ways and a guess would rewrite
+  working code.
+- **The scaffold command you already wrote out.** Every failure to scaffold in the sweep
+  was a failure to *retype* `npm create vite@latest todo-glass-app -- --template react`,
+  which was on the screen in backticks the whole time. It is read from a code span, never
+  from prose, only when it names the directory in question — and it still goes through
+  the same permission gate, which always confirms a command that reaches the network.
+- **The project directory.** When a request draws a project root and names no command
+  that would create it, the extension creates it. Without this, a brief built by writing
+  files rather than by running a generator never got started at all.
+- **Dependencies the written code imports** are installed rather than guessed at.
+
+### Added — three more briefs, in three more shapes
+
+The benchmark had one brief, which measures one kind of project. It now has four:
+
+| Brief | Stack | Graded by |
+|---|---|---|
+| TODO app | React + Vite + Tailwind | 12 features, driven in a browser |
+| Contact manager | React + Vite + Vitest | 12 features, driven in a browser |
+| Point of sale | Java + Swing + Maven | 8 features, driven through the service layer |
+| Point of sale | Python + Tkinter, stdlib only | 8 features, driven through the service layer |
+
+The two POS briefs are the same product in two languages, reporting the **same eight
+feature names**, so a model's trouble with the work can be told apart from its trouble
+with the language. Each probe was validated against a hand-written correct project and a
+deliberately sabotaged copy before any model was graded with it — and doing so found a
+real bug in two of the three probes.
+
+Adding a brief in a language that was not JavaScript immediately paid for itself: a
+dotted module path like `pathlib.Path` is shaped exactly like a filename, Python prose is
+full of them, and each one was consuming a file-write slot.
+
+### Fixed — the import contract was blank in every language but JavaScript
+
+`exportsOf` only understood JavaScript's `export` statement, so for both POS briefs it
+asserted, in the prompt, that every module the next file had to import offered nothing at
+all. The feature that exists to stop imports being guessed at was itself guessing. It now
+reads a Python module's top-level classes and functions, and a Java file's public type
+and package, and words each one the way that language actually imports.
+
+### What it measured, and what it did not
+
+`qwen3.5:0.8b` on the TODO brief went from **zero gates to three** — scaffold, structure,
+install — where the baseline was nine `list_files` calls and two `repeating` stops.
+
+**No model delivered a working application on any of the four briefs.** The best feature
+score in the whole evaluation is still `qwen3.5:2b`'s 2 of 12 *on the baseline*. Both POS
+briefs sit at 0 of 8, with Python getting furthest: the model, both repository files and
+`main.py` written and compiling, and the service layer never arriving.
+
+Seven defects were found during the evaluation and every one of them was in this
+release's own code rather than in a model. `doc/SESSION-ANALYSIS-0.9.0.md` lists them,
+because the pattern is the finding: each produced a plausible result that would otherwise
+have been filed as a model failure.
+
 ### Documentation
 
 - `doc/SESSION-ANALYSIS-0.9.0.md` — the counted analysis of the evaluation sweep.
 - Two new images, `asked-the-wrong-way.png` and `your-structure-is-the-plan.png`, with
   their HTML sources; the version badge moves to v0.9.0.
+- `benchmarks/README.md` documents the real-world harness: the gates, the auto-user,
+  the twelve features it drives, and how each probe was validated before it was trusted.
+- `security/sast-report-2026-08-19-0.9.0.md`, with an addendum covering the code added
+  after the pass itself — every scan re-run and every new regex measured.
 
 ## [0.8.0] — unreleased
 
