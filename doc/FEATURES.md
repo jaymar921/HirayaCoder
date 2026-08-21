@@ -99,9 +99,19 @@ models are GPU-resident this is worth re-trying.
 - **`+` attaches reference files.** They are scanned for secrets and redacted *at
   ingestion*, before truncation, so a credential cannot survive by sitting past the cut
   and reappearing when the budget changes.
-- **Images** for vision-capable models — magic-number checked, 4 MB cap, first message
-  only. The attach button is disabled for models without the capability, since such a
-  model does not error on an image, it ignores it and answers from the text.
+- **Images**, on any model — magic-number checked, 4 MB cap. The raw picture rides on the
+  first message when the selected model has the `vision` capability, and never when it
+  does not: such a model would not error, it would ignore the image and answer from the
+  text alone.
+- **Image recognition** (`core/imageRecognition`, 1.1.0) is what makes the above work on
+  a text-only model. A vision model writes down what is in the picture and *that* goes
+  into the context, so a screenshot is usable on `llama3.2`. It is produced even for a
+  model that can see, because an agent loop outlives the picture: images ride on turn one
+  only, and the words are small enough to carry on all eight. The describer is the
+  selected model when it can see (no extra load) and otherwise the smallest installed
+  vision model. The attach button is gated on the *machine* having a vision model, not on
+  the selected one being it. Every attachment comes with a panel showing exactly what was
+  read. Full detail: [IMAGE-RECOGNITION.md](IMAGE-RECOGNITION.md).
 - **Session memory** persists across turns as plain text you can read and clear
   (**Show Session Memory**, **Clear Session Memory**). Notes are composed by the
   extension from what actually happened, not written by the model, and a failed write or
@@ -388,6 +398,8 @@ where bare JSON mode managed **0 out of 6**.
 | `hirayacoder.scripts.allowedBinaries` | `[]` | Extends the built-in allow-list. |
 | `hirayacoder.scripts.timeoutMs` | `120000` | |
 | `hirayacoder.security.protectedPaths` | `[".git", ".hirayacoder"]` | |
+| `hirayacoder.vision.enabled` | `true` | Read attached images into a written description. Off still sends images to a model that can see them. |
+| `hirayacoder.vision.describeModel` | *(automatic)* | Which model reads images. Honoured only if installed **and** reporting `vision`. |
 | `hirayacoder.experimental.stepSessions` | `false` | Run each TODO item as a briefed, verified step. See above. |
 | `hirayacoder.inlineCompletion.enabled` | `false` | |
 | `hirayacoder.statusBar.enabled` | `true` | Connection, model, tier. |

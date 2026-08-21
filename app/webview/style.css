@@ -314,6 +314,72 @@ select.control {
   content: '▾ ';
 }
 
+/*
+ * Which model replied, and how long it took. One line, under everything else.
+ *
+ * Small but deliberately not faint: this is a number people compare across replies that
+ * are minutes apart, so it has to survive a glance. `--fs-xs` with the theme's own
+ * description colour is the same weight the attachment chips carry, which is the
+ * quietest step in this panel that is still meant to be read.
+ */
+.run-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-1);
+  margin-top: var(--sp-3);
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--border);
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  /* A long model name must not widen the panel. */
+  overflow-wrap: anywhere;
+}
+
+.run-meta-model {
+  font-family: var(--vscode-editor-font-family, Consolas, monospace);
+  color: var(--vscode-foreground);
+}
+
+.run-meta-sep {
+  opacity: 0.6;
+}
+
+/* The second model, when a different one read an attached image. Set back a step so the
+   headline pair still reads first. */
+.run-meta-via {
+  margin-left: var(--sp-2);
+  opacity: 0.85;
+}
+
+/*
+ * What the vision model read out of an attached image. Same shape as the trace above,
+ * because it is the same kind of thing — evidence for the answer, kept out of the way
+ * until someone wants it.
+ */
+.vision-note > summary::before {
+  content: '▸ ';
+}
+
+.vision-note[open] > summary::before {
+  content: '▾ ';
+}
+
+.vision-name {
+  margin-top: var(--sp-2);
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+.vision-text {
+  margin: var(--sp-1) 0 0;
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  /* A describer that emits one long unbroken line must not widen the panel. */
+  overflow-wrap: anywhere;
+}
+
 .step {
   display: flex;
   gap: var(--sp-2);

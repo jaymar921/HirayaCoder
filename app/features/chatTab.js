@@ -26,6 +26,7 @@ const { budgetsFor } = require('../core/modelCapability');
 const { TranscriptStore } = require('../core/transcriptStore');
 const { AgentSession, ChangeSet } = require('../agent/agentSession');
 const { readImage, modelSupportsImages } = require('./imageContext');
+const imageRecognition = require('../core/imageRecognition');
 
 /** Bytes of entropy behind the CSP nonce. */
 const NONCE_BYTES = 16;
@@ -419,13 +420,59 @@ class ChatTab {
     });
   }
 
+  /**
+   * Who, if anyone, can look at an attached image right now.
+   *
+   * ## Why this is no longer just "does the selected model have vision"
+   *
+   * Until 1.1.0 the answer was exactly that, and the attach button was disabled on
+   * every text-only model. That was correct while an image could only reach the model
+   * on the message itself: a model without vision does not error on a picture, it
+   * ignores it and answers confidently from the text alone, which is worse than a
+   * refusal.
+   *
+   * It stopped being correct once `core/imageRecognition` existed. The picture now
+   * reaches a text-only model as a description written by whichever vision model is
+   * installed, so the real question is whether *any* installed model can see — and on a
+   * machine that has one, refusing the attachment denies a capability that is present.
+   *
+   * The button is still disabled when nothing installed can see, for the original
+   * reason, which has not changed.
+   *
+   * @returns {{supported: boolean, describer: string | null, viaOtherModel: boolean}}
+   * @private
+   */
+  _visionState() {
+    const models = this.app.models || [];
+    const active = models.find((m) => m.name === this.app.activeModel) || null;
+    const activeCanSee = modelSupportsImages(active);
+    const settings = (this.app.settings && this.app.settings.vision) || {};
+
+    if (settings.enabled === false) {
+      // Turned off deliberately. A model that can see for itself still can: that path
+      // costs no extra call, and the setting is about the recognition pass rather than
+      // about images.
+      return { supported: activeCanSee, describer: activeCanSee ? this.app.activeModel : null, viaOtherModel: false };
+    }
+
+    const pick = imageRecognition.pickDescriber(models, {
+      activeModel: this.app.activeModel,
+      preferred: settings.describeModel || '',
+    });
+
+    if (!pick) return { supported: false, describer: null, viaOtherModel: false };
+    return { supported: true, describer: pick.name, viaOtherModel: !activeCanSee };
+  }
+
   /** @private */
   _postVision() {
-    const active = (this.app.models || []).find((m) => m.name === this.app.activeModel) || null;
+    const state = this._visionState();
     this._post({
       type: 'vision',
-      supported: modelSupportsImages(active),
+      supported: state.supported,
       model: this.app.activeModel,
+      describer: state.describer,
+      viaOtherModel: state.viaOtherModel,
     });
   }
 
@@ -496,13 +543,14 @@ class ChatTab {
 
   /** @private */
   async _attachImage() {
-    const active = (this.app.models || []).find((m) => m.name === this.app.activeModel) || null;
-    if (!modelSupportsImages(active)) {
-      // Checked again on this side: the button being disabled is a convenience, not
-      // a guarantee, and a text-only model would silently ignore the image.
+    const vision = this._visionState();
+    if (!vision.supported) {
+      // Checked again on this side: the button being disabled is a convenience, not a
+      // guarantee. The message names the whole machine rather than the selected model,
+      // because switching models is no longer the fix — nothing installed can see.
       vscode.window.showWarningMessage(
-        `HirayaCoder: ${this.app.activeModel || 'The selected model'} cannot read images. ` +
-          'Switch to a vision model such as gemma4 or qwen3.5.'
+        'HirayaCoder: none of your installed models can read images. ' +
+          'Pull one that can, such as `ollama pull minicpm-v4.6` or `ollama pull qwen3.5:2b`.'
       );
       return;
     }
@@ -530,7 +578,22 @@ class ChatTab {
           dataUri: result.image.dataUri,
         },
       });
-      logger.info(`Attached image ${result.image.name} (${Math.round(result.image.bytes / 1024)} KB).`);
+      logger.info(
+        `Attached image ${result.image.name} (${Math.round(result.image.bytes / 1024)} KB), ` +
+          `to be read by ${vision.describer}.`
+      );
+    }
+
+    // Said once, after the picker, rather than as a warning before it: the user has
+    // already decided to attach something, and the useful information is that this will
+    // cost an extra model load — not that they picked the "wrong" model.
+    if (vision.viaOtherModel && this.pendingImages.length > 0) {
+      this._post({
+        type: 'status',
+        text:
+          `${this.app.activeModel} cannot read images, so ${vision.describer} will describe ` +
+          'them first. That is one extra model load before the turn starts.',
+      });
     }
   }
 
@@ -634,6 +697,10 @@ class ChatTab {
 
     const images = this.pendingImages.slice();
     this.pendingImages = [];
+    // Snapshotted with the images rather than read when the session is built: a model
+    // switch between the two would otherwise describe this turn's picture with a model
+    // that was not the one the user was told about.
+    const imageVision = this._visionState();
 
     // Set between the guard above and the queue below, so a message sent while this
     // tab is still waiting for the lane is refused rather than queued behind itself.
@@ -695,6 +762,16 @@ class ChatTab {
       environment: this.app.environment,
       stepSessions: this.stepSessions,
       images: images.map((image) => image.base64),
+      // The same pictures with their names attached, so a description can say which
+      // image it is describing. See `AgentSession.imageFiles`.
+      imageFiles: images.map((image) => ({ name: image.name, base64: image.base64 })),
+      // Resolved here rather than inside the session, because this is the only side
+      // that holds the list of installed models.
+      vision: {
+        enabled: !(this.app.settings && this.app.settings.vision && this.app.settings.vision.enabled === false),
+        describeModel: imageVision.describer,
+        activeCanSee: !imageVision.viaOtherModel && imageVision.supported,
+      },
       // How the session reaches the user when it is stuck or the request was
       // ambiguous. Bound to this tab, so the question appears in the conversation it
       // came from rather than in whichever tab happens to be focused.
@@ -721,6 +798,15 @@ class ChatTab {
         todos: result.todos || null,
         changes: result.changeSet instanceof ChangeSet ? result.changeSet.list() : [],
         plan: result.plan || null,
+        // Which model answered, and how long it took. Shown under every reply so that
+        // switching models is a comparison rather than a guess.
+        //
+        // `result.model` rather than `this.app.activeModel`: the user is free to change
+        // the dropdown while a turn is running, and the footer has to name the model
+        // that actually produced the words above it.
+        model: result.model || this.app.activeModel,
+        ms: typeof result.ms === 'number' ? result.ms : null,
+        vision: result.vision || null,
       });
     } catch (err) {
       const message = /** @type {Error} */ (err).message;
@@ -792,6 +878,20 @@ class ChatTab {
       // find out why.
       case 'interpretation':
         return this._post({ type: 'status', text: String(event.note || '').slice(0, 160) });
+      // What the vision model actually saw. Shown in the conversation rather than only
+      // logged, because everything the answer says about the picture is downstream of
+      // this paragraph — and a user who can read it can tell "the model misread my
+      // screenshot" from "the model read it and answered badly". Those two need
+      // different fixes and look identical without this.
+      case 'images-described':
+        return this._post({
+          type: 'images-described',
+          model: event.model,
+          descriptions: (event.descriptions || []).map((entry) => ({
+            name: String(entry.name || 'image'),
+            description: String(entry.description || '').slice(0, 2000),
+          })),
+        });
       default:
         return undefined;
     }

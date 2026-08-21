@@ -2,7 +2,7 @@
   "name": "hirayacoder",
   "displayName": "HirayaCoder",
   "description": "A fully offline, privacy-first AI coding agent powered by your local Ollama instance. Agentic on every model — even 1B.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "publisher": "jaymar921",
   "author": {
     "name": "jaymar921",
@@ -35,7 +35,10 @@
     "ai agent",
     "privacy",
     "copilot alternative",
-    "code assistant"
+    "code assistant",
+    "vision",
+    "image recognition",
+    "multimodal"
   ],
   "main": "./app/extension.js",
   "activationEvents": [
@@ -362,6 +365,16 @@
           "default": 3,
           "minimum": 1,
           "markdownDescription": "How many times one model must trip the same guard before the matching correction is added to its prompt. Lower learns faster and spends more of a small model's prompt budget on corrections; one trip is an accident rather than a habit."
+        },
+        "hirayacoder.vision.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Read attached images and turn them into a written description the model can work from. **This is what lets a text-only model use a screenshot** — the picture goes to whichever installed model has vision, and the description goes to the model you selected. Turn it off to save the extra model load; a model that can see images itself still receives them directly."
+        },
+        "hirayacoder.vision.describeModel": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Which model reads your images. Leave empty to pick automatically: your selected model when it has vision (no extra load), otherwise the smallest installed model that does. A name here is used only if that model is installed **and** reports vision — otherwise the automatic choice is used and the reason is written to the log."
         },
         "hirayacoder.statusBar.enabled": {
           "type": "boolean",

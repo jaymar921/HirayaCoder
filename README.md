@@ -5,454 +5,224 @@
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/jaymar921/HirayaCoder/main/docs/images/hero-offline-agent.png" width="900" alt="HirayaCoder v1.0.0 — your AI pair programmer, fully offline. A VS Code chat panel showing the agent reading two files, writing two files, and asking for approval before running npm run build." />
+  <img src="https://raw.githubusercontent.com/jaymar921/HirayaCoder/main/docs/images/hero-offline-agent.png" width="900" alt="HirayaCoder, your AI pair programmer, fully offline. A VS Code chat panel showing the agent reading two files, writing two files, and asking for approval before running npm run build." />
 </p>
 
 *A local Filipino-inspired AI coder that brings imagination and speed to your VS Code workflow.*
 
-> **1.0.0 is here.** Everything described below is implemented, tested on Windows, macOS
-> and Linux in CI, and stable enough to put a 1.0 on. The one thing still missing is the
-> one-click install: the Marketplace listing is not up yet, so releases are published as
-> a `.vsix` on the
-> [Releases page](https://github.com/jaymar921/HirayaCoder/releases) and installed by
-> hand — [Step 4](#step-4--install-hirayacoder) has the one command it takes.
-
 **HirayaCoder is a free AI coding assistant that runs entirely on your own computer.**
-You type what you want in plain English, and it writes and edits the files for you — no
+You type what you want in plain English, and it writes and edits the files for you. No
 account, no subscription, no internet connection, and nothing you write ever leaves your
 laptop.
 
-> **Hiraya** (Filipino) — imagination, aspiration, the spark of an idea before it becomes real.
+> **Hiraya** (Filipino): imagination, aspiration, the spark of an idea before it becomes real.
+
+> **Not on the Marketplace yet.** Releases are published as a `.vsix` on the
+> [Releases page](https://github.com/jaymar921/HirayaCoder/releases) and installed with
+> one command. See [step 4](#quick-start).
 
 ---
 
-## New here? Start with this
+## What it does
 
-**You do not need to know how to code to try it.** You do need about twenty minutes and
-a computer with a bit of room to spare. Here is the honest version of what you are
-signing up for.
+You open a folder, type *"make me a webpage with a to-do list"*, and it creates the
+files, writes the code, and shows you every change before saving anything. Then you keep
+talking to it: *"make the buttons blue"*, *"add a delete button"*.
 
-### What it actually does
+<p align="center">
+  <img src="https://raw.githubusercontent.com/jaymar921/HirayaCoder/main/docs/images/capabilities.png" width="900" alt="What HirayaCoder does: nothing leaves your machine, you approve every change, agentic on every model, big requests become a checklist, it knows your machine, and it learns your project. Three modes: Agent, Plan, and Ask." />
+</p>
 
-You open a folder on your computer, type something like *"make me a webpage with a
-to-do list"*, and HirayaCoder creates the files, writes the code, and shows you what it
-changed before saving anything. You can then ask it to change things: *"make the buttons
-blue"*, *"add a delete button"*.
+It runs the AI model on your own hardware through [Ollama](https://ollama.com), so it
+works with your Wi-Fi switched off. That is the whole point of it.
 
-### What makes it different from ChatGPT or Copilot
+---
 
-| | HirayaCoder | ChatGPT / Copilot |
-|---|---|---|
-| Cost | Free, forever | Usually a monthly fee |
-| Internet | Not needed after setup | Required |
-| Your code | Never leaves your computer | Sent to a company's servers |
-| Quality | Good, not great — see below | Better |
-| Speed | Seconds to minutes, depends on your PC | Fast |
+## New in 1.1.0: it can look at pictures
 
-**The trade is real and you should know it before you start.** HirayaCoder runs a small
-AI model on your own hardware, and small models are not as clever as the big paid ones.
-It handles ordinary tasks well. It struggles with big, vague requests. If you ask for
-"a full social media app" you will be disappointed; if you ask for one page, one feature,
-or one fix at a time, it does a decent job.
+Attach a screenshot, a photo, or a sketch to your message, and HirayaCoder reads it.
 
-### Will it run on my computer?
+- **Ask a question about it.** *"What is this error saying?"*
+- **Give it a job.** *"Build the screen in this mockup."* The picture becomes part of
+  the task.
 
-The main question is **how much RAM (memory) you have**. Here's a quick guide — you do
-not need a fancy graphics card.
+The useful part is that **this works even if your coding model cannot see**. Most AI
+models only handle text. A few, called vision models, can also take an image. If the
+model you picked is a text-only one, HirayaCoder quietly hands the picture to a vision
+model instead, gets back a written description of what is in it, and passes that
+description to your coding model. You do not have to switch models.
+
+If nothing you have installed can read images, one command fixes it:
+
+```bash
+ollama pull minicpm-v4.6
+```
+
+That is 1.6 GB, and it sits alongside whatever you already use for coding.
+
+**You can always see what it read.** Under your message there is a panel showing the
+exact description the vision model produced. Open it when an answer looks wrong, because
+it tells you whether the picture was misread or the answer was.
+
+Full detail, including what it is bad at, is in
+[IMAGE-RECOGNITION.md](https://github.com/jaymar921/HirayaCoder/blob/main/doc/IMAGE-RECOGNITION.md).
+
+---
+
+## Limitations
+
+Read this part. It is the honest description of the tool, and it will save you an
+evening if this is not what you need.
+
+**It is not as clever as a paid cloud assistant.** It runs a small model on your own
+hardware. Small models handle ordinary, specific tasks well and vague, large ones badly.
+Ask for one page, one feature, or one fix at a time and it does a decent job. Ask for
+"a full social media app" and you will be disappointed.
+
+**It does not finish a whole application.** This is measured, not guessed. On a brief for
+a complete React app, a small model scaffolds the project, writes every file you named,
+and installs the dependencies. Then the build fails, and no model at this size finished
+the app in any of our test runs.
+
+**It is slow.** On a 16 GB laptop with no graphics card, expect one to five minutes for
+an ordinary task. A graphics card makes it faster, not smarter. A bigger model makes it
+smarter, not faster.
+
+**It never goes online.** No cloud models, no looking things up, no fetching
+documentation. The only address it will connect to is your own machine.
+
+**It cannot leave the folder you opened,** and it only runs commands from a fixed list
+(`node`, `npm`, `git`, `pytest` and about twenty more). There is no shell, so `&&`, `|`
+and `>` are refused rather than interpreted.
+
+**Small models make specific mistakes.** They repeat themselves, they report success
+having written nothing, and they occasionally write a file that parses fine but has an
+export deleted. There are checks for each of these, and the checks catch most of it
+rather than all of it.
+
+**Image reading is approximate.** Large text and obvious subjects are reliable. Small
+text in a screenshot, exact numbers, and precise layout are not, and a misread arrives
+as a confident paragraph rather than as an apology.
+
+The full version, including everything that is a deliberate design choice rather than a
+shortcoming, is in
+[LIMITATIONS.md](https://github.com/jaymar921/HirayaCoder/blob/main/doc/LIMITATIONS.md).
+
+---
+
+## Will it run on my computer?
+
+The question that matters is **how much RAM you have**. You do not need a graphics card.
 
 | Your computer | Will it work? | What to expect |
 |---|---|---|
-| 8 GB RAM | Yes, just barely | Slow, and only simple single-file tasks |
-| 16 GB RAM, no graphics card | **Yes — this is what it was built for** | A task takes 1–5 minutes. Very usable |
-| 16 GB+ with a gaming graphics card | Yes, comfortably | A task takes 20–60 seconds |
-| Mac with Apple Silicon (M1–M4) | Yes, very well | A task takes 10–30 seconds |
+| 8 GB RAM | Just barely | Slow, simple single-file tasks only |
+| 16 GB RAM, no graphics card | **Yes, this is what it was built for** | A task takes 1 to 5 minutes |
+| 16 GB+ with a gaming graphics card | Comfortably | A task takes 20 to 60 seconds |
+| Mac with Apple Silicon (M1 to M4) | Very well | A task takes 10 to 30 seconds |
 
-To check on Windows: press `Ctrl+Shift+Esc`, click **Performance**, then **Memory**.
-On a Mac: Apple menu → **About This Mac**.
+To check on Windows: press `Ctrl+Shift+Esc`, click **Performance**, then **Memory**. On
+a Mac: Apple menu, then **About This Mac**.
 
 ---
 
-## Getting started
+## Quick start
 
-Four steps. Copy and paste the commands exactly.
+Four steps. The
+[full walkthrough](https://github.com/jaymar921/HirayaCoder/blob/main/doc/GETTING-STARTED.md)
+explains each one properly if you want it.
 
-### Step 1 — Install VS Code
+**1.** Install [VS Code](https://code.visualstudio.com), version 1.85 or newer.
 
-If you do not already have it, download it free from
-[code.visualstudio.com](https://code.visualstudio.com). This is the program you will
-actually be working in. You need **version 1.85 or newer** — any download from this year
-is fine.
+**2.** Install [Ollama](https://ollama.com) and leave it running. It has no window. It
+just sits in your system tray, and that is normal.
 
-### Step 2 — Install Ollama
-
-[Ollama](https://ollama.com) is the free program that runs the AI on your computer.
-Download it, install it, and leave it running in the background. It has no window — it
-just sits in your system tray or menu bar, and that is normal.
-
-### Step 3 — Download an AI model
-
-Open a terminal and paste one line. (On Windows press the Start button, type
-`PowerShell`, and hit Enter. On a Mac press `Cmd+Space`, type `Terminal`, and hit Enter.)
-
-**Pick the line that matches your computer:**
+**3.** Download a model. Open a terminal and paste one line:
 
 ```bash
-# 16 GB RAM or more — the best all-round choice, start here
+# 16 GB RAM or more, the best all-round choice. Reads images too
 ollama pull gemma4:e2b
 
-# 8 GB RAM, or if the one above is too slow — smaller and faster, but more limited
+# 8 GB RAM, or if the above is too slow
 ollama pull llama3.2:1b
 ```
 
-This downloads a few gigabytes, so it takes a while on a slow connection. You only ever
-do it once.
-
-### Step 4 — Install HirayaCoder
-
-Download the `.vsix` file from the
-[Releases page](https://github.com/jaymar921/HirayaCoder/releases), then run:
+**4.** Download the `.vsix` from the
+[Releases page](https://github.com/jaymar921/HirayaCoder/releases) and install it:
 
 ```bash
 code --install-extension hirayacoder-<version>.vsix
 ```
 
-Replace `<version>` with the number in the filename you downloaded.
-
-### You're ready
-
-1. Open VS Code.
-2. Go to **File → Open Folder** and pick a folder — an empty new one is perfect for a
-   first try. **This step is required**: HirayaCoder refuses to do anything without a
-   folder open, so that it can never touch files outside it.
-3. Press `Ctrl+Shift+H` (`Cmd+Shift+H` on a Mac).
-4. Type something and press Enter.
-
-Good first things to type:
+Then open a folder in VS Code (this is required, it refuses to work without one), press
+`Ctrl+Shift+H`, and type something. Good first tries:
 
 - `make a webpage that says hello with a big blue button`
 - `create a simple to-do list app in one HTML file`
-- `explain what this project does` *(in a folder that already has code)*
+- `explain what this project does`
 
-**If anything above is unclear once you are in there, press *Guide* in the chat header.**
-It opens the same four setup steps and — more usefully — what to expect: how long a task
-takes, why a refusal is usually the checks working, and what a small model is and is not
-good at.
-
-There is a longer, friendlier walkthrough in
-[TUTORIAL.md](https://github.com/jaymar921/HirayaCoder/blob/main/doc/TUTORIAL.md).
+There is a **Guide** button in the chat header that repeats all of this from inside the
+extension.
 
 ---
 
-## Using it day to day
+## The three modes
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/jaymar921/HirayaCoder/main/docs/images/capabilities.png" width="900" alt="What HirayaCoder does: nothing leaves your machine, you approve every change, agentic on every model, big requests become a checklist, it knows your machine, and it learns your project. Three modes — Agent, Plan, and Ask." />
-</p>
-
-### Watching a run happen
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/jaymar921/HirayaCoder/main/docs/images/live-session.png" width="900" alt="The live Steps panel in HirayaCoder v0.8.0. Six steps of a TODO app build, each showing the action, the file it touched, and the model's own stated reason — reading README.md to extract the project structure, scaffolding the React project, writing the useTodos hook, and running npm run build." />
-</p>
-
-A local model can take the better part of a minute per step, so the panel shows you each
-one as it happens: what it is doing, which file, and the reason the model gave for it.
-It opens when the first step arrives and folds away when the turn ends — and if you open
-or close it yourself, it stays how you left it.
-
-That matters most when a run is going wrong. Six steps in, you can see it re-reading the
-same file or editing something you never asked about, and stop it — rather than finding
-out from the summary ten minutes later.
-
-### Small models that finish
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/jaymar921/HirayaCoder/main/docs/images/knows-what-it-has.png" width="900" alt="Before and after, measured on qwen3.5:0.8b. Before v0.8.0: three identical list_files calls and the run ended, 5 of 7 sessions this way and zero files written. After: the second repeat is answered with a WHAT YOU ALREADY HAVE block listing the folders already listed, and the third step writes a file." />
-</p>
-
-The classic failure of a very small model is not bad code — it is the same correct-looking
-action forever. HirayaCoder keeps its own record of every file the agent has read, written
-and deleted, every folder it has listed and every command it has run, and puts that record
-in front of the model on each turn.
-
-A repeated read is no longer fatal either. Asking twice for a directory listing used to end
-the run; now the agent is handed back what it already had, told what to do next, and only
-stopped if it asks a third time.
-
-### Long requests, one step at a time
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/jaymar921/HirayaCoder/main/docs/images/your-structure-is-the-plan.png" width="900" alt="The structure you drew is the plan. On the left, a folder tree from a request with comments beside each file. On the right, the six steps HirayaCoder read out of the request's headings and the full paths it joined the tree back together into." />
-</p>
-
-If you paste in a long, structured request — headings, numbered steps, a folder tree —
-HirayaCoder works through it **one section at a time**, in your order, using your words.
-It does not ask the model to summarise your request first: your headings already are the
-plan, and reading them takes no guesswork, so this works the same on a 0.8B model as on a
-large one.
-
-Two details worth knowing, because they let you steer it:
-
-- **Draw the folder structure you want** and it will be read as real paths. `src/` plus
-  `components/` plus `TodoItem.jsx` becomes `src/components/TodoItem.jsx`.
-- **Put a comment next to a file** — `TodoItem.jsx  # one todo row, with edit and
-  delete` — and that comment becomes the instruction for writing it. A file with a
-  comment beside it may be rewritten if it already exists; a file without one is left
-  alone. That is how you say "this one is yours to write" and "this one came from the
-  scaffolding tool, don't touch it".
-
-A section that only states rules — "React functional components only, no UI libraries" —
-is not treated as a step. It is carried underneath every step instead.
-
-Short requests are unaffected. "Fix the typo in the heading" runs exactly as it always
-did.
-
-### Asked the wrong way
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/jaymar921/HirayaCoder/main/docs/images/asked-the-wrong-way.png" width="900" alt="The same request put to llama3.2:1b three ways. Constrained to the action schema it replies with a done action; asked for JSON it replies with an empty object; asked in plain words it returns a complete React component." />
-</p>
-
-The smallest models have a problem that looks like incompetence and is not. Asked to
-choose a tool and fill in its arguments as JSON, a 1B model will reliably answer with the
-simplest thing that satisfies the format — often just "done". Asked in plain English to
-write a file, the same model writes it correctly.
-
-So for a file **your request named**, HirayaCoder stops asking the model what to do. The
-decision is already made: the action is a file write, the path came from your own
-request, and the only question left is what goes in the file.
-
-It is worth being precise about what that does and does not allow, because it is the one
-place the model is not choosing:
-
-- It can only ever write a file **you named** in your request.
-- It never touches `package.json`, lockfiles, `.env`, or anything inside `node_modules`,
-  `dist` or `.git`.
-- It never replaces a file that already exists unless you put a comment next to it.
-- Every write still shows you the diff and waits for approval, exactly as before, and
-  still goes in the audit log.
-
-When it writes a file, it first reads what the files around it actually export, so the
-imports line up rather than being guessed at.
-
-### The three modes
-
-There is a row of buttons at the top of the chat. You can ignore them at first —
-**Agent** is the default and is what you want most of the time.
+There is a row of buttons at the top of the chat. Agent is the default and is what you
+want most of the time.
 
 | Mode | Use it when |
 |---|---|
-| **Agent** | You want it to actually write or change files. The normal choice. |
-| **Plan** | You want to see what it *would* do first, without it touching anything. |
-| **Ask** | You just have a question. It will not change any files. |
+| **Agent** | You want it to write or change files. The normal choice |
+| **Plan** | You want to see what it *would* do first, without it touching anything |
+| **Ask** | You just have a question |
 
-You do not have to switch to Ask to ask a question — if you say "hello" or "what does
-this file do", Agent mode notices and just answers you.
-
-### Nothing changes without your say-so
-
-By default, every time it wants to write to a file, you get a prompt with a **Review
-diff** button showing exactly what changes. Nothing is saved until you approve.
-
-Once you trust it, you can turn on **Auto Edit** to skip those prompts. Deleting a file
-always asks, even then.
-
-### Tips that make a real difference
-
-- **Ask for one thing at a time — or structure the big ask.** "Add a delete button" works
-  far better than "add delete, edit, sorting, and dark mode" thrown in as one sentence.
-  If you do want the big one, give it headings, numbered steps or a folder tree, and it
-  will work through them one at a time — see
-  [Long requests, one step at a time](#long-requests-one-step-at-a-time).
-- **Name the file** if you know it. "Change the title in index.html" beats "change the
-  title".
-- **It remembers this conversation**, so you can say "make it bigger" and it knows what
-  "it" is.
-- **Be specific about what is wrong.** "The button doesn't do anything when I click it"
-  is much more useful than "it's broken".
-
----
-
-## When something goes wrong
-
-Small AI models make mistakes. HirayaCoder has built-in checks that catch the common
-ones, so a few of the messages below are the system **working**, not breaking.
-
-### "It refused to write the file"
-
-**This is usually a good thing.** HirayaCoder checks the AI's work before saving and
-blocks writes that would damage your files — a half-written file, code with a missing
-bracket, or a rewrite that quietly deletes something other files depend on.
-
-Just ask again. It usually gets it right the second time.
-
-### "It said it was done but nothing changed"
-
-A known habit of small models: reporting success without doing the work. HirayaCoder
-checks and will tell you plainly when this happens. Ask again, and include the exact
-file name this time.
-
-### "It's taking forever"
-
-Normal on a laptop with no graphics card — a few minutes per task is expected. If it is
-much worse than that, the model is probably too big for your RAM. Try `llama3.2:1b`.
-
-### "The code it wrote doesn't work"
-
-Try, in order:
-
-1. Paste the error message into the chat. It is quite good at fixing errors it can see.
-2. Ask for a smaller piece of the problem.
-3. Switch to a bigger model if your RAM allows it.
-
-### "It can't run my program"
-
-HirayaCoder can only run programs already installed on your computer. If you ask it to
-run a Python script, you need Python installed. It will still *write* the code — it just
-cannot run it for you.
-
-It also only runs a fixed list of well-known commands. **This is the whole list** —
-anything else is refused on purpose, so a mistake by the AI cannot damage your system:
-
-| For | It may run |
-|---|---|
-| JavaScript / Node | `node`, `npm`, `npx`, `yarn`, `pnpm` |
-| Python | `python`, `python3`, `pip`, `pip3`, `pytest` |
-| Java | `java`, `javac`, `mvn`, `gradle` |
-| Go, Rust, .NET | `go`, `cargo`, `dotnet` |
-| Testing and formatting | `jest`, `mocha`, `vitest`, `ava`, `tsc`, `eslint`, `prettier` |
-| Other | `git`, `make`, `ollama` |
-
-Two things worth knowing before they surprise you:
-
-- **Everyday shell commands are not on the list** — `rm`, `ls`, `mkdir`, `curl` are all
-  refused. Creating files and folders happens through the safe file tools instead, so
-  `mkdir` is never needed: writing a file creates the folders above it.
-- **No shell is involved.** Commands run directly, so `&&`, `|`, and `>` are refused
-  rather than interpreted. One command at a time.
-
-You can add to the list in HirayaCoder's settings. The AI cannot add to it itself.
+You do not have to switch to Ask to ask something. If you say "hello" or "what does this
+file do", Agent mode notices and just answers.
 
 ---
 
 ## Your privacy
 
-This is the part worth being blunt about, because it is the main reason to choose this
-over the alternatives.
+This is the main reason to choose this over the alternatives, so it is worth being blunt.
 
 - **Nothing you type or open is sent anywhere.** The extension only ever talks to
   `127.0.0.1`, which is your own computer. A non-local address is rejected in the code
   itself, before any connection is opened.
 - **No account, no sign-up, no telemetry.** Nobody is counting your keystrokes.
-- **It works with your Wi-Fi off.** Try it — that is the proof.
-- **The AI cannot leave your folder.** Every file operation is confined to the folder you
-  opened.
+- **It works with your Wi-Fi off.** Try it. That is the proof.
+- **The AI cannot leave your folder.** Every file operation is confined to the folder
+  you opened.
 - **No third-party code ships in the extension.** Zero production dependencies.
 
-Full detail: [SECURITY.md](https://github.com/jaymar921/HirayaCoder/blob/main/doc/SECURITY.md).
+Full detail in
+[SECURITY.md](https://github.com/jaymar921/HirayaCoder/blob/main/doc/SECURITY.md).
 
 ---
 
-## Choosing a model
+## Documentation
 
-Model names are confusing. Here is a plain-language ranking, based on
-[real measurements](https://github.com/jaymar921/HirayaCoder/blob/main/doc/MODELS.md)
-rather than on the descriptions.
+| | |
+|---|---|
+| [Getting started](https://github.com/jaymar921/HirayaCoder/blob/main/doc/GETTING-STARTED.md) | The complete first-run walkthrough |
+| [Using it day to day](https://github.com/jaymar921/HirayaCoder/blob/main/doc/USING-IT.md) | Modes, watching a run, and the habits that make small models work |
+| [Reading images](https://github.com/jaymar921/HirayaCoder/blob/main/doc/IMAGE-RECOGNITION.md) | Attaching screenshots and photos |
+| [Limitations](https://github.com/jaymar921/HirayaCoder/blob/main/doc/LIMITATIONS.md) | What it cannot do, by design and otherwise |
+| [Troubleshooting](https://github.com/jaymar921/HirayaCoder/blob/main/doc/TROUBLESHOOTING.md) | When something goes wrong |
+| [Choosing a model](https://github.com/jaymar921/HirayaCoder/blob/main/doc/CHOOSING-A-MODEL.md) | Which one to download, in plain language |
+| [Tutorial](https://github.com/jaymar921/HirayaCoder/blob/main/doc/TUTORIAL.md) | A longer, friendlier walkthrough |
 
-| Model | Download | Needs | Verdict |
-|---|---|---|---|
-| `gemma4:e2b` | 7.2 GB | 16 GB RAM | **Best starting point.** Fastest to a correct answer |
-| `qwen3.5:4b` | 3.4 GB | 8–16 GB RAM | Good, smaller download |
-| `llama3.2:1b` | 1.3 GB | 8 GB RAM | For low-spec machines. Simple single-file jobs only |
-| `gemma4:e4b` | 9.6 GB | 32 GB RAM or a Mac | The strongest, if you have room |
-| `qwen3.5:0.8b` | 1.0 GB | — | Last resort. Writes files correctly; does not finish an app |
-
-### What a very small model will and will not do
-
-Worth setting expectations, because the honest answer is more useful than the
-encouraging one. Measured on a 98-line brief for a complete React app:
-
-- **A 0.8B model now scaffolds the project, writes every file the request named, and
-  installs the dependencies.** In the previous release the same model spent its whole
-  session listing the directory and wrote nothing.
-- **It does not get the app working.** The build still fails, and no model at this size
-  finished the app in any of our runs.
-
-So a very small model is genuinely useful for *"write me this file"* and for the parts of
-a big request that are mechanical. Handing it a whole application and walking away is not
-something we can recommend yet, and the numbers behind that are in
-[the evaluation notes](https://github.com/jaymar921/HirayaCoder/blob/main/doc/SESSION-ANALYSIS-0.9.0.md).
-
-Switch models any time from the dropdown at the top of the chat — no reinstall needed.
-
-**One thing that surprises people:** a graphics card makes it *faster*, not *smarter*.
-A bigger model gives better answers; a better GPU gives the same answer sooner.
+**For developers:**
+[Developing](https://github.com/jaymar921/HirayaCoder/blob/main/doc/DEVELOPING.md) ·
+[Architecture](https://github.com/jaymar921/HirayaCoder/blob/main/doc/ARCHITECTURE.md) ·
+[Features and settings](https://github.com/jaymar921/HirayaCoder/blob/main/doc/FEATURES.md) ·
+[Measurements](https://github.com/jaymar921/HirayaCoder/blob/main/doc/MODELS.md) ·
+[Security model](https://github.com/jaymar921/HirayaCoder/blob/main/doc/SECURITY.md) ·
+[Benchmarks](https://github.com/jaymar921/HirayaCoder/blob/main/benchmarks/README.md)
 
 ---
 
-## For developers
-
-Everything above is the beginner's path. The rest is the engineering, and it is
-documented properly elsewhere.
-
-**Features and settings** — [FEATURES.md](https://github.com/jaymar921/HirayaCoder/blob/main/doc/FEATURES.md)
-· **How it is built** — [ARCHITECTURE.md](https://github.com/jaymar921/HirayaCoder/blob/main/doc/ARCHITECTURE.md)
-· **Measurements** — [MODELS.md](https://github.com/jaymar921/HirayaCoder/blob/main/doc/MODELS.md)
-· **Security model** — [SECURITY.md](https://github.com/jaymar921/HirayaCoder/blob/main/doc/SECURITY.md)
-
-### What is interesting about it technically
-
-- **Agentic on every model, down to 1B.** It plans, reads, edits, deletes, and runs
-  scripts across multiple files on its own. Two loop strategies — native tool-calling for
-  capable models, a constrained one-action-per-turn JSON loop for small ones — behind one
-  driver, so the mechanism changes with the model but the reach never does.
-- **Three layers of local memory.** A plain-text session log, the conversation itself,
-  and typed facts about the project that persist across sessions, so the second session
-  does not rediscover what the first one paid for.
-- **"Done" has to be true.** A run that reports success having written nothing, or having
-  left `// Implement this here` inside a function it just wrote, gets sent back once with
-  the specific problem named. Completion is judged from what changed on disk, never from
-  what the model says about itself.
-- **It learns from what actually happened.** Outcomes are recorded locally — counts and
-  guard codes, never your code — and a model that trips the same guard three times gets
-  the matching correction added to its prompt. It adapts what the model is *told*, never
-  what it is *allowed to do*.
-- **Every guard names a real failure.** The write guards exist because four different
-  models produced six damaged files in one seventeen-run sweep: deleted exports, a
-  CommonJS module silently rewritten as ESM, an implementation replaced by an empty
-  object. Every one of them parsed cleanly.
-
-### Benchmarks
-
-Measured on three named machines, with the delete declined at the prompt on purpose — a
-model that claims it deleted the file has failed the task whatever else it got right.
-There are four harnesses: editing an existing project, building one from an empty folder,
-wiring an existing project together, and — new in 0.9.0 — building a whole application
-from one brief and then **driving the finished thing**, either by clicking every control
-in a headless browser or by calling its service layer directly.
-
-That last harness runs four briefs, so a model's trouble with the work can be told apart
-from its trouble with the language it was asked to work in:
-
-| Brief | Stack | Graded by |
-|---|---|---|
-| TODO app | React + Vite + Tailwind | 12 features, clicked in a browser |
-| Contact manager | React + Vite + Vitest | 12 features, clicked in a browser |
-| Point of sale | Java + Swing + Maven | 8 features, through the service layer |
-| Point of sale | Python + Tkinter, stdlib only | 8 features, through the service layer |
-
-It exists because of a result worth stating plainly: a model passed the scaffold,
-structure, install and build checks, and shipped an app whose only button incremented
-Vite's demo counter. Four green gates and nothing that worked. The full
-tables, including what each model broke and how, are in
-[MODELS.md](https://github.com/jaymar921/HirayaCoder/blob/main/doc/MODELS.md) and
-[benchmarks/](https://github.com/jaymar921/HirayaCoder/blob/main/benchmarks/README.md).
-
-The finding worth repeating here: **the mocked test suite passes clean while a real model
-destroys a real file.** Nearly every serious bug in this project was found by running an
-actual model, never by the unit tests.
-
-### Building from source
+## Building from source
 
 Needs Node.js 18 or newer.
 
@@ -462,53 +232,28 @@ npm run test:all     # lint + unit + integration, against a real VS Code
 npm run package      # builds builds/v<version>/hirayacoder-<version>.vsix
 ```
 
-### Contributing
-
-Contributions are welcome, with **one hard rule: pull requests only — never push
-directly to `main`.** CI runs the suite on Ubuntu, macOS, and Windows, and that matrix is
-the only evidence this project has that anything works on the two platforms the
-maintainer does not own.
-
-Read [CONTRIBUTING.md](https://github.com/jaymar921/HirayaCoder/blob/main/CONTRIBUTING.md)
-first. The short version:
-
-- Branch and commit as `feat/…`, `fix/…`, `docs/…`.
-- `npm run test:all` must pass.
-- **If you touched the agent loop, prompts, translator, or tools, run a real model**
-  (`node tools/bench-agent.js gemma4:e2b agent auto full`) and put the outcome in the PR.
-- Don't weaken a guard or a permission prompt to make something pass.
-- Comments explain *why*, not *what*.
-
-Security issues: please contact [jaymar921](https://github.com/jaymar921) directly rather
-than opening a public issue.
-
-### Repository layout
-
-```
-HirayaCoder/
-├── app/        # Extension source — agent loops, tools, security layer, webview
-├── test/       # Unit + integration tests
-├── doc/        # Architecture, features, models, tutorial, security, publishing
-├── setup/      # AI build prompt + versioned model/translator system prompts
-├── security/   # Threat model, SAST reports
-├── scripts/    # Packaging
-├── tools/      # Live-model benchmark harnesses
-└── builds/     # Packaged .vsix output, per version (gitignored)
-```
+Contributions are welcome, with one hard rule: **pull requests only, never push directly
+to `main`.** Read
+[CONTRIBUTING.md](https://github.com/jaymar921/HirayaCoder/blob/main/CONTRIBUTING.md)
+first, and see
+[DEVELOPING.md](https://github.com/jaymar921/HirayaCoder/blob/main/doc/DEVELOPING.md)
+for what is worth knowing before you change the agent loop.
 
 ---
 
 ## Built from an AI prompt
 
 This project was scaffolded from a single structured specification designed for AI
-coding agents. See [PROMPT.md](https://github.com/jaymar921/HirayaCoder/blob/main/setup/PROMPT.md)
-for the full build order, feature list, and security requirements.
+coding agents. See
+[PROMPT.md](https://github.com/jaymar921/HirayaCoder/blob/main/setup/PROMPT.md) for the
+full build order, feature list, and security requirements.
 
 ## Author
 
-Built by [**jaymar921**](https://github.com/jaymar921) — practical, resourceful, and made
+Built by [**jaymar921**](https://github.com/jaymar921). Practical, resourceful, and made
 for real hardware rather than top-spec dev machines.
 
 ## License
 
-Licensed under the terms in [LICENSE](https://github.com/jaymar921/HirayaCoder/blob/main/LICENSE).
+Licensed under the terms in
+[LICENSE](https://github.com/jaymar921/HirayaCoder/blob/main/LICENSE).

@@ -60,6 +60,125 @@ export function appendImages(body, images) {
 }
 
 /**
+ * Seconds, rounded the way a person reads a stopwatch.
+ *
+ * Sub-second turns are the cached ones and would otherwise read "0s", which looks like
+ * a bug rather than like a fast answer.
+ *
+ * Exported for the unit suite. `appendRunMeta` needs a document and is covered by the
+ * integration tests; this part is arithmetic and is worth pinning cheaply.
+ *
+ * @param {number} ms
+ * @returns {string}
+ */
+export function seconds(ms) {
+  if (ms < 950) return `${(ms / 1000).toFixed(1)}s`;
+  if (ms < 60000) return `${Math.round(ms / 1000)}s`;
+  const mins = Math.floor(ms / 60000);
+  return `${mins}m ${Math.round((ms % 60000) / 1000)}s`;
+}
+
+/**
+ * Which model produced this reply, and how long it took.
+ *
+ * ## Why this is on every reply rather than in the status line
+ *
+ * The status line is per-tab and is overwritten by the next turn, so it can say what is
+ * happening but never what happened. On this hardware a model swap is the main lever
+ * anyone has — a task is one to five minutes and the only way to make it faster is to
+ * run something smaller — and choosing between them means comparing replies that are
+ * minutes and several messages apart. Attached to the reply, the comparison is just
+ * scrolling.
+ *
+ * A second model is named only when a *different* one read an attached image. That is
+ * not decoration: it is where the extra twenty seconds went, and without it the headline
+ * number looks like the coding model got slower.
+ *
+ * @param {HTMLElement} body
+ * @param {{model?: string, ms?: number | null, vision?: {model: string, ms: number} | null}} meta
+ */
+export function appendRunMeta(body, meta) {
+  if (!meta || (!meta.model && typeof meta.ms !== 'number')) return;
+
+  const line = document.createElement('div');
+  line.className = 'run-meta';
+
+  const name = document.createElement('span');
+  name.className = 'run-meta-model';
+  // Model names come from Ollama. Data, not markup.
+  name.textContent = meta.model || 'unknown model';
+  line.appendChild(name);
+
+  if (typeof meta.ms === 'number') {
+    const dot = document.createElement('span');
+    dot.className = 'run-meta-sep';
+    dot.textContent = '•';
+    line.appendChild(dot);
+
+    const took = document.createElement('span');
+    took.textContent = seconds(meta.ms);
+    line.appendChild(took);
+  }
+
+  if (meta.vision && meta.vision.model) {
+    const via = document.createElement('span');
+    via.className = 'run-meta-via';
+    via.textContent = `+ ${meta.vision.model} read the image, ${seconds(meta.vision.ms || 0)}`;
+    line.appendChild(via);
+  }
+
+  body.appendChild(line);
+}
+
+/**
+ * What the vision model read out of the attached images.
+ *
+ * ## Why this is on screen at all, rather than only in the log
+ *
+ * Everything the reply says about a picture is downstream of this paragraph. When the
+ * answer is wrong, there are two very different causes — the describer misread the
+ * image, or it read it correctly and the answering model went wrong afterwards — and
+ * they need opposite fixes. Without the description on screen the two are
+ * indistinguishable, and the user's only move is to try again and hope.
+ *
+ * Collapsed by default and styled like the agent trace, because it is the same kind of
+ * thing: evidence for the answer, not the answer.
+ *
+ * @param {HTMLElement} body
+ * @param {string} model
+ * @param {Array<{name: string, description: string}>} descriptions
+ */
+export function appendVisionNote(body, model, descriptions) {
+  if (!descriptions || descriptions.length === 0) return;
+
+  const box = document.createElement('details');
+  box.className = 'trace vision-note';
+
+  const summary = document.createElement('summary');
+  summary.textContent =
+    descriptions.length === 1
+      ? `What ${model} saw in ${descriptions[0].name}`
+      : `What ${model} saw in ${descriptions.length} images`;
+  box.appendChild(summary);
+
+  for (const entry of descriptions) {
+    if (descriptions.length > 1) {
+      const name = document.createElement('div');
+      name.className = 'vision-name';
+      name.textContent = entry.name;
+      box.appendChild(name);
+    }
+    const text = document.createElement('p');
+    text.className = 'vision-text';
+    // Model output. `textContent`, never markup — see the note at the top of this file.
+    text.textContent = entry.description;
+    box.appendChild(text);
+  }
+
+  body.appendChild(box);
+}
+
+/**
  * What each tool call is called, in the language of the thing it does.
  *
  * The trace used to print the tool name verbatim — `read_file`, `run_script`. That is

@@ -1,0 +1,617 @@
+{
+  "schemaVersion": 1,
+  "benchmark": "vision",
+  "model": "minicpm-v4.6:latest",
+  "machine": "B",
+  "params": "752.16M",
+  "capabilities": [
+    "completion",
+    "vision"
+  ],
+  "purposes": [
+    "answer",
+    "task"
+  ],
+  "repeat": 2,
+  "coldStart": true,
+  "startedAt": "2026-08-20T17:24:28.867Z",
+  "durationMs": 264238,
+  "notes": "Machine B, CPU-only, model unloaded between samples for honest timings.",
+  "summary": {
+    "graded": 24,
+    "passed": 24,
+    "failed": 0,
+    "confused": 0,
+    "detailScore": 0.875,
+    "detailGot": 42,
+    "detailMax": 48,
+    "textImages": 8,
+    "textRead": 4,
+    "errored": 0,
+    "skipped": 0,
+    "meanMs": 10809,
+    "coldMeanMs": 11039,
+    "coldSamples": 12,
+    "totalMs": 259414
+  },
+  "results": [
+    {
+      "id": "cat",
+      "file": "cat.jpg",
+      "purpose": "answer",
+      "attempt": 1,
+      "durationMs": 10644,
+      "ok": true,
+      "description": "A small tabby kitten with blue eyes lies on a green surface. It is arranged looking directly at the camera. The setting is colorful and soft, suggesting a cozy indoor or outdoor area. There is no visible text or numbers.",
+      "expected": "A tabby kitten lying down, head on a green surface, facing the camera.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "kitten"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "tabby",
+        "lies"
+      ],
+      "readText": null,
+      "textMatched": [],
+      "confused": []
+    },
+    {
+      "id": "cat",
+      "file": "cat.jpg",
+      "purpose": "answer",
+      "attempt": 2,
+      "durationMs": 10937,
+      "ok": true,
+      "description": "A small tabby kitten with blue eyes is lying on a green surface. It is arranged as if resting. The setting is colorful and soft, with a blurred background. There is no visible text or numbers.",
+      "expected": "A tabby kitten lying down, head on a green surface, facing the camera.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "kitten"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "tabby",
+        "lying"
+      ],
+      "readText": null,
+      "textMatched": [],
+      "confused": []
+    },
+    {
+      "id": "dog",
+      "file": "dog.jpg",
+      "purpose": "answer",
+      "attempt": 1,
+      "durationMs": 13393,
+      "ok": true,
+      "description": "Two fluffy puppies sit in a grassy field. They appear happy, with tongues out. The setting is colorful, with orange flowers and green grass. There is no visible text or numbers. The scene is bright and cheerful.",
+      "expected": "Two golden retriever puppies sitting in grass strewn with orange petals.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "puppies"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "two",
+        "grass"
+      ],
+      "readText": null,
+      "textMatched": [],
+      "confused": []
+    },
+    {
+      "id": "dog",
+      "file": "dog.jpg",
+      "purpose": "answer",
+      "attempt": 2,
+      "durationMs": 13444,
+      "ok": true,
+      "description": "Two fluffy puppies sit in a grassy field. They appear happy, with tongues out. The setting is colorful, with orange and yellow flowers. There is no visible text or numbers. The scene is bright and natural.",
+      "expected": "Two golden retriever puppies sitting in grass strewn with orange petals.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "puppies"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "two",
+        "field"
+      ],
+      "readText": null,
+      "textMatched": [],
+      "confused": []
+    },
+    {
+      "id": "dog-1",
+      "file": "dog-1.jpg",
+      "purpose": "answer",
+      "attempt": 1,
+      "durationMs": 10633,
+      "ok": true,
+      "description": "A happy dog lies in grass. It is arranged as if posing for a photo. The setting is colorful, with green and yellow hues. There is no visible text or numbers. The scene is bright and cheerful.",
+      "expected": "A single corgi lying in sunlit grass, wearing a green collar.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "dog"
+      ],
+      "detail": 1,
+      "detailTotal": 2,
+      "detailMatched": [
+        "grass"
+      ],
+      "readText": null,
+      "textMatched": [],
+      "confused": []
+    },
+    {
+      "id": "dog-1",
+      "file": "dog-1.jpg",
+      "purpose": "answer",
+      "attempt": 2,
+      "durationMs": 10691,
+      "ok": true,
+      "description": "A happy dog lies in grass. It is arranged as if posing for a photo. The setting is colorful, with green and yellow tones. There is no visible text or numbers. The scene is bright and natural.",
+      "expected": "A single corgi lying in sunlit grass, wearing a green collar.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "dog"
+      ],
+      "detail": 1,
+      "detailTotal": 2,
+      "detailMatched": [
+        "grass"
+      ],
+      "readText": null,
+      "textMatched": [],
+      "confused": []
+    },
+    {
+      "id": "car",
+      "file": "car.jpg",
+      "purpose": "answer",
+      "attempt": 1,
+      "durationMs": 12905,
+      "ok": true,
+      "description": "A yellow car is moving on a road. The background shows trees and a clear sky. The setting is outdoors with natural colors. There is no visible text or numbers.",
+      "expected": "A yellow BMW M4 coupe on a road, panning shot, bare trees behind.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "car"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "yellow",
+        "road"
+      ],
+      "readText": false,
+      "textMatched": [],
+      "confused": []
+    },
+    {
+      "id": "car",
+      "file": "car.jpg",
+      "purpose": "answer",
+      "attempt": 2,
+      "durationMs": 12699,
+      "ok": true,
+      "description": "A yellow car is moving on a road. The background has trees and a clear sky. The setting is outdoors with natural colors. There is no visible text or numbers.",
+      "expected": "A yellow BMW M4 coupe on a road, panning shot, bare trees behind.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "car"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "yellow",
+        "road"
+      ],
+      "readText": false,
+      "textMatched": [],
+      "confused": []
+    },
+    {
+      "id": "plane",
+      "file": "plane.jpg",
+      "purpose": "answer",
+      "attempt": 1,
+      "durationMs": 7033,
+      "ok": true,
+      "description": "A cebu pacific airplane is shown in flight. It is colorful with yellow, blue, and teal designs. The setting is a clear sky. There is no visible text or numbers. The image is credited to Jetphotos.",
+      "expected": "A Cebu Pacific Airbus A320 on approach, gear down, against grey sky.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "airplane"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "yellow",
+        "sky"
+      ],
+      "readText": true,
+      "textMatched": [
+        "cebu"
+      ],
+      "confused": []
+    },
+    {
+      "id": "plane",
+      "file": "plane.jpg",
+      "purpose": "answer",
+      "attempt": 2,
+      "durationMs": 7084,
+      "ok": true,
+      "description": "A cebu pacific airplane is shown in flight. It is colorful with yellow, blue, and teal designs. The setting is a clear sky. There is no visible text or numbers. The image is credited to Jetphotos and Berian Spotters.",
+      "expected": "A Cebu Pacific Airbus A320 on approach, gear down, against grey sky.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "airplane"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "yellow",
+        "sky"
+      ],
+      "readText": true,
+      "textMatched": [
+        "cebu"
+      ],
+      "confused": []
+    },
+    {
+      "id": "tree",
+      "file": "tree.jpg",
+      "purpose": "answer",
+      "attempt": 1,
+      "durationMs": 10697,
+      "ok": true,
+      "description": "A large tree stands in a grassy field. It is surrounded by soft colors. The setting is bright and natural. There is no visible text or numbers. The scene is vibrant with green and purple hues.",
+      "expected": "One large green tree alone in a grassy field at sunset, blue sky above.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "tree"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "field",
+        "green"
+      ],
+      "readText": null,
+      "textMatched": [],
+      "confused": []
+    },
+    {
+      "id": "tree",
+      "file": "tree.jpg",
+      "purpose": "answer",
+      "attempt": 2,
+      "durationMs": 10874,
+      "ok": true,
+      "description": "A large tree stands in a green field. It is surrounded by grass and small purple flowers. The setting is colorful with blue sky and golden light. There is no visible text or numbers.",
+      "expected": "One large green tree alone in a grassy field at sunset, blue sky above.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "tree"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "field",
+        "sky"
+      ],
+      "readText": null,
+      "textMatched": [],
+      "confused": []
+    },
+    {
+      "id": "cat",
+      "file": "cat.jpg",
+      "purpose": "task",
+      "attempt": 1,
+      "durationMs": 10995,
+      "ok": true,
+      "description": "A close-up photo of a tabby kitten with blue eyes on green fabric. Text is unreadable. Layout is natural, with focus on the kitten's face. Colors are soft and natural. No code or error messages present.",
+      "expected": "A tabby kitten lying down, head on a green surface, facing the camera.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "kitten"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "tabby",
+        "green"
+      ],
+      "readText": null,
+      "textMatched": [],
+      "confused": []
+    },
+    {
+      "id": "cat",
+      "file": "cat.jpg",
+      "purpose": "task",
+      "attempt": 2,
+      "durationMs": 10865,
+      "ok": true,
+      "description": "A close-up photo of a tabby kitten with blue eyes on green fabric. Text is unreadable. Layout is natural, with focus on the kitten's face. Colors are soft, with clear contrast between fur and background.",
+      "expected": "A tabby kitten lying down, head on a green surface, facing the camera.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "kitten"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "tabby",
+        "green"
+      ],
+      "readText": null,
+      "textMatched": [],
+      "confused": []
+    },
+    {
+      "id": "dog",
+      "file": "dog.jpg",
+      "purpose": "task",
+      "attempt": 1,
+      "durationMs": 13751,
+      "ok": true,
+      "description": "A screenshot of two playful puppies in a grassy field with orange flowers. Text is unreadable. Layout is natural, with puppies centered, flowers scattered. Colors are soft, with green and orange tones. No code or labels present.",
+      "expected": "Two golden retriever puppies sitting in grass strewn with orange petals.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "puppies"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "two",
+        "field"
+      ],
+      "readText": null,
+      "textMatched": [],
+      "confused": []
+    },
+    {
+      "id": "dog",
+      "file": "dog.jpg",
+      "purpose": "task",
+      "attempt": 2,
+      "durationMs": 13812,
+      "ok": true,
+      "description": "A photo of two playful puppies in a grassy field with orange flowers. Text is unreadable. Layout is natural, with puppies and flowers. Colors are soft, with green grass and bright orange petals. Spacing is deliberate, emphasizing the subjects.",
+      "expected": "Two golden retriever puppies sitting in grass strewn with orange petals.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "puppies"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "two",
+        "grass"
+      ],
+      "readText": null,
+      "textMatched": [],
+      "confused": []
+    },
+    {
+      "id": "dog-1",
+      "file": "dog-1.jpg",
+      "purpose": "task",
+      "attempt": 1,
+      "durationMs": 10928,
+      "ok": true,
+      "description": "A screenshot of a cheerful corgi in grass. The image is natural lighting. Text is unreadable. Layout is focused on the dog. Colors are warm and soft. Spacing is deliberate. No code or error present.",
+      "expected": "A single corgi lying in sunlit grass, wearing a green collar.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "dog"
+      ],
+      "detail": 1,
+      "detailTotal": 2,
+      "detailMatched": [
+        "grass"
+      ],
+      "readText": null,
+      "textMatched": [],
+      "confused": []
+    },
+    {
+      "id": "dog-1",
+      "file": "dog-1.jpg",
+      "purpose": "task",
+      "attempt": 2,
+      "durationMs": 914,
+      "ok": true,
+      "description": "A screenshot of a cheerful corgi in grass. The image is natural lighting. Text is unreadable. Layout is focused on the dog. Colors are warm and soft. Spacing is deliberate. No code or labels visible.",
+      "expected": "A single corgi lying in sunlit grass, wearing a green collar.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "dog"
+      ],
+      "detail": 1,
+      "detailTotal": 2,
+      "detailMatched": [
+        "grass"
+      ],
+      "readText": null,
+      "textMatched": [],
+      "confused": []
+    },
+    {
+      "id": "car",
+      "file": "car.jpg",
+      "purpose": "task",
+      "attempt": 1,
+      "durationMs": 10406,
+      "ok": true,
+      "description": "Screenshot of a yellow car in motion. Visible text and numbers are unreadable. Layout includes car, road, trees. Colors are distinct, sizes vary for emphasis. Spacing is deliberate.",
+      "expected": "A yellow BMW M4 coupe on a road, panning shot, bare trees behind.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "car"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "yellow",
+        "road"
+      ],
+      "readText": false,
+      "textMatched": [],
+      "confused": []
+    },
+    {
+      "id": "car",
+      "file": "car.jpg",
+      "purpose": "task",
+      "attempt": 2,
+      "durationMs": 14314,
+      "ok": true,
+      "description": "A screenshot of a yellow sports car in motion. The image is dynamic, with blurred background trees. Text and numbers are unreadable. Layout includes car, road, and forest. Colours are vibrant, sizes varied for emphasis. Spacing is deliberate. No code or error messages present.",
+      "expected": "A yellow BMW M4 coupe on a road, panning shot, bare trees behind.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "car"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "yellow",
+        "road"
+      ],
+      "readText": false,
+      "textMatched": [],
+      "confused": []
+    },
+    {
+      "id": "plane",
+      "file": "plane.jpg",
+      "purpose": "task",
+      "attempt": 1,
+      "durationMs": 8668,
+      "ok": true,
+      "description": "A screenshot of a cebu pacific airplane. Text \"cebu pacific\" is visible. Numbers like \"RP-C407\" are present. Layout includes panels and buttons. Colors are deliberate, with yellow, blue, and white. Spacing is clear and structured.",
+      "expected": "A Cebu Pacific Airbus A320 on approach, gear down, against grey sky.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "airplane"
+      ],
+      "detail": 1,
+      "detailTotal": 2,
+      "detailMatched": [
+        "yellow"
+      ],
+      "readText": true,
+      "textMatched": [
+        "cebu"
+      ],
+      "confused": []
+    },
+    {
+      "id": "plane",
+      "file": "plane.jpg",
+      "purpose": "task",
+      "attempt": 2,
+      "durationMs": 8936,
+      "ok": true,
+      "description": "Screenshot of an aircraft. Diagram showing layout. Text \"cebu pacific\" visible. Number \"RP-C407\" on tail. Colors yellow, blue, white, with wave patterns. Button not present. Field not visible. Panel not shown. Spacing deliberate. No code or error.",
+      "expected": "A Cebu Pacific Airbus A320 on approach, gear down, against grey sky.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "aircraft"
+      ],
+      "detail": 1,
+      "detailTotal": 2,
+      "detailMatched": [
+        "yellow"
+      ],
+      "readText": true,
+      "textMatched": [
+        "cebu"
+      ],
+      "confused": []
+    },
+    {
+      "id": "tree",
+      "file": "tree.jpg",
+      "purpose": "task",
+      "attempt": 1,
+      "durationMs": 12416,
+      "ok": true,
+      "description": "A landscape screenshot of a tree in a field. Text is unreadable. Layout includes tree, grass, sky, and field. Colors are natural, with green, blue, and yellow tones. Spacing is deliberate, emphasizing natural elements.",
+      "expected": "One large green tree alone in a grassy field at sunset, blue sky above.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "tree"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "field",
+        "sky"
+      ],
+      "readText": null,
+      "textMatched": [],
+      "confused": []
+    },
+    {
+      "id": "tree",
+      "file": "tree.jpg",
+      "purpose": "task",
+      "attempt": 2,
+      "durationMs": 12375,
+      "ok": true,
+      "description": "A landscape screenshot of a tree in a field. Text is unreadable. Layout includes tree, grass, sky, and horizon. Colors are natural, with green, blue, and yellow tones. Spacing is deliberate, emphasizing depth and contrast.",
+      "expected": "One large green tree alone in a grassy field at sunset, blue sky above.",
+      "passed": true,
+      "subject": true,
+      "subjectMatched": [
+        "tree"
+      ],
+      "detail": 2,
+      "detailTotal": 2,
+      "detailMatched": [
+        "field",
+        "sky"
+      ],
+      "readText": null,
+      "textMatched": [],
+      "confused": []
+    }
+  ]
+}

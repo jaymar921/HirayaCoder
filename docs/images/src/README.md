@@ -16,10 +16,13 @@ one-line change instead of a redesign.
 | `ad-2-agentic.html` | `../ad-2-agentic.png` | Social ad — agentic down to 1B |
 | `ad-3-approval.html` | `../ad-3-approval.png` | Social ad — you approve every write |
 | `ad-4-launch.html` | `../ad-4-launch.png` | Social ad — the 1.0 launch card |
+| `ad-5-vision.html` | `../ad-5-vision.png` | Social ad — a text-only model can use your screenshot |
+| `ad-6-what-it-read.html` | `../ad-6-what-it-read.png` | Social ad — you see what the vision model read |
 
-The six README images are **1280×720**; the four `ad-*` files are **1080×1080**, because
+The six README images are **1280×720**; the six `ad-*` files are **1080×1080**, because
 a social post gets cropped to a square on most of the places it lands. Their captions
-live in [`../ADS-1.0.0.md`](../ADS-1.0.0.md).
+live in [`../ADS-1.0.0.md`](../ADS-1.0.0.md) (ads 1–4) and
+[`../ADS-1.1.0.md`](../ADS-1.1.0.md) (ads 5–6).
 
 All of them are self-contained: no fonts, scripts, or images are fetched, and the app icon is
 inlined as SVG. Everything renders from system fonts, so they look the same on any
@@ -51,6 +54,25 @@ writes nothing, so check the file timestamps rather than the exit code:
   `file:///F:/important%20stuff/.../src/hero-offline-agent.html`.
 - **`--screenshot` will not write to a path containing a space.** Render to a scratch
   folder and copy the PNG into `docs/images/` afterwards.
+
+## `ad-6-what-it-read.html` carries measurements, and they expire
+
+It is the only source here with numbers on its face, and they come from
+`benchmarks/results/B/vision__*.json` by way of `tools/bench-vision.js`. **Re-run that
+sweep before re-rendering this file for a later release.** An ad quoting a score the
+harness no longer produces is worse than one quoting none, and these are small-sample
+numbers on models that get replaced every few months.
+
+Renumbering is not always enough. The ad's argument is that you cannot tell how well
+your model reads text without looking at what it read, and that argument depends on the
+two models disagreeing. A future sweep where both read everything needs the ad rewritten,
+not re-rendered. The derivation of each figure is in
+[`../ADS-1.1.0.md`](../ADS-1.1.0.md).
+
+The mock description inside the panel — the checkout form — is a mock, like the hero's
+chat transcript, and is held to the same rule: it must never show something the
+extension does not do. The disclosure triangle and the *What … saw in …* label are the
+real ones.
 
 ## When these need updating
 

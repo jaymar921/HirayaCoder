@@ -72,3 +72,9 @@ docs/assets/**
 # absolute raw.githubusercontent URL, exactly as it does the icon, so the Marketplace
 # listing renders them without a megabyte of PNG riding along in every install.
 docs/images/**
+
+# Benchmark fixtures. Six photographs, 3.6 MB, read only by `tools/bench-vision.js` on a
+# developer's machine. They shipped in no release — this rule was added the same day the
+# folder was, because `docs/**` is not ignored wholesale and a new subdirectory under it
+# is packaged by default. Anything else added there needs the same consideration.
+docs/test-images/**

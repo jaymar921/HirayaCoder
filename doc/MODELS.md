@@ -125,10 +125,16 @@ Tier comes from `core/modelCapability.js`: ≤ 3B **or** no tool support → Tie
 `gemma4:e2b` is named for its ~2B *effective* parameters, but Ollama reports 5.1B raw,
 which is what the threshold sees.
 
-**Images** need the `vision` capability. `qwen3.5:*` and `gemma4:*` report it;
-`llama3.2:*` and `stable-code` do not. A model without it does not error on an image —
-it ignores it and answers from the text alone, which is why the attach button is
-disabled rather than left to fail quietly.
+**Images** need the `vision` capability. `qwen3.5:*`, `gemma4:*` and `minicpm-v4.6`
+report it; `llama3.2:*` and `stable-code` do not. A model without it does not error on
+an image — it ignores it and answers from the text alone, which is why the raw picture
+is never put on a message to one.
+
+**Since 1.1.0 that no longer disables the attach button.** The image reaches a text-only
+model as a written description produced by whichever installed model *can* see, so the
+button is gated on the machine having a vision model at all rather than on the selected
+one being it. Measurements are in [Image recognition](#image-recognition-110);
+the mechanism is in [IMAGE-RECOGNITION.md](IMAGE-RECOGNITION.md).
 
 **TODO lists** require the `thinking` capability *and* ≥ 2B parameters
 (`hirayacoder.model.todoMinParams`). `qwen3.5:0.8b` reports `thinking` and is excluded
@@ -642,6 +648,76 @@ while leaving its export in place, or writing `name ? name : null` for "return
 it still cannot complete a single-file edit. **0.8B is below the floor for this
 extension**, and the guards are the only reason a session with it is merely
 unproductive rather than destructive.
+
+---
+
+## Image recognition (1.1.0)
+
+From `tools/bench-vision.js`. Six photographs in `docs/test-images/`, both prompts
+(`answer` and `task`), two samples each, so **24 graded descriptions per model**. Machine
+B, `--cold`, which unloads the model between samples — without that the timings are
+Ollama's prompt cache rather than the model.
+
+| Model | Params | Subject | Detail | Text read | Confused | Cold |
+|---|---|---|---|---|---|---|
+| `minicpm-v4.6` | 752M | **24/24** | 42/48 | 4/8 | 0 | 11s |
+| `qwen3.5:0.8b` | 873M | 23/24 | **46/48** | **8/8** | 0 | 13s |
+
+`Subject` is naming the right thing. `Detail` is colour, setting, and count. `Text read`
+is only scored on the two fixtures that have words in them. `Confused` counts
+descriptions asserting something the photograph contradicts, and it can only be lost —
+a cat called a dog fails the fixture whatever else it got right.
+
+### What the numbers mean in practice
+
+**Naming the subject is solved at this size.** 47 of 48 across two sub-1B models, and
+zero confusions. If you attach a photo and ask what is in it, both of these answer
+correctly. That is a stronger result than expected for 752M parameters.
+
+**Reading text is not, and it depends on size of the text rather than size of the
+model.** Every one of `minicpm-v4.6`'s four text failures is `car.jpg`, whose only text
+is a small BMW badge on a grille. It read `cebu pacific` off the aeroplane — large,
+clear, high-contrast — on all four attempts. So the honest guidance is not "small models
+cannot read" but "crop and zoom before you rely on it", which is what
+[IMAGE-RECOGNITION.md](IMAGE-RECOGNITION.md) now says.
+
+**The two models differ more than their sizes suggest.** 121M parameters apart, and one
+read every word while the other read half. There is no way to predict which you have
+from the model card, which is the argument for the panel that shows you what was read.
+
+### The failure that changed the code
+
+`qwen3.5:0.8b`, one sample in twenty-four, replied:
+
+> I cannot see this image. I am an AI model designed to process text and provide
+> information, but I do not have the ability to view or interpret visual content like
+> screenshots, photos, or UI elements.
+
+It reports the `vision` capability. It was sent the image. It had described the same
+photograph correctly on the previous sample. This is a small model's text-only training
+reasserting itself over what it was actually handed.
+
+Left alone, that paragraph *is* the description: stored, put in front of the coding model
+as "what is in this picture", and shown to the user. The coding model then reasons from a
+statement that no image exists, which is worse than being told the read failed.
+`core/imageRecognition` now recognises the shape and reports a failed read.
+
+The detector is narrow on purpose. The recognition prompt asks the describer to say when
+it cannot make something out, so *"I cannot see the licence plate clearly"* is the
+instruction working, and a detector that ate those would punish the behaviour we want. It
+requires a first-person inability **plus** a visual object, and only looks at the opening
+400 characters, so a real description that ends with a boilerplate disclaimer survives.
+
+### Reproducing it
+
+```bash
+node tools/bench-vision.js minicpm-v4.6:latest --machine B --purpose both --repeat 2 --cold
+node tools/bench-vision.js qwen3.5:0.8b       --machine B --purpose both --repeat 2 --cold
+```
+
+Raw runs: `benchmarks/results/B/vision__*.json`. Every record keeps the full description
+text, because when a score looks wrong the only way to tell a bad grader from a bad model
+is to read what the model actually wrote.
 
 ---
 

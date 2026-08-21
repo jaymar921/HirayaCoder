@@ -16,7 +16,8 @@
  *
  * The priority order below encodes that judgment:
  *
- *   task > latest observation > session memory > selection > context files > open file
+ *   task > latest observation > attached images > session memory > selection >
+ *   context files > open file
  *
  * The task is non-negotiable. The latest observation ranks second because a ReAct
  * loop that forgets what its last action returned will repeat it forever. Memory
@@ -48,6 +49,12 @@ const PRIORITY = {
   // are the thing being referred to. Notes are a compression of the same material, so
   // when only one survives the budget it should be the primary source.
   conversation: 85,
+  // Above the conversation and everything below it, and only just below the last
+  // observation. When the selected model cannot see, this block is the *only* form the
+  // attached image takes — dropping it does not degrade the answer, it removes the
+  // thing the user was asking about. It is also small: a description is capped at
+  // ~1600 characters, so ranking it high costs little.
+  imageDescriptions: 88,
   memory: 80,
   // Above the selection and everything below it. This block is ~100 tokens that say
   // what the project is in its author's own words, and without it the model answers
@@ -82,6 +89,7 @@ const PRIORITY = {
  * @property {string} [contextFiles]             Rendered block from contextFilesManager.
  * @property {string} [observation]              Result of the previous agent step.
  * @property {string[]} [workspaceFiles]         Nearby paths, for orientation.
+ * @property {string} [imageDescriptions]        Rendered block from core/imageRecognition.
  * @property {Array<{role: string, text: string}>} [conversation]
  *   Earlier turns of this chat, oldest first, excluding the message being answered.
  */
@@ -177,6 +185,30 @@ function build(request) {
         keep: 'tail',
       });
     }
+  }
+
+  if (request.imageDescriptions) {
+    sections.push({
+      name: 'Images',
+      // Redacted like every other block here, and for a reason that is easy to miss: a
+      // description is model prose, but the prose is *about a picture of the user's
+      // screen*. A screenshot of a terminal with `export OPENAI_API_KEY=sk-…` in it
+      // produces a description containing the key, and the recognition prompt asks the
+      // describer to copy visible text exactly — so this path does not merely permit
+      // that, it requests it.
+      //
+      // `redact` replaces the matched secret and leaves the sentence around it standing,
+      // so the description stays useful.
+      content: redact(request.imageDescriptions),
+      priority: PRIORITY.imageDescriptions,
+      // High, and higher than any other section's floor. A description trimmed to two
+      // sentences keeps "a screenshot of a form" and loses the error message on it,
+      // which is invariably the part the user attached it for. Better to drop the
+      // block whole and have the model say it was not given the image than to hand it
+      // a fragment it will answer confidently from.
+      minTokens: 120,
+      keep: 'head',
+    });
   }
 
   if (request.projectOverview) {
