@@ -125,6 +125,29 @@ If nothing installed can read images, `ollama pull minicpm-v4.6` is the smallest
 
 Full detail, including what it gets wrong: [IMAGE-RECOGNITION.md](IMAGE-RECOGNITION.md).
 
+## Which model replied, and how long it took
+
+Under every answer there is a small line:
+
+```
+minicpm-v4.6:latest • 25s
+```
+
+It is there because the model is the main lever you have. A task takes one to five
+minutes on an ordinary laptop, and the way to make it faster is to run something smaller,
+not to wait. Comparing two models means comparing replies that are several messages
+apart, and this makes that a matter of scrolling rather than of memory.
+
+The time is the turn itself. If the turn waited for another chat tab to finish, the wait
+is not counted, so the number is what this model cost you.
+
+When a different model read an attached image, it gets its own entry, because that is
+where the extra seconds went:
+
+```
+llama3.2:latest • 17s     + minicpm-v4.6:latest read the image, 8s
+```
+
 ## Nothing changes without your say-so
 
 By default, every time it wants to write to a file, you get a prompt with a **Review

@@ -82,6 +82,34 @@ instruction working. It requires a first-person inability **plus** a visual obje
 examines only the opening 400 characters, so a real description that ends with a
 boilerplate disclaimer survives.
 
+### Added — every reply says which model wrote it and how long it took
+
+A small line under each answer:
+
+```
+minicpm-v4.6:latest • 25s
+```
+
+On this hardware the model is the main lever anyone has — a task is one to five minutes,
+and the only way to make it faster is to run something smaller — so choosing between them
+means comparing replies that are minutes and several messages apart. The status line
+could not serve that: it is per-tab and the next turn overwrites it, so it says what is
+happening and never what happened. Attached to the reply, the comparison is just
+scrolling.
+
+The duration is the run itself, not the wait: a turn queued behind another tab does not
+start its clock until it owns the lane, so the number is time spent on *this* model
+rather than on somebody else's.
+
+When a **different** model read an attached image, it is named separately:
+
+```
+llama3.2:latest • 17s     + minicpm-v4.6:latest read the image, 8s
+```
+
+That is not decoration. It is where the extra eight seconds went, and without it the
+coding model looks like it got slower.
+
 ### Fixed — the project description drowning the picture
 
 Found by trying the packaged build rather than by any test. In Ask mode on

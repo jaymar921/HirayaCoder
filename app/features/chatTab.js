@@ -798,6 +798,15 @@ class ChatTab {
         todos: result.todos || null,
         changes: result.changeSet instanceof ChangeSet ? result.changeSet.list() : [],
         plan: result.plan || null,
+        // Which model answered, and how long it took. Shown under every reply so that
+        // switching models is a comparison rather than a guess.
+        //
+        // `result.model` rather than `this.app.activeModel`: the user is free to change
+        // the dropdown while a turn is running, and the footer has to name the model
+        // that actually produced the words above it.
+        model: result.model || this.app.activeModel,
+        ms: typeof result.ms === 'number' ? result.ms : null,
+        vision: result.vision || null,
       });
     } catch (err) {
       const message = /** @type {Error} */ (err).message;

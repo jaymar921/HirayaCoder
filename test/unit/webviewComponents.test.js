@@ -459,3 +459,33 @@ describe('the setup guide card', () => {
     for (const mode of ['Agent', 'Plan', 'Ask']) assert.match(text, new RegExp(mode));
   });
 });
+
+describe('the reply footer', () => {
+  /** @type {(ms: number) => string} */
+  let seconds;
+
+  before(async () => {
+    // eslint-disable-next-line no-unsanitized/method
+    ({ seconds } = await import(moduleUrl('components/messageBubble.js')));
+  });
+
+  it('reads a sub-second turn as a fraction, never as 0s', () => {
+    // A cached image description comes back in a few hundred milliseconds. "0s" reads
+    // as a broken timer rather than as a fast answer.
+    assert.strictEqual(seconds(120), '0.1s');
+    assert.strictEqual(seconds(940), '0.9s');
+  });
+
+  it('rounds to whole seconds once there is a whole second to round', () => {
+    assert.strictEqual(seconds(950), '1s');
+    assert.strictEqual(seconds(2242), '2s');
+    assert.strictEqual(seconds(17264), '17s');
+  });
+
+  it('breaks a long turn into minutes, which is how anyone reads it', () => {
+    // A task on a CPU-only laptop routinely passes a minute, and "312s" is a number
+    // nobody converts in their head.
+    assert.strictEqual(seconds(60000), '1m 0s');
+    assert.strictEqual(seconds(312000), '5m 12s');
+  });
+});

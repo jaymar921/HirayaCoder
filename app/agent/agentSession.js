@@ -195,6 +195,15 @@ class ChangeSet {
  * @property {'agent' | 'plan' | 'ask'} mode
  * @property {string[]} [plan]  Plan-mode steps, ready for the checklist UI.
  * @property {import('./todoList').TodoItem[]} [todos]  Items and their outcomes, when a list was used.
+ * @property {string} [model]     Which model produced this reply.
+ * @property {number} [ms]        Wall clock for the run, excluding any queue wait —
+ *   `run` is not entered until the turn owns the lane, so this is time the user spent
+ *   watching *this* model rather than another tab's.
+ * @property {number} [modelMs]   Of that, time spent waiting on Ollama.
+ * @property {{model: string, ms: number}} [vision]  Set only when a *different* model
+ *   read the attached images. Without it the headline duration silently includes a
+ *   second model's load and inference, which is the one thing the footer exists to
+ *   make visible.
  */
 
 /** No item can succeed in fewer than a read, a write, and a finish. */
@@ -2348,6 +2357,28 @@ class AgentSession {
     const ms = this._startedAt ? Date.now() - this._startedAt : undefined;
     const modelMs =
       typeof this._modelMsAtStart === 'number' ? this._modelMsSoFar() - this._modelMsAtStart : undefined;
+
+    // Attached to the result as well as logged. The panel shows this under every reply
+    // so that switching models is a comparison rather than a guess — which is the whole
+    // reason anyone switches on this hardware.
+    //
+    // Mutating the caller's object rather than threading a return value through: every
+    // path in `run` awaits this before returning the same object, so there is exactly
+    // one place to set it.
+    result.model = this.model;
+    if (typeof ms === 'number') result.ms = ms;
+    if (typeof modelMs === 'number') result.modelMs = modelMs;
+
+    // Only when a *different* model did the looking. When the selected model described
+    // its own image there is no second cost to account for, and naming it twice reads
+    // as though there were.
+    const described = this._imageDescriptions.filter((entry) => entry.model !== this.model);
+    if (described.length > 0) {
+      result.vision = {
+        model: described[0].model,
+        ms: described.reduce((total, entry) => total + (entry.ms || 0), 0),
+      };
+    }
 
     // Logged whether or not the ledger is on. Adaptation is a choice about whether the
     // extension *learns*; how long a turn took is the first thing anyone needs when a

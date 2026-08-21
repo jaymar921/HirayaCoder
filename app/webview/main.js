@@ -11,6 +11,7 @@ import {
   createMessage,
   appendImages,
   appendVisionNote,
+  appendRunMeta,
   TraceView,
   renderTodos,
   renderChanges,
@@ -337,6 +338,9 @@ const handlers = {
       else state.body.appendChild(fresh);
     }
     if (msg.changes && msg.changes.length > 0) state.body.appendChild(renderChanges(msg.changes));
+    // Last, so it reads as a footer on everything above it rather than as part of the
+    // answer.
+    appendRunMeta(state.body, { model: msg.model, ms: msg.ms, vision: msg.vision });
     scrollToEnd();
   },
 

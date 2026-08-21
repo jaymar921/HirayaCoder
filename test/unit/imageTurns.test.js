@@ -295,6 +295,56 @@ describe('images in a turn', () => {
     });
   });
 
+  describe('what the reply footer is told', () => {
+    it('names the model that answered and how long the turn took', async () => {
+      const client = twoStageClient(['A corgi in grass.']);
+      const session = makeSession({
+        client,
+        model: 'qwen3.5:4b',
+        vision: { enabled: true, describeModel: 'qwen3.5:4b', activeCanSee: true },
+      });
+
+      const result = await session.run('describe the image', { mode: 'ask' });
+
+      assert.strictEqual(result.model, 'qwen3.5:4b');
+      assert.strictEqual(typeof result.ms, 'number');
+      assert.ok(result.ms >= 0);
+    });
+
+    it('accounts for a second model separately when one read the image', async () => {
+      // Without this the headline duration silently includes another model's load and
+      // inference, and the coding model looks like it got slower.
+      const client = twoStageClient(['A corgi in grass.']);
+      const session = makeSession({
+        client,
+        model: 'llama3.2:latest',
+        vision: { enabled: true, describeModel: 'minicpm-v4.6:latest', activeCanSee: false },
+      });
+
+      const result = await session.run('describe the image', { mode: 'ask' });
+
+      assert.strictEqual(result.model, 'llama3.2:latest');
+      assert.ok(result.vision, 'the describer is reported');
+      assert.strictEqual(result.vision.model, 'minicpm-v4.6:latest');
+      assert.strictEqual(typeof result.vision.ms, 'number');
+    });
+
+    it('reports no second model when the selected one described its own image', async () => {
+      // Naming it twice would read as though there were two costs.
+      const client = twoStageClient(['{"action":"done","summary":"Done."}']);
+      const session = makeSession({
+        client,
+        model: 'qwen3.5:4b',
+        vision: { enabled: true, describeModel: 'qwen3.5:4b', activeCanSee: true },
+      });
+
+      const result = await session.run('build what this mockup shows', { mode: 'agent' });
+
+      assert.strictEqual(result.vision, undefined);
+      assert.strictEqual(result.model, 'qwen3.5:4b');
+    });
+  });
+
   describe('secrets visible in the picture', () => {
     it('redacts a credential the describer read off the screenshot', async () => {
       // Not a hypothetical, and not merely permitted: the recognition prompt asks the
