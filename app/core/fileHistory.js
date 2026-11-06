@@ -2,7 +2,8 @@
 
 /* eslint-disable security/detect-non-literal-fs-filename --
  * Every fs call targets `this.filePath`, built from the VS Code workspace root and a
- * fixed filename. No component derives from model output. */
+ * fixed filename, or a path recorded by the change set that pathGuard resolves and
+ * realpath-checks again before it is read (`_shapeOf`). */
 
 /**
  * What the agent changed, and what it changed it from: `.hirayacoder/history.jsonl`.
@@ -50,6 +51,9 @@ const logger = require('../utils/logger');
 const { JsonlLog } = require('../utils/jsonlLog');
 const { redact } = require('../security/secretsScanner');
 const { toLf } = require('../utils/platform');
+const codeShape = require('./codeShape');
+const pathGuard = require('../security/pathGuard');
+const { neutralize } = require('./memoryStore');
 
 /**
  * Larger than the outcome ledger's cap, because entries here carry code. Still small
@@ -65,6 +69,15 @@ const MAX_DIFF_LINE_CHARS = 300;
 
 /** Entries fed back to the model, newest first. */
 const DEFAULT_RECALL = 6;
+
+/** Largest file read for its shape when the memory block is built. */
+const MAX_SHAPE_BYTES = 256 * 1024;
+
+/** Longest "provides" text per file in the prompt. */
+const MAX_SHAPE_CHARS = 240;
+
+/** Definitions named per file before the rest are counted. */
+const MAX_SHAPE_ITEMS = 8;
 
 /**
  * How many lines a file has, not counting the newline that ends the last one.
@@ -278,16 +291,69 @@ class FileHistory extends JsonlLog {
    * @returns {Promise<string>}
    */
   async renderForPrompt(sessionId, limit = DEFAULT_RECALL) {
-    const entries = await this.recent({ sessionId, limit });
+    // Newest first, one line per file: a file edited three times is one file, and the
+    // newest entry is the one that describes it now.
+    const seen = new Set();
+    const entries = (await this.recent({ sessionId, limit: limit * 3 })).filter((entry) => {
+      if (seen.has(entry.path)) return false;
+      seen.add(entry.path);
+      return true;
+    }).slice(0, limit);
     if (entries.length === 0) return '';
 
-    const lines = entries.map((entry) => {
-      if (entry.kind === 'delete') return `- deleted ${entry.path}`;
-      if (entry.kind === 'create') return `- created ${entry.path} (${entry.added} lines)`;
-      return `- edited ${entry.path} (+${entry.added} / -${entry.removed})`;
-    });
+    const lines = [];
+    for (const entry of entries) {
+      if (entry.kind === 'delete') {
+        lines.push(`- deleted ${entry.path}`);
+        continue;
+      }
+      const head =
+        entry.kind === 'create'
+          ? `- created ${entry.path} (${entry.added} lines)`
+          : `- edited ${entry.path} (+${entry.added} / -${entry.removed})`;
+      const provides = await this._shapeOf(entry.path);
+      lines.push(provides ? `${head}. It provides: ${provides}` : head);
+    }
 
-    return `Files you have already changed in this session — do not redo this work:\n${lines.join('\n')}`;
+    return (
+      'Files you have already changed in this session, and what each provides now. Do not redo this work, ' +
+      `and use these exact names and arguments when you call or import them:\n${lines.join('\n')}`
+    );
+  }
+
+  /**
+   * What a file the session changed offers now, read from disk at the moment it is asked.
+   *
+   * ## Why this is memory's job
+   *
+   * The block above used to say "edited src/cart.js (+3 / -1)" and stop. That tells a
+   * later turn the file was touched; it does not tell it what to call. The next request
+   * is very often "now use it from somewhere else", and a small model with only the
+   * filename guesses the function's name and arguments. Guessing is the failure the
+   * 0.7.0 session lost an hour to.
+   *
+   * Read live rather than stored, so it is never stale: the user may have edited the file
+   * by hand since, and what goes in the prompt is what is on disk now. Bounded, redacted,
+   * neutralised, and confined to the workspace the same way a tool read is, because the
+   * file is whatever the model wrote into it.
+   *
+   * @param {string} relative
+   * @returns {Promise<string>}
+   * @private
+   */
+  async _shapeOf(relative) {
+    if (!this.root || !codeShape.languageOf(relative)) return '';
+    try {
+      const resolved = await pathGuard.assertRealPath(pathGuard.resolvePath(this.root, relative));
+      const stats = await fs.promises.stat(resolved.absolute);
+      if (!stats.isFile() || stats.size > MAX_SHAPE_BYTES) return '';
+      const text = await fs.promises.readFile(resolved.absolute, 'utf8');
+      const shape = codeShape.describe(redact(text), relative, { maxItems: MAX_SHAPE_ITEMS });
+      return shape ? neutralize(shape, { maxChars: MAX_SHAPE_CHARS }) : '';
+    } catch {
+      // Deleted since, unreadable, or outside the workspace: the line keeps its first half.
+      return '';
+    }
   }
 
   /** Forget the history for this workspace. */
