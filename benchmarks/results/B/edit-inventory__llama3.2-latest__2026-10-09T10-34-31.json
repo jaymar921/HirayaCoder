@@ -1,0 +1,207 @@
+{
+  "harness": "bench-edit",
+  "suite": "inventory",
+  "model": "llama3.2:latest",
+  "machine": "B",
+  "tier": "A",
+  "params": "3.2B",
+  "label": "baseline-1.1.0",
+  "at": "2026-10-09T10:34:31.967Z",
+  "summary": {
+    "runs": 8,
+    "passed": 0,
+    "changed": 0,
+    "damaged": 0,
+    "meanSeconds": 30
+  },
+  "runs": [
+    {
+      "sample": 0,
+      "task": "py-threshold",
+      "changed": false,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "repeating",
+      "seconds": 29.9,
+      "actions": [
+        "read_file inventory.py",
+        "read_file inventory.py",
+        "read_file inventory.py"
+      ],
+      "edits": [],
+      "refusals": [],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Asked \"In inventory.py, raise the low stock threshold from 5 to 10.\" — answered: I kept calling read_file the same way without progressing, so I stopped after 3 step(s)."
+      ],
+      "summary": "I kept calling read_file the same way without progressing, so I stopped after 3 step(s)."
+    },
+    {
+      "sample": 0,
+      "task": "py-oversell",
+      "changed": false,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "repeating",
+      "seconds": 30,
+      "actions": [
+        "read_file inventory.py",
+        "read_file inventory.py",
+        "read_file inventory.py"
+      ],
+      "edits": [],
+      "refusals": [],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Asked \"In inventory.py, sell should raise a ValueError when the quantity is more than the product…\" — answered: I kept calling read_file the same way without progressing, so I stopped after 3 step(s)."
+      ],
+      "summary": "I kept calling read_file the same way without progressing, so I stopped after 3 step(s)."
+    },
+    {
+      "sample": 0,
+      "task": "py-remove",
+      "changed": false,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "repeating",
+      "seconds": 29.9,
+      "actions": [
+        "read_file inventory.py",
+        "read_file inventory.py",
+        "read_file inventory.py"
+      ],
+      "edits": [],
+      "refusals": [],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Asked \"In inventory.py, make remove_product return None instead of raising KeyError when the sku…\" — answered: I kept calling read_file the same way without progressing, so I stopped after 3 step(s)."
+      ],
+      "summary": "I kept calling read_file the same way without progressing, so I stopped after 3 step(s)."
+    },
+    {
+      "sample": 0,
+      "task": "py-method",
+      "changed": false,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "repeating",
+      "seconds": 31.3,
+      "actions": [
+        "read_file inventory.py",
+        "read_file inventory.py",
+        "read_file inventory.py"
+      ],
+      "edits": [],
+      "refusals": [],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Asked \"Add a method count_products(self) to the Inventory class in inventory.py that returns how…\" — answered: I kept calling read_file the same way without progressing, so I stopped after 3 step(s)."
+      ],
+      "summary": "I kept calling read_file the same way without progressing, so I stopped after 3 step(s)."
+    },
+    {
+      "sample": 1,
+      "task": "py-threshold",
+      "changed": false,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "repeating",
+      "seconds": 28.1,
+      "actions": [
+        "read_file inventory.py",
+        "read_file inventory.py",
+        "read_file inventory.py"
+      ],
+      "edits": [],
+      "refusals": [],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Asked \"In inventory.py, raise the low stock threshold from 5 to 10.\" — answered: I kept calling read_file the same way without progressing, so I stopped after 3 step(s)."
+      ],
+      "summary": "I kept calling read_file the same way without progressing, so I stopped after 3 step(s)."
+    },
+    {
+      "sample": 1,
+      "task": "py-oversell",
+      "changed": false,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "repeating",
+      "seconds": 26.8,
+      "actions": [
+        "read_file inventory.py",
+        "read_file inventory.py",
+        "read_file inventory.py"
+      ],
+      "edits": [],
+      "refusals": [],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Asked \"In inventory.py, sell should raise a ValueError when the quantity is more than the product…\" — answered: I kept calling read_file the same way without progressing, so I stopped after 3 step(s)."
+      ],
+      "summary": "I kept calling read_file the same way without progressing, so I stopped after 3 step(s)."
+    },
+    {
+      "sample": 1,
+      "task": "py-remove",
+      "changed": false,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "repeating",
+      "seconds": 28.5,
+      "actions": [
+        "read_file inventory.py",
+        "read_file inventory.py",
+        "read_file inventory.py"
+      ],
+      "edits": [],
+      "refusals": [],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Asked \"In inventory.py, make remove_product return None instead of raising KeyError when the sku…\" — answered: I kept calling read_file the same way without progressing, so I stopped after 3 step(s)."
+      ],
+      "summary": "I kept calling read_file the same way without progressing, so I stopped after 3 step(s)."
+    },
+    {
+      "sample": 1,
+      "task": "py-method",
+      "changed": false,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "repeating",
+      "seconds": 35.5,
+      "actions": [
+        "read_file inventory.py",
+        "list_files src/main/java",
+        "create_folder src/main/java",
+        "create_folder src/main/java",
+        "create_folder src/main/java"
+      ],
+      "edits": [],
+      "refusals": [
+        "ENOENT"
+      ],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Created the folder src/main/java"
+      ],
+      "summary": "I kept calling create_folder the same way without progressing, so I stopped after 5 step(s).\n\nThese steps did not complete:\n- The folder src/main/java does not exist.\n\nThis failure does not match anything known, so read the error above literally rather than guessing: it names what went wrong and usu"
+    }
+  ]
+}
