@@ -32,6 +32,7 @@ const logger = require('../utils/logger');
 const { parseAction, actionSchema } = require('../core/outputParser');
 const { truncateToTokens } = require('../utils/tokenBudget');
 const { WorkingSet, isRecon } = require('./workingSet');
+const { distillTask } = require('../core/contextTranslator');
 
 /** How many identical actions before the loop intervenes. */
 const REPEAT_LIMIT = 2;
@@ -68,7 +69,22 @@ const RETRYABLE_ERRORS = new Set([
   // `recursive: true`. That is the tool naming the one thing that would work, so it
   // belongs with the content refusals rather than with the misdirected actions.
   'FOLDER_NOT_EMPTY',
+  // Three later content guards in `writeFile`. Each one's own message asks for the file
+  // again with the code intact, and the generic "do not try that again" hint was
+  // contradicting it, the same conflict the four above were moved here to settle.
+  'EXPORTS_REMOVED',
+  'EXPORT_NOT_DEFINED',
+  'IMPLEMENTATION_REMOVED',
+  // An edit whose `find` did not match, matched twice, or changed nothing. The target is
+  // right and the result says exactly what to send instead.
+  'EDIT_NOT_FOUND',
+  'EDIT_AMBIGUOUS',
+  'EDIT_NO_CHANGE',
+  'MISSING_FIND',
 ]);
+
+/** The edit refusals, which get their own hint: the remedy is in the result, not "resend the file". */
+const EDIT_ERRORS = new Set(['EDIT_NOT_FOUND', 'EDIT_AMBIGUOUS', 'EDIT_NO_CHANGE', 'MISSING_FIND']);
 
 /** How many corrected retries a single action/path is forgiven before the repeat guard applies. */
 const RETRY_FORGIVENESS_LIMIT = 2;
@@ -139,7 +155,11 @@ function actionKey(action) {
   // `cwd` is part of the identity: `npm install` at the root and `npm install` inside
   // the scaffolded app are two different actions, and without this the second one is
   // stopped as a repeat of the first.
-  return [action.action, action.path || '', action.query || '', action.command || '', action.cwd || ''].join('|');
+  //
+  // So is an edit's `find`. Two edits to one file in a row are normal work (change the
+  // constant, then the function that uses it), and without this the second was a repeat.
+  const edit = action.action === 'edit_file' ? String(action.find || '').slice(0, 200) : '';
+  return [action.action, action.path || '', action.query || '', action.command || '', action.cwd || '', edit].join('|');
 }
 
 /**
@@ -175,6 +195,15 @@ function nextStepHint(action, result, repeats, activeRoute) {
       `${action.path || 'That folder'} still exists — it is not empty, so it was left alone. ` +
       'If you meant to remove it and everything inside it, send delete_folder for the same path with ' +
       '"recursive": true. If you only wanted particular files gone, use delete_file on each of them.'
+    );
+  }
+
+  // An edit that missed. The result above already shows the closest lines, or says to read
+  // the file, so the hint only has to point at it and not contradict it.
+  if (!result.ok && action.action === 'edit_file' && EDIT_ERRORS.has(result.error)) {
+    return (
+      `${action.path || 'The file'} was NOT changed. Do what the result above says: copy the exact lines ` +
+      'you want to change into "find", put the new lines in "replace", and send edit_file again.'
     );
   }
 
@@ -233,10 +262,17 @@ function nextStepHint(action, result, repeats, activeRoute) {
   }
 
   if (action.action === 'read_file' && action.path) {
+    const canEdit = activeRoute.allowedActions.has('edit_file');
     const canWrite = activeRoute.allowedActions.has('write_file');
+    if (canEdit) {
+      return (
+        `You now have the contents of ${action.path}. If that is enough to do the task, make the change now with ` +
+        'edit_file: copy the exact lines to change into "find" and put the new lines in "replace". Do not read it again.'
+      );
+    }
     return canWrite
-      ? `You now have the full contents of ${action.path}. If that is enough to do the task, make the change now with write_file — send the complete updated file in "code". Do not read it again.`
-      : `You now have the full contents of ${action.path}. Do not read it again — look at another file or finish with "done" and give your plan.`;
+      ? `You now have the full contents of ${action.path}. If that is enough to do the task, make the change now with write_file. Send the complete updated file in "code". Do not read it again.`
+      : `You now have the full contents of ${action.path}. Do not read it again. Look at another file or finish with "done" and give your plan.`;
   }
 
   if (action.action === 'list_files' || action.action === 'search_workspace') {
@@ -253,6 +289,13 @@ function nextStepHint(action, result, repeats, activeRoute) {
       `${action.path} is saved. Do NOT read or write it again. ` +
       'If every part of the task is now complete, reply with the "done" action and summarise what you changed. ' +
       'If part of the task is still outstanding, do that part next.'
+    );
+  }
+
+  if (action.action === 'edit_file' && action.path) {
+    return (
+      `${action.path} is saved with that change. If the task needs another change in this file, send edit_file ` +
+      'for it. If every part of the task is now complete, reply with "done" and summarise what you changed.'
     );
   }
 
@@ -294,17 +337,19 @@ const MAX_GOAL_CHARS = 240;
  * @returns {string}
  */
 function goalReminder(task, stepIndex, maxSteps) {
-  const text = String(task || '').replace(/\s+/g, ' ').trim();
-  if (!text) return '';
+  // A long request is restated by its sentences of work rather than its first 240
+  // characters, which on a real brief were the preamble. See `contextTranslator.distillTask`.
+  const { text: goal, distilled } = distillTask(task, MAX_GOAL_CHARS);
+  if (!goal) return '';
 
-  const goal = text.length > MAX_GOAL_CHARS ? `${text.slice(0, MAX_GOAL_CHARS)}…` : text;
   const remaining = maxSteps - stepIndex;
   const budget =
     remaining <= 2
       ? `This is step ${stepIndex + 1} of ${maxSteps} — the last ones. Do the most important thing still missing, then finish with "done".`
       : `This is step ${stepIndex + 1} of ${maxSteps}.`;
 
-  return `Remember what you are doing. The whole task, unchanged: ${goal}\n${budget}`;
+  const lead = distilled ? 'The parts of the task that ask for work' : 'The whole task, unchanged';
+  return `Remember what you are doing. ${lead}: ${goal}\n${budget}`;
 }
 
 /**
@@ -328,6 +373,12 @@ function recoveryHint(error) {
       'Your last reply asked to write a file but contained no "code" field. ' +
       'Send the action again with "code" set to the COMPLETE new contents of the file — ' +
       'every line, not just the part you changed, and not a description of the change.'
+    );
+  }
+  if (/missing:.*\b(?:find|replace)\b/.test(text)) {
+    return (
+      'Your last reply asked to edit a file but did not include both "find" (the exact lines to change, ' +
+      'copied from the file) and "replace" (the new lines). Send edit_file again with both.'
     );
   }
   if (/missing:.*\bpath\b/.test(text)) {
@@ -361,6 +412,10 @@ function recoveryHint(error) {
  *   correction and the loop continues; null accepts the `done`. Called at most once.
  * @param {(event: object) => void} [options.onEvent]
  * @param {AbortSignal} [options.signal]
+ * @param {{steps: import('./agentSession').AgentStep[], hint?: string}} [options.preface]
+ *   Steps the extension already took for this request (a dictated edit), which the loop
+ *   starts out holding: in the trace, in the working set, as the last result, and counted
+ *   by the repeat guard, so a model that sends the same edit again is caught.
  * @returns {Promise<{steps: import('./agentSession').AgentStep[], summary: string, stopReason: string}>}
  */
 async function run(options) {
@@ -397,6 +452,22 @@ async function run(options) {
   // failure silently erased the task guidance a small model most depends on.
   let hint = '';
   let parseNudge = '';
+
+  if (options.preface) {
+    for (const step of options.preface.steps || []) {
+      steps.push(step);
+      workingSet.record(step.action, step.result, steps.length);
+      const key = actionKey(step.action);
+      seen.set(key, (seen.get(key) || 0) + 1);
+    }
+    const last = steps[steps.length - 1];
+    if (last && last.result) {
+      observation = truncateToTokens(last.result.observation, Math.floor(budgets.promptTokenTarget * 0.45), {
+        keep: 'both',
+      }).text;
+    }
+    hint = options.preface.hint || '';
+  }
 
   // Constrains decoding to the shape of one valid action. Bare `format: 'json'` only
   // guarantees valid JSON, which is how a 0.8B model can spend an entire session
@@ -630,14 +701,17 @@ async function run(options) {
 
     // Checked before the write reaches the gate: the contaminated content must never
     // become a pending change the user could approve.
-    const echoed = action.action === 'write_file' && action.code ? echoedNotice(action.code, notices) : null;
+    // An edit's `replace` is file content too, and can carry a pasted status line just the same.
+    const payloadField = action.action === 'edit_file' ? 'replace' : 'code';
+    const payload = action.action === 'write_file' ? action.code : action.action === 'edit_file' ? action.replace : '';
+    const echoed = payload ? echoedNotice(payload, notices) : null;
 
     const result = echoed
       ? {
           ok: false,
           observation:
-            `Refused: the content you sent for ${action.path} contains "${echoed}" — that is a status ` +
-            'message from this session, not part of the file. Send only the file\'s own code in "code".',
+            `Refused: the content you sent for ${action.path} contains "${echoed}". That is a status ` +
+            `message from this session, not part of the file. Send only the file's own code in "${payloadField}".`,
           error: 'ECHOED_OBSERVATION',
         }
       : await execute(action);

@@ -64,9 +64,8 @@ pre {
 
 .header {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: var(--sp-2);
-  flex-wrap: wrap;
   padding: var(--sp-2) var(--sp-3);
   border-bottom: 1px solid var(--border);
   background: var(--vscode-editor-background);
@@ -75,12 +74,63 @@ pre {
   z-index: 5;
 }
 
+/* A row wraps inside itself; the two rows never merge into one ragged line. */
+.header-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
 .header-title {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
   font-weight: 600;
   margin-right: auto;
+}
+
+.model-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+/*
+ * A segmented control with its name inside the same box. Low, Med and High mean nothing
+ * on their own, and a label floating between two controls reads as part of either.
+ */
+.labelled {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.labelled-text {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--sp-2);
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  border-right: 1px solid var(--border);
+}
+
+.labelled .segmented {
+  border: 0;
+  border-radius: 0;
+}
+
+/* Settings that are changed once and left. Present, findable, and quieter than the mode. */
+.header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex-wrap: wrap;
+  margin-left: auto;
 }
 
 .glyph {
@@ -141,6 +191,18 @@ pre {
 
 select.control {
   max-width: 220px;
+  min-width: 0;
+}
+
+.control.quiet {
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+}
+
+.control.quiet:hover {
+  color: var(--vscode-foreground);
+  border-color: var(--border);
 }
 
 .segmented {
@@ -295,6 +357,13 @@ select.control {
   padding-top: var(--sp-2);
 }
 
+/* The rule separates the steps from what is above them. With nothing above, it is a stray line. */
+.msg-body > .trace:first-child {
+  margin-top: 0;
+  border-top: 0;
+  padding-top: 0;
+}
+
 .trace > summary {
   cursor: pointer;
   font-size: var(--fs-sm);
@@ -343,6 +412,55 @@ select.control {
 
 .run-meta-sep {
   opacity: 0.6;
+}
+
+.run-meta-context {
+  font-variant-numeric: tabular-nums;
+}
+
+/* The window filled: part of the prompt was dropped or the reply was cut. Rare now, and
+   worth noticing when it happens, so it takes the theme's warning colour. */
+.run-meta-warn {
+  color: var(--vscode-editorWarning-foreground, #cca700);
+}
+
+/*
+ * The memory a reply was given. Same shape as the steps and the image description: the
+ * evidence behind the answer, closed until someone wants it.
+ */
+.memory-note > summary::before {
+  content: '▸ ';
+}
+
+.memory-note[open] > summary::before {
+  content: '▾ ';
+}
+
+.memory-lines {
+  margin: var(--sp-1) 0 0;
+  padding: 0 0 0 var(--sp-4);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+
+.memory-line {
+  padding: 1px 0;
+  overflow-wrap: anywhere;
+}
+
+/* The prompt's own block headings, kept so the view is the prompt, set back so the entries lead. */
+.memory-line.is-heading {
+  list-style: none;
+  margin: var(--sp-2) 0 0 calc(-1 * var(--sp-4));
+  color: var(--muted);
+}
+
+.memory-line.is-heading:first-child {
+  margin-top: 0;
+}
+
+.memory-line code {
+  font-size: 1em;
 }
 
 /* The second model, when a different one read an attached image. Set back a step so the
@@ -665,6 +783,10 @@ select.control {
   font: inherit;
 }
 
+.icon-btn .icon {
+  display: block;
+}
+
 .icon-btn:hover:not([disabled]) {
   background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.16));
 }
@@ -699,6 +821,19 @@ select.control {
   display: flex;
   gap: var(--sp-2);
   justify-content: space-between;
+}
+
+#status {
+  margin-left: auto;
+  text-align: right;
+}
+
+/* In a sidebar the key hint and the run status fought for one line. The status is the one
+   that changes, so it is the one that stays. */
+@media (max-width: 520px) {
+  .composer-keys {
+    display: none;
+  }
 }
 
 /* ------------------------------------------------------------------- welcome */

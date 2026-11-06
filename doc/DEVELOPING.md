@@ -62,6 +62,12 @@ tables, including what each model broke and how, are in
 [MODELS.md](https://github.com/jaymar921/HirayaCoder/blob/main/doc/MODELS.md) and
 [benchmarks/](https://github.com/jaymar921/HirayaCoder/blob/main/benchmarks/README.md).
 
+Two more were added since. `tools/bench-vision.js` (1.1.0) grades image descriptions.
+`tools/bench-edit.js` (1.2.0) asks a model to change part of a file that already exists
+and grades the result by running it: did the change land, and does everything else still
+behave as before. It has a held-out suite that was written after the work it measures and
+never tuned against, which is the number to trust.
+
 The finding worth repeating here: **the mocked test suite passes clean while a real model
 destroys a real file.** Nearly every serious bug in this project was found by running an
 actual model, never by the unit tests.

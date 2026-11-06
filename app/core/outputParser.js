@@ -34,6 +34,7 @@ const ACTIONS = new Set([
   'read_file',
   'list_files',
   'search_workspace',
+  'edit_file',
   'write_file',
   'delete_file',
   'create_folder',
@@ -46,6 +47,7 @@ const ACTIONS = new Set([
 /** Fields required for each action, beyond `action` itself. */
 const REQUIRED_FIELDS = new Map([
   ['read_file', ['path']],
+  ['edit_file', ['path', 'find', 'replace']],
   ['write_file', ['path', 'code']],
   ['delete_file', ['path']],
   ['create_folder', ['path']],
@@ -89,6 +91,8 @@ const MAX_PATH_LENGTH = 200;
  * @property {string} [path]
  * @property {string} [query]
  * @property {string} [code]
+ * @property {string} [find]      edit_file: the text to replace, as it appears in the file.
+ * @property {string} [replace]   edit_file: what goes in its place. May be empty.
  * @property {string} [command]
  * @property {string} [cwd]
  * @property {boolean} [recursive]
@@ -321,6 +325,13 @@ function parseAction(raw, opts = {}) {
   // `code` keeps its whitespace — it is file content.
   const code = asString(fields.code);
   if (code !== undefined) result.code = code;
+  // So do an edit's two halves. `find` is matched against the file, and its indentation is
+  // what lets a re-indented replacement land at the right depth.
+  const find = asString(fields.find);
+  if (find !== undefined && find.trim().length > 0) result.find = find;
+  // An empty `replace` is a deletion and is kept; only a missing one is missing.
+  const replace = asString(fields.replace);
+  if (replace !== undefined) result.replace = replace;
 
   // A genuine boolean, and only a genuine boolean. `recursive` authorises removing a
   // subtree, so the string "false" — which small models emit routinely, and which is
@@ -375,6 +386,14 @@ const FIELD_SCHEMAS = new Map([
   ['path', { type: 'string', description: 'File path relative to the project root, e.g. "src/app.js".' }],
   ['code', { type: 'string', description: 'The COMPLETE new contents of the file — every line, not just the changed part.' }],
   ['query', { type: 'string', description: 'Text to search for across the project.' }],
+  [
+    'find',
+    {
+      type: 'string',
+      description: 'The exact text to change, copied from the file: one or a few whole lines.',
+    },
+  ],
+  ['replace', { type: 'string', description: 'The new text that goes where "find" was. Empty to delete it.' }],
   ['command', { type: 'string', description: 'The shell command to run.' }],
   [
     'cwd',

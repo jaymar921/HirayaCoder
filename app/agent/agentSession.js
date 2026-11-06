@@ -27,11 +27,15 @@ const fs = require('fs');
 
 const logger = require('../utils/logger');
 const pathGuard = require('../security/pathGuard');
+const { redact } = require('../security/secretsScanner');
 const promptRouter = require('../core/promptRouter');
 const imageRecognition = require('../core/imageRecognition');
 const requestPlan = require('../core/requestPlan');
 const fileTree = require('../core/fileTree');
 const fileSpec = require('../core/fileSpec');
+const editRegion = require('../core/editRegion');
+const codeShape = require('../core/codeShape');
+const { asksForMore } = require('../core/contextTranslator');
 const namedCommands = require('../core/namedCommands');
 const missingDeps = require('../core/missingDeps');
 const intentRouter = require('../core/intentRouter');
@@ -200,11 +204,17 @@ class ChangeSet {
  *   `run` is not entered until the turn owns the lane, so this is time the user spent
  *   watching *this* model rather than another tab's.
  * @property {number} [modelMs]   Of that, time spent waiting on Ollama.
+ * @property {{numCtx: number | null, peakPromptTokens: number, filled: number}} [context]
+ *   How much of the model's window the largest prompt of the turn used, from Ollama's counts.
+ * @property {string[]} [remembered]  The memory block the turn was given, line by line.
  * @property {{model: string, ms: number}} [vision]  Set only when a *different* model
  *   read the attached images. Without it the headline duration silently includes a
  *   second model's load and inference, which is the one thing the footer exists to
  *   make visible.
  */
+
+/** Lines of recalled memory sent to the panel with a reply. The prompt is the authority; this is a view of it. */
+const MAX_REMEMBERED_LINES = 40;
 
 /** No item can succeed in fewer than a read, a write, and a finish. */
 const MIN_STEPS_PER_TODO_ITEM = 3;
@@ -241,6 +251,59 @@ const MAX_RELATED_FILE_CHARS = 4000;
  * not: a model that has now been told twice is not going to find it on the next one.
  */
 const MAX_DICTATION_ATTEMPTS = 2;
+
+/** Largest file a dictated edit reads to find its region. Past this the loop handles it. */
+const MAX_DICTATED_EDIT_BYTES = 256 * 1024;
+
+/**
+ * Tries at one dictated edit: the rewrite, the rewrite with its mistake named, and the
+ * smaller question asked when a check keeps being dropped. A 1B model answers in about a
+ * second, so the third try costs less than one loop turn.
+ */
+const MAX_EDIT_ATTEMPTS = 3;
+
+/**
+ * Move a block of code to a new depth, keeping its own relative indentation.
+ *
+ * @param {string} code
+ * @param {string} depth  The indentation its first line should have.
+ * @returns {string}
+ */
+function atDepth(code, depth) {
+  const lines = String(code).split('\n');
+  const first = lines.find((line) => line.trim());
+  if (first === undefined) return code;
+  const base = /^[ \t]*/.exec(first)[0];
+  if (base === depth) return code;
+  return lines
+    .map((line) => {
+      if (!line.trim()) return line;
+      return depth + (line.startsWith(base) ? line.slice(base.length) : line.trimStart());
+    })
+    .join('\n');
+}
+
+/**
+ * The class a line sits in, as text, or '' at the top level.
+ *
+ * @param {string[]} lines
+ * @param {number} index  0-based.
+ * @returns {string}
+ */
+function enclosingClass(lines, index) {
+  const own = /^[ \t]*/.exec(lines[index] || '')[0].length;
+  for (let at = index; at >= 0; at -= 1) {
+    // eslint-disable-next-line security/detect-object-injection -- numeric index.
+    const line = lines[at];
+    const depth = /^[ \t]*/.exec(line)[0].length;
+    if (depth < own && /^[ \t]*(?:export[ \t]+(?:default[ \t]+)?)?class\b/.test(line)) {
+      const end = lines.findIndex((next, n) => n > at && next.trim() && /^[ \t]*/.exec(next)[0].length <= depth && !/^\s*\}/.test(next));
+      return lines.slice(at, end === -1 ? lines.length : end).join('\n');
+    }
+    if (line.trim() && depth === 0 && at < index) break;
+  }
+  return '';
+}
 
 /**
  * How many packages one install command may name.
@@ -590,6 +653,12 @@ class AgentSession {
     this.client = options.client;
     this.model = options.model;
     this.capability = options.capability;
+    // The window goes on the client, not on each call, so the translator, the planner and
+    // inline completion all ask for the same `num_ctx` and Ollama never reloads the model
+    // between them. See `core/contextWindow`.
+    if (this.client && typeof this.client.setContextWindow === 'function' && this.capability && this.capability.numCtx) {
+      this.client.setContextWindow(this.model, this.capability.numCtx);
+    }
     this.gate = options.gate;
     this.workspaceRoot = options.workspaceRoot;
     this.memory = options.memory || null;
@@ -840,6 +909,9 @@ class AgentSession {
     // Ollama — including the planning and TODO-splitting passes, which happen outside
     // any loop and would be missed by instrumenting the loops instead.
     this._modelMsAtStart = this._modelMsSoFar();
+    if (this.client && typeof this.client.resetUsage === 'function') this.client.resetUsage();
+    /** The memory block this turn was given, for the panel. @type {string} */
+    this._recalled = '';
 
     try {
       // Read before routed. A request naming a file that is one letter away from a real
@@ -969,29 +1041,47 @@ class AgentSession {
         imageDescriptions: imageNotes,
       });
 
+      // On the constrained tier, a change to one named file is made before the loop is
+      // asked anything, and the loop starts out holding it. See `_dictateEdit`.
+      const preface =
+        mode === 'agent' && activeRoute.strategy === 'react'
+          ? await this._dictateEdit(task, activeRoute, changeSet, emit)
+          : null;
+
+      // A single-part request that the dictated edit has done is finished. The loop is not
+      // asked whether it agrees: measured on `llama3.2:1b`, it does not recognise finished
+      // work, and spent eight turns trying to make the same change again before ending on a
+      // report of failures over a correct file. See `contextTranslator.asksForMore`.
+      const finished = Boolean(preface && preface.done && !asksForMore(task));
       const loop = activeRoute.strategy === 'native' ? nativeToolLoop : reactLoop;
-      const outcome = await loop.run({
-        client: this.client,
-        model: this.model,
-        route: activeRoute,
-        task: effectiveTask,
-        context,
-        execute: (action) => this._execute(action, activeRoute, changeSet),
-        // Agent mode only. A Plan run that changed nothing did exactly what it was for,
-        // and challenging it would be the check firing on its own success condition.
-        verifyDone: mode === 'agent' ? this._doneVerifier(task, changeSet, 0) : undefined,
-        onEvent: emit,
-        signal: this._controller.signal,
-        images: this._visibleImages(),
-      });
+      const outcome = finished
+        ? { steps: preface.steps, summary: preface.summary, stopReason: 'done' }
+        : await loop.run({
+            preface: preface || undefined,
+            client: this.client,
+            model: this.model,
+            route: activeRoute,
+            task: effectiveTask,
+            context,
+            execute: (action) => this._execute(action, activeRoute, changeSet),
+            // Agent mode only. A Plan run that changed nothing did exactly what it was for,
+            // and challenging it would be the check firing on its own success condition.
+            verifyDone: mode === 'agent' ? this._doneVerifier(task, changeSet, 0) : undefined,
+            onEvent: emit,
+            signal: this._controller.signal,
+            images: this._visibleImages(),
+          });
 
       await this._remember(outcome.steps);
 
       // Before the honest system notes are appended, not after: those notes are the one
-      // part of a summary the model did not write, and they must not be redrafted.
-      const checkedSummary = await this._rethink(task, outcome.summary, {
-        changedFiles: !changeSet.isEmpty(),
-      });
+      // part of a summary the model did not write, and they must not be redrafted. A
+      // summary the extension composed from the change has nothing to redraft.
+      const checkedSummary = finished
+        ? outcome.summary
+        : await this._rethink(task, outcome.summary, {
+            changedFiles: !changeSet.isEmpty(),
+          });
 
       // A question answered with tools — "explain the auth flow" — leaves an action
       // trail of reads and no record of what was concluded. The `changed` guard keeps
@@ -2045,6 +2135,268 @@ class AgentSession {
   }
 
   /**
+   * The one existing file a request names, read whole, or null.
+   *
+   * Exactly one. A request naming two files is asking for something a single region
+   * cannot hold, and guessing which of them it meant first is the loop's job.
+   *
+   * @param {string} task
+   * @returns {Promise<{path: string, content: string} | null>}
+   * @private
+   */
+  async _singleNamedFile(task) {
+    if (!this.workspaceRoot) return null;
+    /** @type {Set<string>} */
+    const named = new Set();
+    // Bounded runs: this reads the user's message, which may be a pasted wall of text.
+    for (const match of String(task).slice(0, 20000).matchAll(/[\w./-]{1,160}\.[A-Za-z][A-Za-z0-9]{0,7}\b/g)) {
+      const candidate = match[0].replace(/^\.\//, '').replace(/[.,;:]+$/, '');
+      if (/^[a-z]+\.[a-z]+$/i.test(candidate) && !/\.(?:js|jsx|ts|tsx|py|java|kt|css|html|json|md|go|rs|rb|php|cs|c|h|cpp|vue|svelte|sh)$/i.test(candidate)) {
+        continue; // "e.g", "i.e" and friends
+      }
+      named.add(candidate);
+    }
+
+    const found = [];
+    for (const candidate of named) {
+      try {
+        const resolved = await pathGuard.assertRealPath(pathGuard.resolvePath(this.workspaceRoot, candidate));
+        // eslint-disable-next-line security/detect-non-literal-fs-filename -- confined and realpath-checked above.
+        const stats = await fs.promises.stat(resolved.absolute);
+        if (!stats.isFile() || stats.size > MAX_DICTATED_EDIT_BYTES) continue;
+        // eslint-disable-next-line security/detect-non-literal-fs-filename -- as above.
+        const content = await fs.promises.readFile(resolved.absolute, 'utf8');
+        if (content.includes('\0')) continue;
+        found.push({ path: resolved.relative, content });
+      } catch {
+        // Not a file in this workspace. Plenty of things in a request look like filenames.
+      }
+    }
+    return found.length === 1 ? found[0] : null;
+  }
+
+  /**
+   * Make a change to an existing file without asking a small model to find the text.
+   *
+   * ## Why
+   *
+   * Measured with `tools/bench-edit.js` on `llama3.2:1b`: with whole-file writes it passed
+   * 0 of 12 edits to a 164-line module, half its runs never producing a usable action; with
+   * `edit_file` available it still passed 0 of 12, because it filled `find` with words from
+   * the request ("8%") instead of text from the file, and once told the text was not there
+   * it lost the JSON format altogether. The coding was never the problem. Finding the lines
+   * and expressing the change through a protocol was.
+   *
+   * So the extension does the finding (`core/editRegion`), the model is asked in plain
+   * words to rewrite those lines (`dictation.dictateEdit`), and the answer is applied as an
+   * ordinary `edit_file`, placed by line, through `_execute`: the same path guard, gate,
+   * diff, change set, history and audit as any other write. This is the 0.9.0 dictation
+   * finding applied to edits instead of new files.
+   *
+   * Constrained tier only, Agent mode only, and only when the request names exactly one
+   * existing file and the region finder is confident. Everything else goes to the loop as
+   * before. The loop still runs afterwards, holding what was done, so a request with a
+   * second part gets it done and a finished one simply ends.
+   *
+   * @param {string} task
+   * @param {import('../core/promptRouter').Route} route
+   * @param {ChangeSet} changeSet
+   * @param {(event: object) => void} emit
+   * @returns {Promise<{steps: AgentStep[], hint: string, done?: boolean, summary?: string} | null>}
+   * @private
+   */
+  async _dictateEdit(task, route, changeSet, emit) {
+    if (!this.capability || this.capability.tier !== 'B') return null;
+    if (!route.allowedActions.has('edit_file') || route.readOnly) return null;
+
+    const target = await this._singleNamedFile(task);
+    if (!target) return null;
+    // A file with a secret in it is left to the loop, whose `read_file` redacts. The lines
+    // here go to the model unredacted, and redacting them is no fix: the rewrite would then
+    // carry the `[REDACTED:…]` marker back into the file in place of the real value.
+    if (redact(target.content) !== target.content) {
+      logger.debug(`${target.path} holds something the secrets scanner redacts; leaving it to the loop.`);
+      return null;
+    }
+    /** @type {any} */
+    let region = editRegion.locate(target.content, task, { path: target.path });
+    if (!region) {
+      logger.debug(`No confident region in ${target.path} for this request; leaving it to the loop.`);
+      return null;
+    }
+    logger.info(`Dictating an edit to ${target.path}: ${region.reason}.`);
+
+    const provides = codeShape.describe(target.content, target.path, { maxItems: 8 });
+    const lines = target.content.split(/\r?\n/);
+    // Names the file already declares at the top level. An addition that declares one of
+    // them again is the model rewriting the file around its new code, not adding to it.
+    const existing = new Set(editRegion.declaredNames(target.content));
+    /** @type {AgentStep[]} */
+    const steps = [];
+    let complaint = '';
+    /** A dropped check has been named to the model once already. */
+    let namedDrop = false;
+    for (let attempt = 1; attempt <= MAX_EDIT_ATTEMPTS; attempt += 1) {
+      if (this._controller.signal.aborted) break;
+      const reply = await dictation.dictateEdit({
+        client: this.client,
+        model: this.model,
+        path: target.path,
+        task,
+        region,
+        provides,
+        previousError: complaint,
+        signal: this._controller.signal,
+      });
+      if (!reply.ok) {
+        complaint = reply.reason;
+        continue;
+      }
+
+      // Written at the depth it replaces. Measured on the held-out inventory suite: a method
+      // rewritten at column 0 closed its class early, and every method after it became a
+      // nested function inside it.
+      const code =
+        region.mode === 'replace'
+          ? atDepth(reply.code, /^[ \t]*/.exec(region.text.split('\n').find((line) => line.trim()) || '')[0])
+          : region.mode === 'member' || region.mode === 'prepend'
+            ? atDepth(reply.code, region.indent)
+            : reply.code;
+
+      if (region.mode === 'insert' || region.mode === 'append' || region.mode === 'member') {
+        const again = editRegion.declaredNames(reply.code).filter((name) => existing.has(name));
+        if (again.length > 0) {
+          complaint =
+            `your answer declares ${again.map((name) => `"${name}"`).join(' and ')} again, which the file already has. ` +
+            'Write only the new code.';
+          continue;
+        }
+      }
+
+      // A rewrite that quietly dropped an existing check never reaches the file. See
+      // `dictation.droppedChecks`.
+      //
+      // First the model is told which check it dropped. If it drops it again, the question
+      // changes rather than repeats: measured, told "your rewrite removed `percent < 0`",
+      // `llama3.2:1b` sent the same rewrite again. What it could not do was keep the old
+      // rule while adding a new one; what it can do is write the new rule. So it is shown
+      // only the function's first line, asked for the lines that go at the top of its body,
+      // and they are inserted there, beside a check it never saw and so cannot lose.
+      const dropped = region.mode === 'replace' ? dictation.droppedChecks(region.text, reply.code, task) : [];
+      if (dropped.length > 0) {
+        logger.info(`Dictated edit to ${target.path} dropped ${dropped.join(', ')}.`);
+        const opener = region.text.split('\n')[0];
+        const body = region.text.split('\n').find((line, index) => index > 0 && line.trim());
+        if (namedDrop && /[{:]\s*$/.test(opener) && body && region.end > region.start) {
+          region = {
+            mode: 'prepend',
+            start: region.start + 1,
+            end: region.start,
+            text: '',
+            opener,
+            indent: /^[ \t]*/.exec(body)[0],
+            classText: enclosingClass(lines, region.start),
+            reason: `${region.reason}; asking only for new lines at the top of the body`,
+          };
+          complaint = '';
+          continue;
+        }
+        namedDrop = true;
+        complaint =
+          `your rewrite removed ${dropped.map((check) => `"${check}"`).join(' and ')}, which the request did not ask ` +
+          'to remove. Keep it exactly as it was, and add the new rule beside it.';
+        continue;
+      }
+
+      // Lines at the top of a body run before anything the function does, so they may only
+      // use what exists there. See `dictation.outOfScope`.
+      if (region.mode === 'prepend') {
+        const unknown = dictation.outOfScope(reply.code, {
+          opener: region.opener,
+          classText: region.classText,
+          fileText: target.content,
+        });
+        if (unknown.length > 0) {
+          logger.info(`New lines for ${target.path} use ${unknown.join(', ')}, which do not exist there; not applied.`);
+          complaint = `the new lines use ${unknown.join(', ')}, which do not exist at the start of the function.`;
+          continue;
+        }
+      }
+
+      /** @type {{find: string, replace: string, thought: string}} */
+      let placed;
+      if (region.mode === 'insert' && region.exportList) {
+        // The new code goes above the export list, and the names it declares go into the
+        // list when the request asked for them to be exported. One edit, so the file is
+        // never left with one half done. See `editRegion.withExports`.
+        const declared = editRegion.declaredNames(code).filter((name) => (region.names || []).includes(name));
+        const list =
+          /\bexport/i.test(task) && declared.length
+            ? editRegion.withExports(region.exportList.text, declared) || region.exportList.text
+            : region.exportList.text;
+        placed = {
+          find: region.exportList.text,
+          replace: `${code}\n\n${list}`,
+          thought: `add ${(region.names || []).join(', ') || 'the new code'} to ${target.path}, above its export list`,
+        };
+      } else if (region.mode === 'append') {
+        // An addition goes on lines of its own, after a blank line.
+        placed = { find: '', replace: `\n${code}\n`, thought: `add what the request asks for at the end of ${target.path}` };
+      } else if (region.mode === 'member') {
+        placed = {
+          find: '',
+          replace: `\n${code}\n`,
+          thought: `add ${(region.names || []).join(', ') || 'the new method'} to class ${region.className}`,
+        };
+      } else if (region.mode === 'prepend') {
+        placed = { find: '', replace: `${code}\n`, thought: `add the new rule at the top of ${region.opener.trim()}` };
+      } else {
+        const span = region.start === region.end ? `line ${region.start + 1}` : `lines ${region.start + 1}-${region.end + 1}`;
+        placed = { find: region.text, replace: code, thought: `rewrite ${span} of ${target.path} for the request` };
+      }
+
+      const action = {
+        action: 'edit_file',
+        path: target.path,
+        find: placed.find,
+        replace: placed.replace,
+        lines: { start: region.start, end: region.end },
+        thought: placed.thought,
+      };
+      const step = steps.length + 1;
+      emit({ type: 'action', step, action });
+      const executed = await this._execute(action, route, changeSet);
+      emit({ type: 'observation', step, action, result: executed });
+      steps.push({ action, result: executed });
+      if (executed.ok) {
+        const detail = executed.detail || {};
+        const what = detail.shapeChange || `+${detail.added || 0} / -${detail.removed || 0} lines`;
+        return {
+          steps,
+          done: true,
+          // Composed from the change itself, so it says exactly what happened to the file.
+          summary: `Changed ${target.path}: ${what}.`,
+          hint:
+            `That change was made from your request, using the lines of ${target.path} it is about. ` +
+            'If the request asked for anything else, do that next. If not, reply with "done" and say what changed.',
+        };
+      }
+      // A guard refused the result. Its reason is specific, so it is worth one more go.
+      complaint = executed.observation;
+    }
+
+    // The lines are still worth having: the loop's own edit can copy them exactly.
+    const shown = region.mode === 'replace' ? region.text : '';
+    return {
+      steps,
+      hint: shown
+        ? `The request is about these lines of ${target.path} (lines ${region.start + 1}-${region.end + 1}). ` +
+          `Copy them exactly into "find" when you use edit_file:\n${shown}`
+        : '',
+    };
+  }
+
+  /**
    * Make sure the file everything else was written for actually uses it.
    *
    * The single most expensive failure in two evaluations, and the one a build cannot
@@ -2369,6 +2721,21 @@ class AgentSession {
     if (typeof ms === 'number') result.ms = ms;
     if (typeof modelMs === 'number') result.modelMs = modelMs;
 
+    // How full the window got, from Ollama's own counts. A small model's answer depends
+    // on what it was actually shown, and until now nothing said how much that was.
+    const usage = this.client && this.client.usage;
+    if (usage && usage.requests > 0) {
+      result.context = {
+        numCtx: usage.numCtx || (this.capability && this.capability.numCtx) || null,
+        peakPromptTokens: usage.peakPromptTokens,
+        filled: usage.filled,
+      };
+    }
+    // What it was told it remembered. Shown under the reply for the same reason the
+    // image description is: when an answer is wrong, the first question is whether the
+    // model was given the wrong picture of the project or reasoned badly from the right one.
+    if (this._recalled) result.remembered = this._recalled.split('\n').filter(Boolean).slice(0, MAX_REMEMBERED_LINES);
+
     // Only when a *different* model did the looking. When the selected model described
     // its own image there is no second cost to account for, and naming it twice reads
     // as though there were.
@@ -2464,7 +2831,9 @@ class AgentSession {
 
     if (this.memory) blocks.push(await this.memory.renderForPrompt(this._recallDepth(), { about: opts.about }));
 
-    return blocks.filter(Boolean).join('\n');
+    const rendered = blocks.filter(Boolean).join('\n');
+    this._recalled = rendered;
+    return rendered;
   }
 
   /**
@@ -3187,6 +3556,9 @@ class AgentSession {
       result,
       ok: step.result.ok,
       isNew: Boolean(detail.isNew),
+      // What the change did, read off the file by `writeFile`. When present the translator
+      // uses it and asks the model nothing.
+      shapeChange: typeof detail.shapeChange === 'string' ? detail.shapeChange : undefined,
     };
   }
 }

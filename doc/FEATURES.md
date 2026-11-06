@@ -384,6 +384,7 @@ where bare JSON mode managed **0 out of 6**.
 | Setting | Default | Notes |
 |---|---|---|
 | `hirayacoder.ollama.endpoint` | `http://127.0.0.1:11434` | Loopback only. A remote address is rejected at construction, before any socket opens. |
+| `hirayacoder.ollama.contextLength` | `0` (auto) | The context window Ollama holds for the model (`num_ctx`). Auto asks for the tier's largest prompt plus a full file of output, up to 16,384: 8k on the constrained tier, 16k on the full one. Without it Ollama uses its own default, 4,096 on most machines, and drops the start of any prompt that does not fit. Prompts are trimmed to whatever is set. New in 1.2.0. |
 | `hirayacoder.ollama.requestTimeoutMs` | `300000` | CPU inference is slow; the default is deliberately generous. |
 | `hirayacoder.model.selected` | *(first installed)* | |
 | `hirayacoder.model.liteTierMaxParams` | `3` | At or below this, Tier B. |

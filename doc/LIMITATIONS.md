@@ -125,6 +125,12 @@ exports, a CommonJS module silently rewritten as ESM, an implementation replaced
 empty object. Every one of them parsed cleanly. There are guards for each of these
 specific shapes, and a guard only catches the shape it knows.
 
+Since 1.2.0 a small model changing one named file no longer retypes it: the extension
+picks the lines, the model rewrites only those, and the answer is checked for dropped
+checks and made-up names before you see the diff. That removed most of this failure on
+our edit benchmark. It does not apply when a request touches several files, or when the
+extension cannot tell which lines you mean. Then it is the old path, and the old risk.
+
 ### It does not know your codebase
 
 It sees what fits in the context window, which on a 1B model at medium settings is about

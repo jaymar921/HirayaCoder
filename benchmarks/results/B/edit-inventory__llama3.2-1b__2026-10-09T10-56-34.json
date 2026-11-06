@@ -1,0 +1,415 @@
+{
+  "harness": "bench-edit",
+  "suite": "inventory",
+  "model": "llama3.2:1b",
+  "machine": "B",
+  "tier": "B",
+  "numCtx": 8192,
+  "params": "1.2B",
+  "label": "1.2.0",
+  "at": "2026-10-09T10:56:34.264Z",
+  "summary": {
+    "runs": 12,
+    "passed": 9,
+    "changed": 9,
+    "damaged": 0,
+    "meanSeconds": 10.1
+  },
+  "runs": [
+    {
+      "sample": 0,
+      "task": "py-threshold",
+      "changed": true,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "done",
+      "seconds": 0.4,
+      "actions": [
+        "edit_file inventory.py"
+      ],
+      "edits": [
+        {
+          "find": "LOW_STOCK_THRESHOLD = 5",
+          "replace": "LOW_STOCK_THRESHOLD = 10",
+          "placed": true
+        }
+      ],
+      "refusals": [],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Edited inventory.py: \"LOW_STOCK_THRESHOLD = 5\" became \"LOW_STOCK_THRESHOLD = 10\""
+      ],
+      "summary": "Changed inventory.py: \"LOW_STOCK_THRESHOLD = 5\" became \"LOW_STOCK_THRESHOLD = 10\"."
+    },
+    {
+      "sample": 0,
+      "task": "py-oversell",
+      "changed": false,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "budget",
+      "seconds": 38.1,
+      "actions": [
+        "read_file inventory.py",
+        "edit_file inventory.py",
+        "edit_file inventory.py",
+        "edit_file inventory.py",
+        "edit_file inventory.py"
+      ],
+      "edits": [
+        {
+          "find": "raise ValueError(f\"{product.sku} is already in the inventory\")",
+          "replace": "raise ValueError(f\"{product.sku} is already in the inventory\")",
+          "placed": false
+        },
+        {
+          "find": "raise ValueError when quantity is more than the product has in stock",
+          "replace": "quantity < quantity in stock, e.g. quantity = 10 instead of quantity = 20",
+          "placed": false
+        },
+        {
+          "find": "Copy the exact lines you want to change into 'replace', put the new lines in 'replace', and send edit_file again.",
+          "replace": "raise ValueError if quantity > product quantity in stock, else do nothing (as per task requirements)",
+          "placed": false
+        },
+        {
+          "find": "7 | 8 | 9 | class Product: \\",
+          "replace": "9 | raise ValueError('Not enough stock')",
+          "placed": false
+        }
+      ],
+      "refusals": [
+        "EDIT_NO_CHANGE",
+        "EDIT_NOT_FOUND",
+        "EDIT_NOT_FOUND",
+        "EDIT_NOT_FOUND"
+      ],
+      "parseErrors": 3,
+      "unparseable": [
+        "{\"thought\": \"Read the contents of inventory.py\", \"action\": \"read_file\", \"path\": \"inventory.py:8:raise ValueError when quantity is more than product has in stock. Sell function should be modified to ch",
+        "{\"thought\": \"Edit inventory.py to change the quantity to a value that raises a ValueError when it's more than the product has in stock\", \"action\": \"edit_file\", \"path\": \"inventory.py\", \"find\": \"find li",
+        "{\"thought\": \"Edit the inventory.py file to fix the error in Step 7 of 8\", \"action\": \"edit_file\", \"path\": \"inventory.py\", \"find\": \"Copy the exact lines you want to change into \\\"find\\\", put the new lin"
+      ],
+      "memory": [
+        "- Asked \"In inventory.py, sell should raise a ValueError when the quantity is more than the product…\" — answered: I reached the step limit after 5 step(s) without finishing."
+      ],
+      "summary": "I reached the step limit after 5 step(s) without finishing.\n\nThese steps did not complete:\n- Could not find that text in inventory.py. The closest lines are:\n 7 | \n 8 | \n 9 | class Product:\n10 |     \"\"\"One kind of thing the shop sells.\"\"\"\n11 | \nCopy the lines you want to change exactly as they appea"
+    },
+    {
+      "sample": 0,
+      "task": "py-remove",
+      "changed": true,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "done",
+      "seconds": 0.9,
+      "actions": [
+        "edit_file inventory.py"
+      ],
+      "edits": [
+        {
+          "find": "    def remove_product(self, sku):\n        if sku not in self.products:\n            raise KeyError(sku)\n        return self.products.pop(sku)",
+          "replace": "    def remove_product(self, sku):\n        if sku not in self.products:\n            return None\n        return self.products.pop(sku)",
+          "placed": true
+        }
+      ],
+      "refusals": [],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Edited inventory.py: \"raise KeyError(sku)\" became \"return None\" in remove_product"
+      ],
+      "summary": "Changed inventory.py: \"raise KeyError(sku)\" became \"return None\" in remove_product."
+    },
+    {
+      "sample": 0,
+      "task": "py-method",
+      "changed": true,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "done",
+      "seconds": 0.6,
+      "actions": [
+        "edit_file inventory.py"
+      ],
+      "edits": [
+        {
+          "find": "",
+          "replace": "\n    def count_products(self):\n        return len(self.products)\n",
+          "placed": true
+        }
+      ],
+      "refusals": [],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Edited inventory.py: added Inventory.count_products()"
+      ],
+      "summary": "Changed inventory.py: added Inventory.count_products()."
+    },
+    {
+      "sample": 1,
+      "task": "py-threshold",
+      "changed": true,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "done",
+      "seconds": 0.3,
+      "actions": [
+        "edit_file inventory.py"
+      ],
+      "edits": [
+        {
+          "find": "LOW_STOCK_THRESHOLD = 5",
+          "replace": "LOW_STOCK_THRESHOLD = 10",
+          "placed": true
+        }
+      ],
+      "refusals": [],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Edited inventory.py: \"LOW_STOCK_THRESHOLD = 5\" became \"LOW_STOCK_THRESHOLD = 10\""
+      ],
+      "summary": "Changed inventory.py: \"LOW_STOCK_THRESHOLD = 5\" became \"LOW_STOCK_THRESHOLD = 10\"."
+    },
+    {
+      "sample": 1,
+      "task": "py-oversell",
+      "changed": false,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "budget",
+      "seconds": 37.5,
+      "actions": [
+        "read_file inventory.py",
+        "edit_file inventory.py",
+        "edit_file inventory.py",
+        "edit_file inventory.py",
+        "edit_file inventory.py"
+      ],
+      "edits": [
+        {
+          "find": "sell",
+          "replace": "raise ValueError when quantity is more than the product has in stock, quantity > LOW_STOCK_THRESHOLD\nraise ValueError('sale quantity must be positive')\nproduct ",
+          "placed": false
+        },
+        {
+          "find": "find 'raise ValueError when the quantity is more than the product has in stock'",
+          "replace": "edit 'sell' to 'raise ValueError when the quantity is more than the product has in stock', copy the exact lines you want to change into 'find', put the new line",
+          "placed": false
+        },
+        {
+          "find": "Copy the exact lines you want to change into 'replace', put the new lines in 'replace', and send edit_file again.",
+          "replace": "raise ValueError when the quantity is more than the product has in stock.",
+          "placed": false
+        },
+        {
+          "find": "7 | 8 | 9 | class Product:",
+          "replace": "raise ValueError when quantity is more than the product has in stock; return False; end class Product:",
+          "placed": false
+        }
+      ],
+      "refusals": [
+        "EDIT_AMBIGUOUS",
+        "EDIT_NOT_FOUND",
+        "EDIT_NOT_FOUND",
+        "EDIT_NOT_FOUND"
+      ],
+      "parseErrors": 3,
+      "unparseable": [
+        "{\"thought\": \"Read the contents of inventory.py\", \"action\": \"read_file\", \"path\": \"inventory.py:8:raise ValueError when quantity is more than product has in stock. Sell function should be modified to ch",
+        "{\"thought\": \"Read the contents of inventory.py to find the exact lines that need to be changed\", \"action\": \"read_file\", \"path\": \"inventory.py -> ok -> find -> 7 | 8 | 9 | class Product:     \\\"One kind",
+        "{\"thought\": \"Fix the error in inventory.py that prevents sell from raising a ValueError when the quantity is more than the product has in stock.\", \"action\": \"edit_file\", \"path\": \"inventory.py\", \"find\""
+      ],
+      "memory": [
+        "- Asked \"In inventory.py, sell should raise a ValueError when the quantity is more than the product…\" — answered: I reached the step limit after 5 step(s) without finishing."
+      ],
+      "summary": "I reached the step limit after 5 step(s) without finishing.\n\nThese steps did not complete:\n- Could not find that text in inventory.py. The closest lines are:\n 7 | \n 8 | \n 9 | class Product:\n10 |     \"\"\"One kind of thing the shop sells.\"\"\"\n11 | \nCopy the lines you want to change exactly as they appea"
+    },
+    {
+      "sample": 1,
+      "task": "py-remove",
+      "changed": true,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "done",
+      "seconds": 0.5,
+      "actions": [
+        "edit_file inventory.py"
+      ],
+      "edits": [
+        {
+          "find": "    def remove_product(self, sku):\n        if sku not in self.products:\n            raise KeyError(sku)\n        return self.products.pop(sku)",
+          "replace": "    def remove_product(self, sku):\n        if sku not in self.products:\n            return None\n        return self.products.pop(sku)",
+          "placed": true
+        }
+      ],
+      "refusals": [],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Edited inventory.py: \"raise KeyError(sku)\" became \"return None\" in remove_product"
+      ],
+      "summary": "Changed inventory.py: \"raise KeyError(sku)\" became \"return None\" in remove_product."
+    },
+    {
+      "sample": 1,
+      "task": "py-method",
+      "changed": true,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "done",
+      "seconds": 0.3,
+      "actions": [
+        "edit_file inventory.py"
+      ],
+      "edits": [
+        {
+          "find": "",
+          "replace": "\n    def count_products(self):\n        return len(self.products)\n",
+          "placed": true
+        }
+      ],
+      "refusals": [],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Edited inventory.py: added Inventory.count_products()"
+      ],
+      "summary": "Changed inventory.py: added Inventory.count_products()."
+    },
+    {
+      "sample": 2,
+      "task": "py-threshold",
+      "changed": true,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "done",
+      "seconds": 0.3,
+      "actions": [
+        "edit_file inventory.py"
+      ],
+      "edits": [
+        {
+          "find": "LOW_STOCK_THRESHOLD = 5",
+          "replace": "LOW_STOCK_THRESHOLD = 10",
+          "placed": true
+        }
+      ],
+      "refusals": [],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Edited inventory.py: \"LOW_STOCK_THRESHOLD = 5\" became \"LOW_STOCK_THRESHOLD = 10\""
+      ],
+      "summary": "Changed inventory.py: \"LOW_STOCK_THRESHOLD = 5\" became \"LOW_STOCK_THRESHOLD = 10\"."
+    },
+    {
+      "sample": 2,
+      "task": "py-oversell",
+      "changed": false,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "unparseable",
+      "seconds": 41,
+      "actions": [
+        "read_file inventory.py",
+        "edit_file inventory.py",
+        "edit_file inventory.py"
+      ],
+      "edits": [
+        {
+          "find": "raise ValueError(f\"{product.sku} is already in the inventory\")",
+          "replace": "raise ValueError(f\"{product.sku} is already in the inventory\")",
+          "placed": false
+        },
+        {
+          "find": "raise ValueError when quantity is more than the product has in stock",
+          "replace": "quantity < quantity in stock, e.g. quantity = 10 instead of quantity = 20",
+          "placed": false
+        }
+      ],
+      "refusals": [
+        "EDIT_NO_CHANGE",
+        "EDIT_NOT_FOUND"
+      ],
+      "parseErrors": 4,
+      "unparseable": [
+        "{\"thought\": \"Read the contents of inventory.py\", \"action\": \"read_file\", \"path\": \"inventory.py:8:raise ValueError when quantity is more than product has in stock. Sell function should be modified to ch",
+        "{\"thought\": \"Edit the inventory.py file to fix the issue with selling more product than is in stock\", \"action\": \"edit_file\", \"path\": \"inventory.py\", \"find\": \"copy the exact lines you want to change in",
+        "{\"thought\": \"Edit the inventory.py file to fix the issue with selling more product than is in stock\", \"action\": \"edit_file\", \"path\": \"inventory.py\", \"find\": \"Copy the exact lines you want to change in",
+        "{\"thought\": \"Still missing: check if the product has enough stock in inventory.py\", \"action\": \"search_workspace\", \"query\": \"product has enough stock in inventory.py and sell raises ValueError when qua"
+      ],
+      "memory": [
+        "- Asked \"In inventory.py, sell should raise a ValueError when the quantity is more than the product…\" — answered: {\"thought\": \"Still missing: check if the product has enough stock in inventory.py\", \"action\": \"search_workspace\", \"query\": \"product has enough stock in inventor…"
+      ],
+      "summary": "{\"thought\": \"Still missing: check if the product has enough stock in inventory.py\", \"action\": \"search_workspace\", \"query\": \"product has enough stock in inventory.py and sell raises ValueError when quantity is more than stock in inventory.py and sell raises ValueError when quantity is more than produ"
+    },
+    {
+      "sample": 2,
+      "task": "py-remove",
+      "changed": true,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "done",
+      "seconds": 0.6,
+      "actions": [
+        "edit_file inventory.py"
+      ],
+      "edits": [
+        {
+          "find": "    def remove_product(self, sku):\n        if sku not in self.products:\n            raise KeyError(sku)\n        return self.products.pop(sku)",
+          "replace": "    def remove_product(self, sku):\n        if sku not in self.products:\n            return None\n        return self.products.pop(sku)",
+          "placed": true
+        }
+      ],
+      "refusals": [],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Edited inventory.py: \"raise KeyError(sku)\" became \"return None\" in remove_product"
+      ],
+      "summary": "Changed inventory.py: \"raise KeyError(sku)\" became \"return None\" in remove_product."
+    },
+    {
+      "sample": 2,
+      "task": "py-method",
+      "changed": true,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "done",
+      "seconds": 0.4,
+      "actions": [
+        "edit_file inventory.py"
+      ],
+      "edits": [
+        {
+          "find": "",
+          "replace": "\n    def count_products(self):\n        return len(self.products)\n",
+          "placed": true
+        }
+      ],
+      "refusals": [],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Edited inventory.py: added Inventory.count_products()"
+      ],
+      "summary": "Changed inventory.py: added Inventory.count_products()."
+    }
+  ]
+}

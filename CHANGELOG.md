@@ -5,6 +5,193 @@ All notable changes to HirayaCoder are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-11-06
+
+This release is about small models doing agentic work. The question going in was whether
+better memory and a better translator would get a 1B model there. They help, and both got
+work in this release, but the two biggest problems turned out to be somewhere else:
+
+1. **Ollama was throwing away the start of long prompts.** Nothing set the context window,
+   so every request got the server's default, which is 4,096 tokens on most laptops.
+   Anything longer lost its beginning, which is where the instructions and the task sit.
+2. **Below about 3B, the action format is the bottleneck, not the coding.** Asked to change
+   one line in a 164-line file, `llama3.2:1b` could write the new line perfectly well. What
+   it could not do was copy the old line exactly into a JSON field so the extension could
+   find it.
+
+Both are fixed. On the new edit benchmark, `llama3.2:1b` went from 0 of 12 to 12 of 12 on
+the suite used during development, and from 0 of 12 to 9 of 12 on a second suite written
+afterwards in a different language, with no damaged file in any run. That second suite's
+first run did find four failures, which were fixed, so it is not fully unseen either; the
+details are in [benchmarks/README.md](benchmarks/README.md).
+
+**If you run a 3B model, try forcing the constrained tier for editing.** `llama3.2:latest`
+(3.2B) is just over the line, so by default it runs the full tool loop, which does not use
+dictated edits. There it passed 0 of 8 and 2 of 8. Forced onto the constrained tier with
+`hirayacoder.model.tierOverrides` (`{"llama3.2:latest": "B"}`) it passed 16 of 16. The
+default line has not moved, because the tier decides more than editing and the other
+benchmarks have not been re-run with it moved.
+
+### Fixed: Ollama was silently cutting the start of long prompts
+
+Until now no request set `num_ctx`. Measured on machine B (Ollama 0.40, GTX 1650 Super):
+
+| Request | Prompt sent | Prompt Ollama kept | What was lost |
+|---|---|---|---|
+| `llama3.2:1b`, no `num_ctx` | 12,648 tokens | 2,050 | the instructions at the top |
+| `qwen3.5:0.8b`, no `num_ctx` | 3,959 tokens | 2,050 | the first 31 of 60 requirements |
+
+The reply shares the same window, so the second request also stopped at 2,046 tokens of
+output with `done_reason: "length"`. That is the "cut off before the code block ended" that
+0.9.0 put down to `num_predict`.
+
+`core/contextWindow` now picks one window per model and the client sends it on every
+request for that model: the agent loop, the translator, the planner and inline completion.
+One number per model matters because Ollama reloads the model whenever `num_ctx` changes,
+and a reload costs 7 to 10 seconds even for a 1B model. The window is sized for the largest
+prompt the model's tier can send plus a full file of output (8k for the constrained tier,
+16k for the full one), and capped at 16k by default because the machines this is built for
+have 4 GB of VRAM or none. If the window is smaller than the tier would like, the prompt
+budget shrinks to fit, so the extension trims by priority instead of Ollama trimming from
+the top.
+
+New setting: `hirayacoder.ollama.contextLength`. `0` (the default) picks automatically. Set
+a number to go higher if you have memory to spare, or lower to save it.
+
+The full-tool loop (Tier A) keeps the whole conversation, which is fine until it no longer
+fits. It now makes room itself before Ollama does: old tool results are cut to their first
+line and old `write_file` calls lose the file body they carried (it is on disk, one
+`read_file` away). The system prompt, the task, and the last few messages are never touched.
+
+### Added: `edit_file`, for changing part of a file
+
+Until now, changing one line meant sending the whole file back. `edit_file` takes the exact
+lines to replace (`find`) and what goes in their place (`replace`). It has no route of its
+own to the disk: it works out the new content and hands it to `writeFile`, so the
+permission gate, the diff, the content guards and the audit log all apply exactly as before.
+It is listed before `write_file` on purpose, because small models lean towards the first
+tool that fits.
+
+When `find` does not match, the refusal shows the closest lines in the file so the next try
+can copy them. If it matches more than once, it asks for more context. If only the
+indentation differs, it matches anyway, re-indents the replacement to fit, and says so in
+the result. It is never fuzzier than that.
+
+### Added: dictated edits for small models
+
+`edit_file` alone was not enough for a 1B model. Measured on `llama3.2:1b`: it passed 0 of
+12 with whole-file writes, and still 0 of 12 with `edit_file`, because it filled `find` with
+words from the request (`"8%"`) instead of text from the file (`const TAX_RATE = 0.08;`).
+Once told the text was not there, it lost the JSON format altogether.
+
+So on the constrained tier, when a request names exactly one existing file, the extension
+does the finding itself. `core/editRegion` picks the lines the request is about by matching
+its words against the file's identifiers (`TAX_RATE` is "tax rate" once split). The model
+gets those lines and the request in plain words, and writes the new lines in a code block.
+The answer goes in as an ordinary `edit_file`, through the same gate, diff and audit. This
+is the 0.9.0 dictation finding (plain words beat JSON for small models) applied to edits.
+
+The answer is checked before anything is written:
+
+- **Nothing dropped.** Asked to make `applyDiscount` also reject percents over 50, the 1B
+  model replaced `percent < 0` with `percent > 50` three times out of three. A rewrite that
+  loses an existing check is refused with the check named. If it happens again, the model is
+  only asked for the new lines to put at the top of the function, next to a check it never
+  sees and so cannot lose.
+- **Nothing out of scope.** New lines at the top of a function can only use what exists
+  there. Asked to stop overselling, the model wrote `if quantity > self.stock:` in a class
+  that has no `stock`. That is refused, not written.
+- **No placeholders, no action objects, no whole-file rewrites.** `# ... rest unchanged`
+  and a JSON action pasted as code are both refused.
+- **Indentation kept.** A rewritten method is placed at the depth it replaces. Before this, a
+  method written at column 0 closed its class early.
+- **Additions go where additions go.** A new function goes above the export list and its
+  name is added to the list in one edit. A new method goes inside the class the request
+  names.
+
+If the region finder is not confident, or the file holds something the secrets scanner
+would redact, nothing is dictated and the request goes to the normal loop, as before. After
+a dictated edit the loop still runs if the request asked for more than one thing, and starts
+out knowing what was already done. A single-part request that the edit finished simply
+ends: measured, the 1B model did not recognise finished work and spent eight turns trying to
+make the same change again.
+
+### Changed: the translator, in both directions
+
+From the model's work to memory: for a file change, the memory note is now read off the
+change itself (`TAX_RATE = 0.08` became `0.1`, added `itemCount(cart)`) with no model call.
+That is cheaper (one less inference per write) and it cannot be wrong about what changed.
+
+From the request to the model: the goal reminder used to repeat the first 240 characters of
+the request. On a long brief those were the preamble ("You are an autonomous coding agent...")
+and the work was further down. `distillTask` now keeps the sentences that ask for work, in
+the user's own words and original order. `asksForMore` tells a one-part request from one
+with a second part, which is what lets a finished dictated edit end the turn.
+
+### Changed: memory says what each changed file provides
+
+The "files you changed this session" block used to say `edited src/cart.js (+3 / -1)`. That
+says the file was touched but not what to call. It now also lists what each file offers,
+with arguments (`addItem(cart, product, quantity = 1)`), read from disk when the prompt is
+built so it is never stale. `core/codeShape` reads this for CommonJS, ES modules, Python and
+Java. The read is confined to the workspace, size-capped, redacted and neutralised, the same
+as a tool read.
+
+### Changed: the panel
+
+- The header is two rows. The first says who and what (panel, session, model and tier). The
+  second has the run settings, with the mode first and the rarely changed toggles (Steps,
+  permissions, Guide) last and quieter.
+- The Thinking control is labelled. Low, Med and High meant nothing on their own.
+- Each reply's footer shows how much of the model's window the turn used
+  (`1.7k of 8k context`), from Ollama's own count, with a warning if the window filled.
+- Each reply has a closed **What it remembered** panel showing the exact memory the model
+  was given. When an answer is wrong, this tells you whether the model had the wrong picture
+  or reasoned badly from the right one.
+- The tier badge's tooltip now explains the window size too.
+- The image button is a drawn icon. The emoji showed as a box in some editor fonts.
+- In a narrow sidebar the key hint and the run status no longer fight for one line, and the
+  Steps panel no longer draws a stray rule when nothing is above it.
+
+### Fixed
+
+- **The generic error paragraph was being copied into files.** Refusals that already say
+  exactly what to send instead (a truncated file, removed exports, a missed edit, and
+  others) no longer get the generic "this failure does not match anything known" paragraph
+  appended. The 1B model was answering a missed edit with that paragraph as its `replace`
+  text. Repeats still escalate as before.
+- **A new export with no definition.** Asked to add `itemCount(cart)` and export it, the 1B
+  model added `itemCount,` to `module.exports` and wrote no function, three runs out of three.
+  In CommonJS that breaks every file that imports the module. `writeFile` now refuses a
+  change that exports a name defined nowhere.
+- **Three content guards contradicted their own message.** A write that removes exports,
+  exports a name it never defines, or drops an implementation is refused with a message
+  asking for the file again with the code intact. The loop then added "do not try that
+  again", which told the model the opposite. The hint now agrees with the refusal, as it
+  already did for the four older content guards.
+
+### Security
+
+Reviewed in [security/sast-report-2026-10-09-1.2.0.md](security/sast-report-2026-10-09-1.2.0.md).
+Three fixes came out of it: a dictated edit no longer sends a file holding a secret to the
+model unredacted, and two patterns that grew with the square of their input (one of them
+took 44 seconds on a 200,000-character line) are now linear. The production dependency tree
+is still empty.
+
+The development tree is back to zero advisories in `npm audit`, from 13 at the last check.
+Nothing here ships, because the packaged extension contains no `node_modules`. Most came
+out with `npm audit fix`. The rest needed `glob` 14 and `minimatch` 11 pinned under Mocha
+and `vsce` with `overrides`, because no released version of either tool asks for them yet.
+
+### Developer tooling
+
+`tools/bench-edit.js` is a new benchmark: can a model change part of an existing file
+without breaking the rest? Each task starts from a fresh fixture, runs through the real
+`AgentSession`, and is graded by loading the file and running checks against it, never by
+what the model said. Two suites: `cart` (CommonJS, used during development) and `inventory`
+(Python with a class, held out). Results and method are in
+[benchmarks/README.md](benchmarks/README.md).
+
 ## [1.1.0] — 2026-08-21
 
 HirayaCoder can look at pictures. Attach a screenshot, a photo, or a sketch of a screen

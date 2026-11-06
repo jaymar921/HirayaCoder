@@ -1,0 +1,285 @@
+{
+  "harness": "bench-edit",
+  "suite": "inventory",
+  "model": "llama3.2:latest",
+  "machine": "B",
+  "tier": "A",
+  "numCtx": 16384,
+  "params": "3.2B",
+  "label": "1.2.0",
+  "at": "2026-10-09T10:52:17.968Z",
+  "summary": {
+    "runs": 8,
+    "passed": 2,
+    "changed": 2,
+    "damaged": 1,
+    "meanSeconds": 45.4
+  },
+  "runs": [
+    {
+      "sample": 0,
+      "task": "py-threshold",
+      "changed": true,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "repeating",
+      "seconds": 55.1,
+      "actions": [
+        "edit_file inventory.py",
+        "read_file inventory.py",
+        "edit_file inventory.py",
+        "edit_file inventory.py",
+        "read_file inventory.py"
+      ],
+      "edits": [
+        {
+          "find": "low stock threshold",
+          "replace": "low stock threshold 10",
+          "placed": false
+        },
+        {
+          "find": "low stock threshold",
+          "replace": "low stock threshold 10",
+          "placed": false
+        },
+        {
+          "find": "LOW_STOCK_THRESHOLD = 5",
+          "replace": "LOW_STOCK_THRESHOLD = 10",
+          "placed": false
+        }
+      ],
+      "refusals": [
+        "EDIT_NOT_FOUND",
+        "EDIT_NOT_FOUND"
+      ],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Edited inventory.py: \"LOW_STOCK_THRESHOLD = 5\" became \"LOW_STOCK_THRESHOLD = 10\""
+      ],
+      "summary": "I kept calling edit_file the same way without progressing, so I stopped after 5 step(s).\n\nThese steps did not complete:\n- Could not find that text in inventory.py. The closest lines are:\n3 | import json\n4 | \n5 | LOW_STOCK_THRESHOLD = 5\n6 | CURRENCY = \"PHP\"\n7 | \nCopy the lines you want to change exac"
+    },
+    {
+      "sample": 0,
+      "task": "py-oversell",
+      "changed": false,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "repeating",
+      "seconds": 34.2,
+      "actions": [
+        "read_file inventory.py",
+        "read_file inventory.py",
+        "read_file inventory.py"
+      ],
+      "edits": [],
+      "refusals": [],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Asked \"In inventory.py, sell should raise a ValueError when the quantity is more than the product…\" — answered: I kept calling read_file the same way without progressing, so I stopped after 3 step(s)."
+      ],
+      "summary": "I kept calling read_file the same way without progressing, so I stopped after 3 step(s)."
+    },
+    {
+      "sample": 0,
+      "task": "py-remove",
+      "changed": false,
+      "intact": false,
+      "loads": false,
+      "regressions": [
+        "IndentationError: unexpected indent"
+      ],
+      "stopReason": "repeating",
+      "seconds": 52.2,
+      "actions": [
+        "read_file inventory.py",
+        "read_file inventory.py",
+        "edit_file inventory.py",
+        "read_file inventory.py"
+      ],
+      "edits": [
+        {
+          "find": "if sku not in self.products:",
+          "replace": "return None",
+          "placed": false
+        }
+      ],
+      "refusals": [],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Edited inventory.py: \"if sku not in self.products:\" became \"return None\" in remove_product"
+      ],
+      "summary": "I kept calling read_file the same way without progressing, so I stopped after 4 step(s)."
+    },
+    {
+      "sample": 0,
+      "task": "py-method",
+      "changed": false,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "repeating",
+      "seconds": 35.5,
+      "actions": [
+        "read_file inventory.py",
+        "read_file inventory.py",
+        "read_file inventory.py"
+      ],
+      "edits": [],
+      "refusals": [],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Asked \"Add a method count_products(self) to the Inventory class in inventory.py that returns how…\" — answered: I kept calling read_file the same way without progressing, so I stopped after 3 step(s)."
+      ],
+      "summary": "I kept calling read_file the same way without progressing, so I stopped after 3 step(s)."
+    },
+    {
+      "sample": 1,
+      "task": "py-threshold",
+      "changed": true,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "repeating",
+      "seconds": 50,
+      "actions": [
+        "edit_file inventory.py",
+        "read_file inventory.py",
+        "edit_file inventory.py",
+        "edit_file inventory.py",
+        "read_file inventory.py"
+      ],
+      "edits": [
+        {
+          "find": "low stock threshold",
+          "replace": "low stock threshold 10",
+          "placed": false
+        },
+        {
+          "find": "low stock threshold",
+          "replace": "low stock threshold 10",
+          "placed": false
+        },
+        {
+          "find": "LOW_STOCK_THRESHOLD = 5",
+          "replace": "LOW_STOCK_THRESHOLD = 10",
+          "placed": false
+        }
+      ],
+      "refusals": [
+        "EDIT_NOT_FOUND",
+        "EDIT_NOT_FOUND"
+      ],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Edited inventory.py: \"LOW_STOCK_THRESHOLD = 5\" became \"LOW_STOCK_THRESHOLD = 10\""
+      ],
+      "summary": "I kept calling edit_file the same way without progressing, so I stopped after 5 step(s).\n\nThese steps did not complete:\n- Could not find that text in inventory.py. The closest lines are:\n3 | import json\n4 | \n5 | LOW_STOCK_THRESHOLD = 5\n6 | CURRENCY = \"PHP\"\n7 | \nCopy the lines you want to change exac"
+    },
+    {
+      "sample": 1,
+      "task": "py-oversell",
+      "changed": false,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "repeating",
+      "seconds": 33.4,
+      "actions": [
+        "read_file inventory.py",
+        "read_file inventory.py",
+        "read_file inventory.py"
+      ],
+      "edits": [],
+      "refusals": [],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Asked \"In inventory.py, sell should raise a ValueError when the quantity is more than the product…\" — answered: I kept calling read_file the same way without progressing, so I stopped after 3 step(s)."
+      ],
+      "summary": "I kept calling read_file the same way without progressing, so I stopped after 3 step(s)."
+    },
+    {
+      "sample": 1,
+      "task": "py-remove",
+      "changed": false,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "repeating",
+      "seconds": 12.7,
+      "actions": [
+        "read_file inventory.py",
+        "edit_file inventory.py",
+        "read_file inventory.py",
+        "read_file inventory.py"
+      ],
+      "edits": [
+        {
+          "find": "sku not found",
+          "replace": "None",
+          "placed": false
+        }
+      ],
+      "refusals": [
+        "EDIT_NOT_FOUND"
+      ],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Asked \"In inventory.py, make remove_product return None instead of raising KeyError when the sku…\" — answered: I kept calling read_file the same way without progressing, so I stopped after 4 step(s)."
+      ],
+      "summary": "I kept calling read_file the same way without progressing, so I stopped after 4 step(s).\n\nThese steps did not complete:\n- Could not find that text in inventory.py. The closest lines are:\n10 |     \"\"\"One kind of thing the shop sells.\"\"\"\n11 | \n12 |     def __init__(self, sku, name, price, stock=0):\n13"
+    },
+    {
+      "sample": 1,
+      "task": "py-method",
+      "changed": false,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "repeating",
+      "seconds": 90.4,
+      "actions": [
+        "read_file inventory.py",
+        "read_file inventory.py",
+        "edit_file inventory.py",
+        "edit_file inventory.py",
+        "write_file inventory.py",
+        "write_file inventory.py",
+        "write_file inventory.py"
+      ],
+      "edits": [
+        {
+          "find": "def count_products(self):\\n    return len(self.products)",
+          "replace": "def count_products(self):\n    return len(self.products())",
+          "placed": false
+        },
+        {
+          "find": "def count_products(self):\\n    return len(self.products)",
+          "replace": "def count_products(self):\n    return len(self.products())",
+          "placed": false
+        }
+      ],
+      "refusals": [
+        "EDIT_NOT_FOUND",
+        "EDIT_NOT_FOUND",
+        "SUSPICIOUS_TRUNCATION",
+        "SUSPICIOUS_TRUNCATION",
+        "SUSPICIOUS_TRUNCATION"
+      ],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Asked \"Add a method count_products(self) to the Inventory class in inventory.py that returns how…\" — answered: I kept calling write_file the same way without progressing, so I stopped after 7 step(s)."
+      ],
+      "summary": "I kept calling write_file the same way without progressing, so I stopped after 7 step(s).\n\nThese steps did not complete:\n- Refused: the content you sent for inventory.py is only 107 characters, replacing 2153. That looks like a truncated response rather than a real edit. Send the COMPLETE updated fi"
+    }
+  ]
+}

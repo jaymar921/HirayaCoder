@@ -12,6 +12,7 @@ import {
   appendImages,
   appendVisionNote,
   appendRunMeta,
+  appendMemoryNote,
   TraceView,
   renderTodos,
   renderChanges,
@@ -338,9 +339,11 @@ const handlers = {
       else state.body.appendChild(fresh);
     }
     if (msg.changes && msg.changes.length > 0) state.body.appendChild(renderChanges(msg.changes));
+    // What the model was given from memory, closed, beside the other evidence.
+    appendMemoryNote(state.body, msg.remembered);
     // Last, so it reads as a footer on everything above it rather than as part of the
     // answer.
-    appendRunMeta(state.body, { model: msg.model, ms: msg.ms, vision: msg.vision });
+    appendRunMeta(state.body, { model: msg.model, ms: msg.ms, vision: msg.vision, context: msg.context });
     scrollToEnd();
   },
 
@@ -413,7 +416,8 @@ function updateModels(models, active, capability) {
   if (capability) {
     el.tierBadge.textContent = capability.label;
     el.tierBadge.className = `badge tier-${capability.tier}`;
-    el.tierBadge.title = capability.reason;
+    // The window is part of the same story as the tier: what this model can be handed.
+    el.tierBadge.title = capability.windowReason ? `${capability.reason}\n${capability.windowReason}` : capability.reason;
   }
 }
 

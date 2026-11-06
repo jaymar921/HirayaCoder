@@ -96,6 +96,29 @@ const NOT_STUCK = new Set([
 ]);
 
 /**
+ * Refusals that already say exactly what to send instead.
+ *
+ * The generic first-failure paragraph ("this failure does not match anything known, so
+ * read the error above literally…") was being appended to these too, and on a 1B model it
+ * did harm: measured on `llama3.2:1b`, a missed `edit_file` was answered with an edit
+ * whose `replace` was that paragraph, copied out of the observation, followed by turns of
+ * the same text until the token cap. A refusal that names its own remedy needs no second
+ * voice; repeats of it still escalate as before.
+ */
+const SELF_EXPLAINING = new Set([
+  'EDIT_NOT_FOUND',
+  'EDIT_AMBIGUOUS',
+  'EDIT_NO_CHANGE',
+  'MISSING_FIND',
+  'MISSING_CONTENT',
+  'SUSPICIOUS_TRUNCATION',
+  'FULLY_COMMENTED',
+  'EXPORTS_REMOVED',
+  'EXPORT_NOT_DEFINED',
+  'IMPLEMENTATION_REMOVED',
+]);
+
+/**
  * Reduce a failure message to something that compares equal across repeats.
  *
  * Line numbers, addresses, and paths change between two runs of the same broken code;
@@ -259,6 +282,7 @@ class ErrorRecovery {
       // and a second one saying the same thing in different words is noise in a context
       // window that has none to spare.
       if (failure.diagnosed) return { kind: 'none', note, count: known.count };
+      if (failure.error && SELF_EXPLAINING.has(failure.error)) return { kind: 'none', note, count: known.count };
       return { kind: 'guidance', guidance: this._firstGuidance(failure), note, count: known.count };
     }
 
@@ -427,4 +451,5 @@ module.exports = {
   headline,
   REPEATS_BEFORE_ASKING,
   NOT_STUCK,
+  SELF_EXPLAINING,
 };

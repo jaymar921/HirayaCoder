@@ -2,7 +2,7 @@
   "name": "hirayacoder",
   "displayName": "HirayaCoder",
   "description": "A fully offline, privacy-first AI coding agent powered by your local Ollama instance. Agentic on every model — even 1B.",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "publisher": "jaymar921",
   "author": {
     "name": "jaymar921",
@@ -234,6 +234,12 @@
           "default": "http://127.0.0.1:11434",
           "markdownDescription": "Base URL of your local Ollama instance. **Must be a loopback address** (`127.0.0.1`, `localhost`, or `::1`) — HirayaCoder rejects any non-loopback host by design, so no code or context ever leaves your machine."
         },
+        "hirayacoder.ollama.contextLength": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "markdownDescription": "How many tokens Ollama holds for the model (its `num_ctx`). **0 picks automatically**: enough for the largest prompt your model's tier sends plus a full file of output, up to 16,384. Without this, Ollama uses its own default, which is 4,096 on any machine with less than 24 GB of VRAM, and silently drops the start of any prompt that does not fit. Raise it if you have memory to spare and use a larger model; lower it to save memory, and prompts are trimmed to fit."
+        },
         "hirayacoder.ollama.requestTimeoutMs": {
           "type": "number",
           "default": 300000,
@@ -442,7 +448,15 @@
   },
   "overrides": {
     "diff": "^9.0.0",
-    "serialize-javascript": "^7.1.0"
+    "serialize-javascript": "^7.1.0",
+    "mocha": {
+      "glob": "^14.0.3",
+      "minimatch": "^11.0.5"
+    },
+    "@vscode/vsce": {
+      "glob": "^14.0.3",
+      "minimatch": "^11.0.5"
+    }
   },
   "dependencies": {}
 }

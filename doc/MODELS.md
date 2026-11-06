@@ -721,6 +721,35 @@ is to read what the model actually wrote.
 
 ---
 
+## Editing an existing file (1.2.0)
+
+From `tools/bench-edit.js`: four ordinary change requests against a 164-line CommonJS
+module (`cart`) and four against an 85-line Python class (`inventory`, written later).
+Graded by running the file: the requested behaviour has to be there and everything else
+has to behave as before. Machine B, Ollama 0.40.
+
+| Model | Loop | `cart` 1.1.0 | `cart` 1.2.0 | `inventory` 1.1.0 | `inventory` 1.2.0 |
+|---|---|---|---|---|---|
+| `llama3.2:1b` | Tier B, its default | 0/12 | **12/12** | 0/12 | **9/12** |
+| `llama3.2:latest` (3B) | Tier A, its default | 0/8, 1 damaged | 0/8 | 0/8 | 2/8, 1 damaged |
+| `llama3.2:latest` (3B) | Tier B, forced | | **8/8** | | **8/8** |
+
+The gain comes from dictated edits: on the constrained tier the extension finds the lines
+a request is about and asks the model for the rewritten lines in plain words, instead of
+asking it to copy the old text into a JSON field. The 1B model could always write the new
+line. It could not point at the old one.
+
+The row worth acting on is the last one. `llama3.2:latest` is 3.2B, just above the
+default 3B line, so it gets the full tool loop, and on that loop it still mostly re-reads
+the file until the repeat guard stops it. On the constrained tier it passed every run. If
+you use it, set `hirayacoder.model.tierOverrides` to `{"llama3.2:latest": "B"}`. The
+default line has not moved yet because the tier decides more than editing, and the build
+and real-world benchmarks have not been re-run with it moved.
+
+Method, task list and raw runs: [benchmarks/README.md](../benchmarks/README.md), under "The edit benchmark".
+
+---
+
 ## What each model exposed
 
 Every item here was invisible to the mocked test suite.

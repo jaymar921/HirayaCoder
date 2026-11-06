@@ -28,6 +28,7 @@ const path = require('path');
 
 const { detectEol, applyEol, toLf } = require('../../utils/platform');
 const importGraph = require('../../core/importGraph');
+const codeShape = require('../../core/codeShape');
 
 /** Below this fraction of the original size, a replacement is treated as truncated. */
 const SUSPICIOUS_SHRINK_RATIO = 0.2;
@@ -485,19 +486,31 @@ module.exports = async function writeFile(args, context) {
   //
   // Only names the previous version actually defined are checked, so a file that was
   // already broken this way is not made un-editable.
+  //
+  // And, since 1.2.0, names the edit *added* to the export list without defining them.
+  // Measured on `llama3.2:1b`, asked to add `itemCount(cart)` and export it: it added
+  // `itemCount,` to `module.exports` and wrote no function, three runs out of three. In
+  // CommonJS a shorthand name that does not exist is a ReferenceError the moment the file
+  // is loaded, so every importer broke, not just the new export.
   if (!isNew && MODULE_LANGUAGES.has(path.extname(args.path).toLowerCase())) {
+    const exportedBefore = exportedNames(existing);
     const orphaned = [...exportedNames(nextContent)].filter(
-      (name) => !definesName(nextContent, name) && definesName(existing, name)
+      (name) => !definesName(nextContent, name) && (definesName(existing, name) || !exportedBefore.has(name))
     );
 
     if (orphaned.length > 0) {
+      const added = orphaned.filter((name) => !exportedBefore.has(name));
       return {
         ok: false,
         observation:
-          `Refused: ${args.path} exports ${orphaned.map((n) => `"${n}"`).join(', ')}, but the content you ` +
-          `sent no longer defines ${orphaned.length === 1 ? 'it' : 'them'}. Importing the file would give ` +
-          'undefined. If you renamed something, update the export list to match; otherwise keep the ' +
-          'original names and change only what you were asked to change.',
+          added.length === orphaned.length
+            ? `Refused: ${args.path} now exports ${orphaned.map((n) => `"${n}"`).join(', ')}, but nothing in the ` +
+              `file defines ${orphaned.length === 1 ? 'it' : 'them'}. Loading the file would fail. Write the ` +
+              `${orphaned.length === 1 ? 'definition' : 'definitions'} too, above the export list.`
+            : `Refused: ${args.path} exports ${orphaned.map((n) => `"${n}"`).join(', ')}, but the content you ` +
+              `sent no longer defines ${orphaned.length === 1 ? 'it' : 'them'}. Importing the file would give ` +
+              'undefined. If you renamed something, update the export list to match; otherwise keep the ' +
+              'original names and change only what you were asked to change.',
         error: 'EXPORT_NOT_DEFINED',
       };
     }
@@ -596,9 +609,29 @@ module.exports = async function writeFile(args, context) {
     observation: written + describeBrokenImports(broken, target.relative),
     // Carried so `stepGuard` can fail a step on it without needing the filesystem —
     // a file whose imports point at nothing is not the work the step was asked for.
-    detail: { path: target.relative, isNew, brokenImports: broken, ...change },
+    //
+    // `shapeChange` is what the edit did in words (a definition added, a line changed),
+    // read off the two versions here because this is the only place that has both. The
+    // translator stores it instead of asking the model; see `contextTranslator`.
+    detail: { path: target.relative, isNew, brokenImports: broken, shapeChange: describeShapeChange(existing, nextContent, target.relative), ...change },
   };
 };
+
+/**
+ * What the write changed, in words, or null. Never fatal: a description is a nicety.
+ *
+ * @param {string | null} before
+ * @param {string} after
+ * @param {string} relative
+ * @returns {string | null}
+ */
+function describeShapeChange(before, after, relative) {
+  try {
+    return codeShape.describeChange(before, after, relative);
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Relative imports in the file just written that reach nothing.

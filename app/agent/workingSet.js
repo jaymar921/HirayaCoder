@@ -170,6 +170,14 @@ class WorkingSet {
           this.read.set(path, { step, bytes: (action.code || '').length });
         }
         break;
+      case 'edit_file':
+        // Written, not created, and the read is left as it was: the model sent the lines it
+        // changed, not the file, so it knows no more of the rest than it did before.
+        if (path) {
+          this.written.set(path, { step, created: false });
+          this.deleted.delete(path);
+        }
+        break;
       case 'delete_file':
         if (path) {
           this.deleted.add(path);

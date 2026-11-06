@@ -97,7 +97,7 @@ const NARRATION_PATTERNS = [
  * "Edited src/greet.js (failed)" — nothing the next turn can use, crowding out the
  * one fact that was worth keeping.
  */
-const UNMEMORABLE_WHEN_FAILED = new Set(['write_file', 'delete_file']);
+const UNMEMORABLE_WHEN_FAILED = new Set(['write_file', 'edit_file', 'delete_file']);
 
 /**
  * @param {string} action
@@ -295,12 +295,15 @@ const TRANSLATE_TIMEOUT_MS = 30000;
  * @property {string} [thought]     The model's stated reason for the step.
  * @property {string} [result]      One-line outcome.
  * @property {boolean} [ok]
+ * @property {boolean} [isNew]
+ * @property {string} [shapeChange] What a write changed, read off the file by `writeFile`.
  */
 
 /**
  * @typedef {object} TranslateResult
  * @property {string[]} notes       Notes actually stored.
  * @property {boolean} skipped      True when nothing was worth remembering.
+ * @property {boolean} [modelCalled] True when the model was asked; false when the note was composed.
  * @property {string} [error]
  */
 
@@ -324,6 +327,7 @@ function formatStep(step) {
   let opening;
   switch (step.action) {
     case 'write_file':
+    case 'edit_file':
       opening = `The assistant edited${target || ' a file'}.`;
       break;
     case 'delete_file':
@@ -448,6 +452,8 @@ function composeNote(step, phrase) {
     case 'write_file':
       if (!step.path) return phrase ? `Changed${failed}${detail}` : null;
       return `${step.isNew ? 'Created' : 'Edited'} ${step.path}${failed}${detail}`;
+    case 'edit_file':
+      return step.path ? `Edited ${step.path}${failed}${detail}` : null;
     case 'delete_file':
       return step.path ? `Deleted ${step.path}${failed}${detail}` : null;
     // Folder notes carry no `detail`: the phrase a translator invents about a mkdir is
@@ -470,6 +476,192 @@ function composeNote(step, phrase) {
     default:
       return phrase ? `${step.action} on ${step.path || 'the workspace'}${failed}${detail}` : null;
   }
+}
+
+/** A description read off a file may run longer than a model's phrase; it is not prose. */
+const MAX_DERIVED_CHARS = 180;
+
+/**
+ * Use a change description that `writeFile` read off the two versions of a file, or null.
+ *
+ * ## Why the model is not asked about writes any more
+ *
+ * For a write, the question the translator puts to the model ("what changed?") has an
+ * answer sitting in the file. Asking anyway costs a full inference per write (seconds on
+ * a laptop, at the end of every turn) and returns a paraphrase at best: "updated the tax
+ * calculation". What the next turn can act on is the thing itself:
+ *
+ *     Edited src/cart.js: "const TAX_RATE = 0.08;" became "const TAX_RATE = 0.1;"
+ *     Edited src/cart.js: added itemCount(cart)
+ *     Created src/hooks/useTodos.js: provides useTodos(initial = [])
+ *
+ * Those name the identifiers a later step has to call or import, and they cannot be
+ * invented, because nothing wrote them but the diff.
+ *
+ * They are not trusted for that, though. The quoted line is file content, and file
+ * content is where injected instructions live, so the same standing-instruction check the
+ * model's phrases face applies here. A line that fails it costs the note its detail, not
+ * the note.
+ *
+ * @param {string | null | undefined} shapeChange
+ * @returns {string | null}
+ */
+function derivedPhrase(shapeChange) {
+  let text = typeof shapeChange === 'string' ? shapeChange.replace(/\s+/g, ' ').trim() : '';
+  if (text.length < MIN_PHRASE_CHARS) return null;
+  if (looksLikeInstruction(text)) {
+    logger.warn('A change description quoted text that reads like an instruction; it was not stored.');
+    return null;
+  }
+  if (text.length > MAX_DERIVED_CHARS) {
+    const cut = text.slice(0, MAX_DERIVED_CHARS);
+    const lastSpace = cut.lastIndexOf(' ');
+    text = `${(lastSpace > MIN_PHRASE_CHARS ? cut.slice(0, lastSpace) : cut).replace(/[\s,;:(-]+$/, '')}…`;
+  }
+  return text;
+}
+
+/**
+ * Verbs a request uses when it asks for work. A sentence that opens with one is an
+ * instruction; a sentence that opens with "You are" is a preamble.
+ */
+const WORK_VERB =
+  /^(?:(?:please|also|then|and|next|finally|first|second|lastly),?\s+){0,2}(?:add|build|change|create|fix|implement|make|move|remove|rename|replace|update|write|delete|refactor|set|use|ensure|convert|show|return|handle|support|include|install|test|wire|connect|import|export|display|store|save|load|validate|render|style|keep)\b/i;
+
+/** Sentences that set the scene rather than ask for anything. */
+const PREAMBLE =
+  /^(?:you are|you're|your (?:job|task|role)|act as|use this (?:prompt|brief|document|spec)|follow (?:every|the|these|all)|read (?:the|this|every)|below|the following|here (?:is|are)|note:|important:|context:)/i;
+
+/**
+ * A file path or a backticked name: the parts of a sentence a step can act on.
+ *
+ * Every run is bounded. Unbounded, `[\w.-]+\/` is the shape `stepBrief.PATH_TOKEN` had
+ * before 1.0.0 (SAST-014): on a long run of word characters with no slash, every start
+ * position scans to the end, and 200,000 characters froze the editor for 85 seconds.
+ */
+const ANCHOR = /`[^`\n]{1,80}`|\b[\w-]{2,120}\.[a-z][a-z0-9]{1,4}\b|\b[A-Za-z_$][\w$]{0,60}\(/gi;
+
+/**
+ * The sentences of a long request that say what to do, in the request's own words.
+ *
+ * ## Why
+ *
+ * `reactLoop.goalReminder` restates the task right before the model decides, because by
+ * then the request is thousands of tokens behind it. It restated the first 240 characters.
+ * On the 0.9.0 benchmark brief those were "You are an autonomous coding agent. Build a
+ * complete, working TODO application from scratch. Follow every instruction below in
+ * order…", which is the preamble, while the work was in the four thousand characters after
+ * it. A small model reminded of the preamble keeps looking at the project.
+ *
+ * So for a request longer than the reminder, the reminder carries the sentences that ask
+ * for work: the ones that open with a verb of work, name a file, or backtick an
+ * identifier, in their original order. Nothing is paraphrased; each kept sentence is the
+ * user's own text, and a request with no sentence that scores falls back to its head,
+ * which is what was there before.
+ *
+ * @param {string} task
+ * @param {number} maxChars
+ * @returns {{text: string, distilled: boolean}}
+ */
+function distillTask(task, maxChars) {
+  const flat = String(task || '').replace(/\s+/g, ' ').trim();
+  if (flat.length <= maxChars) return { text: flat, distilled: false };
+
+  // Sentences and list items. A line break is a boundary of its own: briefs are written
+  // as lists far more often than as paragraphs.
+  const pieces = String(task)
+    .slice(0, 20000)
+    .split(/\n+|(?<=[.!?])\s+(?=[A-Z`"'(])/)
+    // A drawn folder tree is structure, not an instruction; core/fileTree reads it as paths.
+    .filter((piece) => !/[├└│┬─]/.test(piece))
+    .map((piece) =>
+      piece
+        .replace(/^[\s>*•#\-\d.)]+/, '')
+        .replace(/\*\*/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+    )
+    .filter((piece) => piece.length >= 8);
+
+  // The first sentence that asks for work is usually the headline ("Build a TODO app"),
+  // and the rest are its details. Without a boost the details won on anchors alone.
+  const headline = pieces.findIndex((text) => WORK_VERB.test(text) && !PREAMBLE.test(text));
+  const scored = pieces.map((text, index) => {
+    let score = 0;
+    if (WORK_VERB.test(text)) score += index === headline ? 8 : 3;
+    if (PREAMBLE.test(text)) score -= 3;
+    score += Math.min(4, (text.match(ANCHOR) || []).length * 2);
+    if (/\b(?:should|must|needs? to|has to)\b/i.test(text)) score += 1;
+    return { text, index, score };
+  });
+
+  const ranked = scored.filter((piece) => piece.score > 0).sort((a, b) => b.score - a.score || a.index - b.index);
+  if (ranked.length === 0) return { text: `${flat.slice(0, maxChars)}…`, distilled: false };
+
+  /** @type {typeof ranked} */
+  const kept = [];
+  let used = 0;
+  for (const piece of ranked) {
+    const cost = piece.text.length + 3;
+    if (used + cost > maxChars) {
+      if (kept.length === 0) kept.push({ ...piece, text: `${piece.text.slice(0, maxChars - 1)}…` });
+      continue;
+    }
+    kept.push(piece);
+    used += cost;
+  }
+  kept.sort((a, b) => a.index - b.index);
+  // Gaps are marked, so the restatement never reads as the whole request: "…" wherever
+  // something was left out, including before the first kept sentence and after the last.
+  let text = kept[0].index > 0 ? '… ' : '';
+  kept.forEach((piece, position) => {
+    if (position > 0) text += piece.index === kept[position - 1].index + 1 ? ' ' : ' … ';
+    text += piece.text;
+  });
+  if (kept[kept.length - 1].index < pieces.length - 1) text += ' …';
+  return { text, distilled: true };
+}
+
+/** A clause whose object is a pronoun continues the one before it: "add X and export it". */
+const CONTINUES = /^\S+\s+(?:it|them|this|that|these|those)\b/i;
+
+/**
+ * Does the request ask for more than one piece of work?
+ *
+ * Used after a dictated edit has done what the request named, to decide whether the turn
+ * is over. Measured on `llama3.2:1b`: with the tax rate already changed correctly, the loop
+ * that followed spent eight turns trying to change it again, because a 1B model does not
+ * recognise finished work, and the turn ended reporting failures over a correct file. So the
+ * extension decides, from the request's own clauses, rather than asking.
+ *
+ * A clause counts when it opens with a verb of work, after a sentence break, a list break,
+ * or a joining word ("and", "then", "also"). "Add a function and export it" is one piece of
+ * work: the second clause's object points back at the first.
+ *
+ * @param {string} task
+ * @returns {boolean}
+ */
+function asksForMore(task) {
+  const clauses = String(task || '')
+    .slice(0, 20000)
+    // Commas too: "In src/cart.js, change the rate" opens its clause after the comma.
+    // The spaces around a joining word are bounded: unbounded, every position in a long
+    // run of them scanned to its end, and 20,000 spaces cost 0.4 seconds a turn.
+    .split(/[.;!?\n,]+\s*|\s{1,40}(?:and then|and also|and|then|also|plus)\s{1,40}/i)
+    .map((clause) =>
+      clause
+        .replace(/^[\s>*•#\-\d.)]+/, '')
+        .replace(/^(?:and then|and also|and|then|also|plus)\s+/i, '')
+        .trim()
+    )
+    .filter(Boolean);
+  let work = 0;
+  for (const clause of clauses) {
+    if (!WORK_VERB.test(clause)) continue;
+    if (work > 0 && CONTINUES.test(clause)) continue;
+    work += 1;
+  }
+  return work > 1;
 }
 
 class ContextTranslator {
@@ -532,7 +724,17 @@ class ContextTranslator {
     // Decided here rather than asked of the model — see UNMEMORABLE_ACTIONS.
     if (!isMemorableAction(step.action, step.ok)) {
       logger.debug(`Skipping translation for unmemorable action "${step.action}".`);
-      return { notes: [], skipped: true };
+      return { notes: [], skipped: true, modelCalled: false };
+    }
+
+    // A change to a file is described from the file. See `derivedPhrase`.
+    const derived = step.ok === false ? null : derivedPhrase(step.shapeChange);
+    if (derived) {
+      const note = composeNote(step, derived);
+      if (!note) return { notes: [], skipped: true, modelCalled: false };
+      const stored = await this.memoryStore.append(note);
+      if (stored) logger.debug(`Remembered (read off the file): ${note}`);
+      return { notes: stored ? [note] : [], skipped: !stored, modelCalled: false };
     }
 
     // Nothing to summarize means nothing to ask. Composing the note directly is
@@ -592,7 +794,7 @@ class ContextTranslator {
     const note = composeNote(step, phrase);
     if (!note) {
       logger.debug('Context translator found nothing worth remembering.');
-      return { notes: [], skipped: true, error };
+      return { notes: [], skipped: true, error, modelCalled: true };
     }
 
     // append() returns false for exact and near-duplicates alike.
@@ -604,7 +806,7 @@ class ContextTranslator {
     if (stored) logger.debug(`Remembered: ${note}`);
     else logger.debug(`Skipped duplicate note: ${note}`);
 
-    return { notes: stored ? [note] : [], skipped: !stored, error };
+    return { notes: stored ? [note] : [], skipped: !stored, error, modelCalled: true };
   }
 
   /**
@@ -624,10 +826,11 @@ class ContextTranslator {
     let calls = 0;
 
     for (const step of meaningful) {
-      if (calls < MAX_SESSION_TRANSLATE_CALLS) {
+      // A note composed from the file costs nothing, so it never waits for the budget.
+      if (calls < MAX_SESSION_TRANSLATE_CALLS || derivedPhrase(step.ok === false ? undefined : step.shapeChange)) {
         const result = await this.translate(step, opts);
         notes.push(...result.notes);
-        calls += 1;
+        if (result.modelCalled) calls += 1;
         continue;
       }
 
@@ -667,6 +870,9 @@ class ContextTranslator {
 
 module.exports = {
   ContextTranslator,
+  derivedPhrase,
+  distillTask,
+  asksForMore,
   formatStep,
   parsePhrase,
   composeNote,

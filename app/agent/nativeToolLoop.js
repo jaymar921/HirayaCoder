@@ -24,7 +24,8 @@
 
 const logger = require('../utils/logger');
 const { parseToolCalls, REQUIRED_FIELDS } = require('../core/outputParser');
-const { truncateToTokens } = require('../utils/tokenBudget');
+const { truncateToTokens, estimateTokens } = require('../utils/tokenBudget');
+const { promptBudgetFor, PROMPT_OVERHEAD } = require('../core/contextWindow');
 const { WorkingSet } = require('./workingSet');
 
 /**
@@ -44,6 +45,87 @@ function missingRequired(name, args) {
     const value = args ? args[String(field)] : undefined;
     return typeof value !== 'string' || value.trim().length === 0;
   });
+}
+
+/** The most recent messages, which are never shortened: they are what the next decision is about. */
+const KEEP_RECENT_MESSAGES = 4;
+
+/** What an old tool result is shortened to. */
+const TRIMMED_RESULT_CHARS = 160;
+
+/**
+ * Keep the conversation inside the model's window by shortening its oldest parts.
+ *
+ * This tier keeps the whole exchange, which is right while it fits and quietly wrong
+ * once it does not: Ollama makes room by dropping the oldest messages, and the oldest
+ * message after the system prompt is the task. A long Tier A run ended up deciding its
+ * next step from tool results alone. So the extension makes the room instead, and takes
+ * it from the cheapest place, which is old tool output the model has already acted on:
+ *
+ *  - the system prompt and the opening message (the task and its context) are never
+ *    touched;
+ *  - neither are the last few messages, which are the turn being decided;
+ *  - an old tool result keeps its first line, which says what happened;
+ *  - an old `write_file` call keeps its path and loses the file body it carried, which
+ *    is on disk and one `read_file` away.
+ *
+ * Messages are shortened in place and never removed, so every tool call still has its
+ * result and the chat template sees the shape it was trained on.
+ *
+ * @param {Array<Record<string, any>>} messages
+ * @param {number | null | undefined} numCtx
+ * @param {object[]} [tools]  Native tool schemas, which count against the window too.
+ * @returns {number} How many messages were shortened.
+ */
+function fitHistory(messages, numCtx, tools) {
+  if (!numCtx || !Array.isArray(messages)) return 0;
+  // The same split contextWindow uses: what is left after the reply's reserve.
+  const limit = promptBudgetFor(numCtx) * PROMPT_OVERHEAD;
+  const toolTokens = tools && tools.length ? estimateTokens(JSON.stringify(tools)) : 0;
+  const size = (message) =>
+    estimateTokens(String(message.content || '')) +
+    (Array.isArray(message.tool_calls) ? estimateTokens(JSON.stringify(message.tool_calls)) : 0);
+
+  let total = toolTokens + messages.reduce((sum, message) => sum + size(message), 0);
+  if (total <= limit) return 0;
+
+  let trimmed = 0;
+  const last = messages.length - KEEP_RECENT_MESSAGES;
+  for (let index = 2; index < last && total > limit; index += 1) {
+    // Numeric loop index over the array being walked.
+    // eslint-disable-next-line security/detect-object-injection
+    const message = messages[index];
+    const before = size(message);
+
+    if (message.role === 'tool' && String(message.content || '').length > TRIMMED_RESULT_CHARS) {
+      const first = String(message.content).split('\n')[0].slice(0, TRIMMED_RESULT_CHARS);
+      message.content = `${first} [rest trimmed to fit the context window]`;
+    } else if (message.role === 'assistant' && Array.isArray(message.tool_calls)) {
+      message.tool_calls = message.tool_calls.map((call) => {
+        const args = call && call.function && call.function.arguments;
+        if (!args || typeof args !== 'object' || typeof args.code !== 'string' || args.code.length <= TRIMMED_RESULT_CHARS) {
+          return call;
+        }
+        return {
+          ...call,
+          function: { ...call.function, arguments: { ...args, code: '(file contents sent earlier, now on disk)' } },
+        };
+      });
+    } else {
+      continue;
+    }
+
+    const after = size(message);
+    if (after < before) {
+      total -= before - after;
+      trimmed += 1;
+    }
+  }
+
+  if (total > limit) {
+    logger.warn(`Native loop history is still ${total} tokens after trimming, above the ${limit} the window allows.`);
+  }
+  return trimmed;
 }
 
 /** Guards against a model that calls the same tool with the same arguments forever. */
@@ -164,6 +246,9 @@ async function run(options) {
     }
 
     emit({ type: 'thinking', step: stepIndex + 1, maxSteps: budgets.maxSteps });
+
+    const shortened = fitHistory(messages, budgets.numCtx, activeRoute.ollamaTools);
+    if (shortened > 0) logger.debug(`Shortened ${shortened} older message(s) to fit the context window.`);
 
     /** @type {any} */
     let message;
@@ -296,6 +381,8 @@ async function run(options) {
         path: typeof call.args.path === 'string' ? call.args.path : undefined,
         query: typeof call.args.query === 'string' ? call.args.query : undefined,
         code: typeof call.args.code === 'string' ? call.args.code : undefined,
+        find: typeof call.args.find === 'string' ? call.args.find : undefined,
+        replace: typeof call.args.replace === 'string' ? call.args.replace : undefined,
         command: typeof call.args.command === 'string' ? call.args.command : undefined,
         cwd: typeof call.args.cwd === 'string' ? call.args.cwd : undefined,
         // Only a real boolean counts — see the same rule in `outputParser.parseAction`.
@@ -372,4 +459,13 @@ async function run(options) {
   return { steps, summary, stopReason, doneChallenged };
 }
 
-module.exports = { run, callKey, looksLikeNarratedToolCall, missingRequired, REPEAT_LIMIT, NARRATED_CALL_LIMIT };
+module.exports = {
+  run,
+  callKey,
+  looksLikeNarratedToolCall,
+  missingRequired,
+  fitHistory,
+  REPEAT_LIMIT,
+  NARRATED_CALL_LIMIT,
+  KEEP_RECENT_MESSAGES,
+};

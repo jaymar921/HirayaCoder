@@ -140,6 +140,21 @@ class OllamaResponseError extends Error {
   }
 }
 
+/** A fresh usage record. See `OllamaClient.usage`. */
+function emptyUsage() {
+  return {
+    requests: 0,
+    promptTokens: 0,
+    outputTokens: 0,
+    peakPromptTokens: 0,
+    peakTotalTokens: 0,
+    /** @type {number | null} */
+    numCtx: null,
+    /** Requests whose prompt and reply together reached the window. */
+    filled: 0,
+  };
+}
+
 /**
  * Create a client bound to one endpoint.
  *
@@ -186,6 +201,98 @@ class OllamaClient {
 
     /** @type {((health: object, previous: string) => void) | null} Set by the host. */
     this.onHealthChange = null;
+
+    /**
+     * The context window chosen for each model, stamped on every request for it. See
+     * `core/contextWindow` for why it is one number per model and never per call.
+     *
+     * @type {Map<string, number>}
+     */
+    this.windows = new Map();
+
+    /**
+     * Token counts Ollama reported, kept so a turn can say how full its window got.
+     * Reset by whoever is measuring a turn; see `resetUsage`.
+     */
+    this.usage = emptyUsage();
+  }
+
+  /**
+   * Fix the window for a model. Every later request for that model asks for it unless
+   * the caller names its own `num_ctx`.
+   *
+   * @param {string} model
+   * @param {number | null | undefined} numCtx  Falsy clears it.
+   */
+  setContextWindow(model, numCtx) {
+    if (!model) return;
+    if (numCtx && Number.isFinite(numCtx) && numCtx > 0) this.windows.set(String(model), Math.floor(numCtx));
+    else this.windows.delete(String(model));
+  }
+
+  /**
+   * @param {string} model
+   * @returns {number | null}
+   */
+  contextWindowFor(model) {
+    return this.windows.get(String(model)) || null;
+  }
+
+  /** Start measuring a new turn. */
+  resetUsage() {
+    this.usage = emptyUsage();
+  }
+
+  /**
+   * Add the window to a request body that did not ask for one.
+   *
+   * @template {{model?: string, options?: Record<string, unknown>}} T
+   * @param {T} body
+   * @returns {T}
+   * @private
+   */
+  _withWindow(body) {
+    const numCtx = body && body.model ? this.windows.get(String(body.model)) : undefined;
+    if (!numCtx) return body;
+    const options = body.options || {};
+    if (Object.prototype.hasOwnProperty.call(options, 'num_ctx')) return body;
+    return { ...body, options: { ...options, num_ctx: numCtx } };
+  }
+
+  /**
+   * Record what one finished request cost.
+   *
+   * Ollama reports `prompt_eval_count` for the prompt and, on builds that cache,
+   * `prompt_eval_cached_count` for the part of it that was reused. Measured on 0.40: a
+   * 167-token prompt reported 167 and 166, so the cached count is a share of the total and
+   * not an addition to it. The larger of the two is taken, which is right either way. A
+   * prompt that fills the window has almost certainly been cut, and that is logged,
+   * because nothing else would ever say so.
+   *
+   * @param {any} response  The final response object or stream chunk.
+   * @param {string} model
+   * @param {number | undefined} numCtx
+   * @private
+   */
+  _recordUsage(response, model, numCtx) {
+    if (!response || typeof response !== 'object' || !response.done) return;
+    const prompt = Math.max(Number(response.prompt_eval_count) || 0, Number(response.prompt_eval_cached_count) || 0);
+    const output = Number(response.eval_count) || 0;
+    if (prompt === 0 && output === 0) return;
+    const usage = this.usage;
+    usage.requests += 1;
+    usage.promptTokens += prompt;
+    usage.outputTokens += output;
+    usage.peakPromptTokens = Math.max(usage.peakPromptTokens, prompt);
+    usage.peakTotalTokens = Math.max(usage.peakTotalTokens, prompt + output);
+    if (numCtx) usage.numCtx = numCtx;
+    if (numCtx && prompt + output >= numCtx) {
+      usage.filled += 1;
+      logger.warn(
+        `${model} used its whole ${numCtx}-token window (${prompt} prompt + ${output} output). ` +
+          'Ollama will have dropped part of the prompt or stopped the reply early.'
+      );
+    }
   }
 
   /**
@@ -526,8 +633,11 @@ class OllamaClient {
    * @param {{signal?: AbortSignal, timeoutMs?: number}} [opts]
    * @returns {Promise<any>}
    */
-  chat(body, opts = {}) {
-    return this.request('POST', '/api/chat', { ...body, stream: false }, opts);
+  async chat(body, opts = {}) {
+    const sent = this._withWindow({ ...body, stream: false });
+    const response = await this.request('POST', '/api/chat', sent, opts);
+    this._recordUsage(response, sent.model, sent.options && Number(sent.options.num_ctx));
+    return response;
   }
 
   /**
@@ -539,7 +649,18 @@ class OllamaClient {
    * @returns {Promise<void>}
    */
   chatStream(body, onChunk, opts = {}) {
-    return this.requestStream('POST', '/api/chat', { ...body, stream: true }, onChunk, opts);
+    const sent = this._withWindow({ ...body, stream: true });
+    const numCtx = sent.options && Number(sent.options.num_ctx);
+    return this.requestStream(
+      'POST',
+      '/api/chat',
+      sent,
+      (chunk) => {
+        this._recordUsage(chunk, sent.model, numCtx);
+        onChunk(chunk);
+      },
+      opts
+    );
   }
 
   /**
@@ -550,7 +671,8 @@ class OllamaClient {
    * @returns {Promise<any>}
    */
   generate(body, opts = {}) {
-    return this.request('POST', '/api/generate', { ...body, stream: false }, opts);
+    // The window, not the usage: a completion is not part of anybody's turn.
+    return this.request('POST', '/api/generate', this._withWindow({ ...body, stream: false }), opts);
   }
 
   /**

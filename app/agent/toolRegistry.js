@@ -25,6 +25,7 @@
 
 const readFile = require('./tools/readFile');
 const writeFile = require('./tools/writeFile');
+const editFile = require('./tools/editFile');
 const deleteFile = require('./tools/deleteFile');
 const createFolder = require('./tools/createFolder');
 const deleteFolder = require('./tools/deleteFolder');
@@ -102,10 +103,32 @@ const TOOLS = [
     },
     handler: searchWorkspace,
   },
+  // Listed before write_file on purpose. Small models lean towards the first tool that
+  // fits, and for a change to a file that exists this is the one that does not ask them
+  // to retype it. See `tools/editFile`.
+  {
+    name: 'edit_file',
+    description:
+      'Change part of a file that already exists. "find" is the exact text to change, copied from the file ' +
+      '(one or a few whole lines). "replace" is the new text that goes in its place. Use this for any change ' +
+      'to an existing file: you send only the lines that change, not the whole file.',
+    mutating: true,
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Workspace-relative file path.' },
+        find: { type: 'string', description: 'The exact text to change, copied from the file.' },
+        replace: { type: 'string', description: 'The new text. Use an empty string to delete the found text.' },
+      },
+      required: ['path', 'find', 'replace'],
+    },
+    handler: editFile,
+  },
   {
     name: 'write_file',
     description:
-      'Create or replace a file. "code" must be the COMPLETE new contents of the file — not a diff, not a fragment, not a description of the change. If the file already exists, read_file it first.',
+      'Create a new file, or replace a whole file. "code" must be the COMPLETE contents of the file, not a diff, ' +
+      'not a fragment, not a description. To change part of a file that already exists, use edit_file instead.',
     mutating: true,
     parameters: {
       type: 'object',

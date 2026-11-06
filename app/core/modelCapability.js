@@ -48,6 +48,7 @@
  * @property {number} [liteTierMaxParams]                 Default 3.
  * @property {Record<string, Tier>} [tierOverrides]       Per-model forced tier.
  * @property {number} [todoMinParams]                     Default 2; see DEFAULT_TODO_MIN_PARAMS.
+ * @property {number} [contextLength]                     `hirayacoder.ollama.contextLength`; 0 is auto.
  */
 
 /**
@@ -63,6 +64,8 @@
  * @property {boolean} supportsThinking
  * @property {boolean} canPlanTodos          May this model keep a multi-item TODO list?
  * @property {number | null} contextLength
+ * @property {number} numCtx                 The window every request for this model asks for.
+ * @property {string} windowReason           Why that window, for the log and the tooltip.
  */
 
 /**
@@ -73,7 +76,10 @@
  * @property {'session-end' | 'every-step'} translateFrequency
  * @property {boolean} requestReasoning          Pass Ollama's `think` parameter when supported.
  * @property {number} promptTokenTarget          Soft per-turn budget for contextBuilder.
+ * @property {number} [numCtx]                    The window the prompt was fitted to, when known.
  */
+
+const contextWindow = require('./contextWindow');
 
 const DEFAULT_LITE_TIER_MAX_PARAMS = 3;
 
@@ -210,60 +216,36 @@ function classify(model, config = {}) {
   // given a multi-item plan to hold on to.
   const canPlanTodos = Boolean(model.supportsThinking) && params !== null && params >= todoMinParams;
 
+  const contextLength = config.contextLength;
+  const decide = (tier, reason, overridden) =>
+    finalize(model, tier, reason, overridden, params, supportsTools, canPlanTodos, contextLength);
+
   const override = overrides[model.name];
   if (override === 'A' || override === 'B') {
-    return finalize(model, override, `Tier forced to ${override} by your settings.`, true, params, supportsTools, canPlanTodos);
+    return decide(override, `Tier forced to ${override} by your settings.`, true);
   }
 
   if (!supportsTools) {
-    return finalize(
-      model,
-      'B',
-      'No native tool-calling support reported — running the constrained JSON action loop.',
-      false,
-      params,
-      supportsTools,
-      canPlanTodos
-    );
+    return decide('B', 'No native tool-calling support reported — running the constrained JSON action loop.', false);
   }
 
   if (params === null) {
     // Unknown size with tool support: trust the capability, but say so, since an
     // unknown-size model is more likely to be exotic than to be tiny.
-    return finalize(
-      model,
-      'A',
-      'Reports native tool-calling; parameter size unknown, so size-based demotion was skipped.',
-      false,
-      params,
-      supportsTools,
-      canPlanTodos
-    );
+    return decide('A', 'Reports native tool-calling; parameter size unknown, so size-based demotion was skipped.', false);
   }
 
   if (threshold > 0 && params <= threshold) {
-    return finalize(
-      model,
+    return decide(
       'B',
       `Reports native tool-calling, but at ${formatParams(params)} it is at or below the ${formatParams(
         threshold
       )} lite threshold — small models emit tool-call syntax far more reliably than they orchestrate it, so the constrained loop is used instead.`,
-      false,
-      params,
-      supportsTools,
-      canPlanTodos
+      false
     );
   }
 
-  return finalize(
-    model,
-    'A',
-    `Native tool-calling at ${formatParams(params)} — running the full multi-tool agent loop.`,
-    false,
-    params,
-    supportsTools,
-    canPlanTodos
-  );
+  return decide('A', `Native tool-calling at ${formatParams(params)} — running the full multi-tool agent loop.`, false);
 }
 
 /**
@@ -273,9 +255,19 @@ function classify(model, config = {}) {
  * @param {boolean} overridden
  * @param {number | null} params
  * @param {boolean} supportsTools
+ * @param {boolean} canPlanTodos
+ * @param {number} [configuredWindow]
  * @returns {Capability}
  */
-function finalize(model, tier, reason, overridden, params, supportsTools, canPlanTodos) {
+function finalize(model, tier, reason, overridden, params, supportsTools, canPlanTodos, configuredWindow) {
+  const contextLength = typeof model.contextLength === 'number' ? model.contextLength : null;
+  // Sized for the tier's largest prompt at any capacity, so moving the Thinking switch
+  // never changes `num_ctx` and never makes Ollama reload the model. See core/contextWindow.
+  const window = contextWindow.plan({
+    largestPromptTarget: contextWindow.largestTarget((BUDGET_INDEX.get(tier) || BUDGET_INDEX.get('B')).values()),
+    modelMax: contextLength,
+    configured: configuredWindow,
+  });
   return {
     model: model.name,
     tier,
@@ -287,7 +279,9 @@ function finalize(model, tier, reason, overridden, params, supportsTools, canPla
     supportsTools,
     supportsThinking: Boolean(model.supportsThinking),
     canPlanTodos: Boolean(canPlanTodos),
-    contextLength: typeof model.contextLength === 'number' ? model.contextLength : null,
+    contextLength,
+    numCtx: window.numCtx,
+    windowReason: window.reason,
   };
 }
 
@@ -306,13 +300,19 @@ const BUDGET_INDEX = new Map(
  * Budgets for a tier at a given thinking capacity. Unrecognized values fall back
  * to Tier B / medium — the conservative end of both axes.
  *
+ * Given the model's window, the prompt target is shrunk to fit it, and the window rides
+ * along on the result so a loop can fit its own message history to the same number.
+ *
  * @param {Tier} tier
  * @param {ThinkingCapacity} thinkingCapacity
+ * @param {number | null} [numCtx]
  * @returns {Budgets}
  */
-function budgetsFor(tier, thinkingCapacity) {
+function budgetsFor(tier, thinkingCapacity, numCtx) {
   const byTier = BUDGET_INDEX.get(tier) || /** @type {Map<string, Budgets>} */ (BUDGET_INDEX.get('B'));
-  return byTier.get(thinkingCapacity) || /** @type {Budgets} */ (byTier.get('medium'));
+  const budgets = byTier.get(thinkingCapacity) || /** @type {Budgets} */ (byTier.get('medium'));
+  if (!numCtx) return budgets;
+  return { ...contextWindow.fit(budgets, numCtx), numCtx };
 }
 
 /**

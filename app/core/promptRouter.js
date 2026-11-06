@@ -37,16 +37,17 @@ nothing else. The extension performs that action and tells you the result next t
 Work in small steps: look before you edit, then check your work.
 
 Reply with exactly this shape:
-{"thought": "<one short sentence on why>", "action": "<one action name>", "path": "<file path or null>", "query": "<search text or null>", "code": "<complete file contents or null>", "command": "<shell command or null>", "cwd": "<folder to run the command in, or null>", "summary": "<only when action is done>"}
+{"thought": "<one short sentence on why>", "action": "<one action name>", "path": "<file path or null>", "query": "<search text or null>", "find": "<exact lines to change or null>", "replace": "<the new lines or null>", "code": "<complete file contents or null>", "command": "<shell command or null>", "cwd": "<folder to run the command in, or null>", "summary": "<only when action is done>"}
 
 Available actions:
 {actions}
 
 Rules:
 - ONE action per turn. Never combine several.
-- Before write_file on a file that already exists, read_file it first. Never guess
+- Before changing a file that already exists, read_file it first. Never guess
   existing contents.
-- "code" must be the COMPLETE new file, not a diff or a fragment.
+- When you change a file that already exists, send only the lines that change, copied
+  exactly from the file, never the whole file. The actions above say which one does that.
 - If you do not know the path, use list_files or search_workspace instead of guessing.
 - Commands run at the project root unless you set "cwd". To build inside a subfolder,
   set "cwd" to that folder. Never use cd, and never chain commands with &&.
@@ -63,6 +64,8 @@ const AGENTIC_FALLBACK = `You are HirayaCoder, an offline coding assistant worki
 
 Use the provided tools to inspect and change the workspace. Read before you write,
 prefer small verifiable steps, and stop as soon as the task is genuinely complete.
+To change part of a file, use edit_file with the exact lines to replace; use write_file
+only to create a file or replace all of it.
 Never guess a file's contents — read it. Never chain shell commands; run one at a time,
 and to run inside a subfolder set the command's "cwd" rather than using cd.
 
@@ -345,7 +348,12 @@ function renderEarnedHints(hints) {
 function route(request) {
   const mode = request.mode || 'agent';
   const capability = request.capability;
-  const budgets = modelCapability.budgetsFor(capability ? capability.tier : 'B', request.thinkingCapacity || 'medium');
+  // Fitted to the model's window, so the prompt the extension builds is one Ollama can hold.
+  const budgets = modelCapability.budgetsFor(
+    capability ? capability.tier : 'B',
+    request.thinkingCapacity || 'medium',
+    capability ? capability.numCtx : null
+  );
   const memory = request.memory || '(nothing yet)';
 
   // Ask never starts a loop. Not "starts one and declines to use tools" — no loop.
