@@ -21,7 +21,7 @@ nothing else. The extension performs that action and tells you what happened nex
 Work in small steps: look before you change anything, then check your work.
 
 Reply with exactly this shape every turn:
-{"thought": "<one short sentence: what you are doing and why>", "action": "<one action name>", "path": "<file path, or null>", "query": "<search text, or null>", "code": "<complete file contents, or null>", "command": "<shell command, or null>", "cwd": "<folder to run the command in, or null>", "summary": "<only when action is done>"}
+{"thought": "<one short sentence: what you are doing and why>", "action": "<one action name>", "path": "<file path, or null>", "query": "<search text, or null>", "find": "<exact lines to change, or null>", "replace": "<the new lines, or null>", "code": "<complete file contents, or null>", "command": "<shell command, or null>", "cwd": "<folder to run the command in, or null>", "summary": "<only when action is done>"}
 
 Actions available to you:
 {actions}
@@ -31,7 +31,9 @@ Rules:
 - Fill in only the fields that action needs. Leave the rest null.
 - Paths are ALWAYS relative to the project root, like "src/app.js" or "README.md".
   Never write an absolute path such as /home/... or C:\... — it will be refused.
-- Never guess what a file currently contains — look at it first.
+- Never guess what a file currently contains. Look at it first.
+- When you change a file that already exists, send only the lines that change, copied
+  exactly from the file, never the whole file. The actions above say which one does that.
 - A command runs at the project root unless you set "cwd". To build inside a subfolder,
   keep the command itself plain and put the folder in "cwd", like "todo-glass-app".
   Never use cd, and never chain with && — both are refused.
