@@ -135,7 +135,9 @@ function extractCode(reply) {
 
   const fenced = FENCE.exec(text);
   if (fenced) {
-    const code = fenced[1].replace(/\s+$/, '');
+    // `trimEnd`, which strips the same characters as `\s` but never retries a position, so
+    // a reply ending in a long run of blank space costs nothing. See the 1.2.0 SAST report.
+    const code = fenced[1].trimEnd();
     if (code.trim().length < MIN_CODE_CHARS) return { code: null, reason: 'the code block was empty' };
     return { code: code.slice(0, MAX_CODE_CHARS), reason: '' };
   }
@@ -180,11 +182,14 @@ function exportsOf(source, filePath) {
   const named = new Set();
 
   // export function useTodos / export const TodoItem / export class X
-  for (const match of text.matchAll(/^\s*export\s+(?:async\s+)?(?:function|const|let|var|class)\s+([A-Za-z_$][\w$]*)/gm)) {
+  // Every whitespace run in these is `[ \t]`, never `\s`: under the `m` flag `^\s*` crosses
+  // line breaks, so each of n blank lines scanned to the end of the run, and 80,000 of them
+  // took 17 seconds. Measured in 1.2.0; see the SAST report.
+  for (const match of text.matchAll(/^[ \t]*export[ \t]+(?:async[ \t]+)?(?:function|const|let|var|class)[ \t]+([A-Za-z_$][\w$]*)/gm)) {
     named.add(match[1]);
   }
   // export { a, b as c }
-  for (const match of text.matchAll(/^\s*export\s*\{([^}]*)\}/gm)) {
+  for (const match of text.matchAll(/^[ \t]*export[ \t]*\{([^}]{0,4000})\}/gm)) {
     for (const part of match[1].split(',')) {
       const name = part.trim().split(/\s+as\s+/i).pop();
       if (name && /^[A-Za-z_$][\w$]*$/.test(name)) named.add(name);
@@ -192,11 +197,15 @@ function exportsOf(source, filePath) {
   }
 
   let byDefault = '';
-  const defaultDeclared = /^\s*export\s+default\s+(?:async\s+)?(?:function|class)\s+([A-Za-z_$][\w$]*)/m.exec(text);
-  const defaultNamed = /^\s*export\s+default\s+([A-Za-z_$][\w$]*)\s*;?\s*$/m.exec(text);
+  const defaultDeclared = /^[ \t]*export[ \t]+default[ \t]+(?:async[ \t]+)?(?:function|class)[ \t]+([A-Za-z_$][\w$]*)/m.exec(text);
+  // `(?:;[ \t]*)?` and line-only whitespace, rather than `\s*;?\s*`: with no semicolon the
+  // old form put two whitespace runs side by side (and `\s` spans lines), so a long run of
+  // blank space after `export default x` cost 0.8 seconds at 20,000 characters and grew
+  // with the square. Measured in 1.2.0; see the SAST report.
+  const defaultNamed = /^[ \t]*export[ \t]+default[ \t]+([A-Za-z_$][\w$]*)[ \t]*(?:;[ \t]*)?$/m.exec(text);
   if (defaultDeclared) byDefault = defaultDeclared[1];
   else if (defaultNamed) byDefault = defaultNamed[1];
-  else if (/^\s*export\s+default\b/m.test(text)) byDefault = 'default';
+  else if (/^[ \t]*export[ \t]+default\b/m.test(text)) byDefault = 'default';
 
   return { default: byDefault, named: [...named] };
 }
@@ -259,18 +268,18 @@ function jvmExports(text) {
   /** @type {Set<string>} */
   const named = new Set();
   for (const match of text.matchAll(
-    /^\s*public\s+(?:final\s+|abstract\s+|sealed\s+|static\s+)*(?:class|interface|enum|record|@interface)\s+([A-Za-z_]\w*)/gm
+    /^[ \t]*public[ \t]+(?:(?:final|abstract|sealed|static)[ \t]+)*(?:class|interface|enum|record|@interface)[ \t]+([A-Za-z_]\w*)/gm
   )) {
     named.add(match[1]);
   }
   // A package-private type is still importable from inside its own package, which is
   // exactly where the rest of this project lives.
   if (named.size === 0) {
-    for (const match of text.matchAll(/^\s*(?:final\s+|abstract\s+)*(?:class|interface|enum|record)\s+([A-Za-z_]\w*)/gm)) {
+    for (const match of text.matchAll(/^[ \t]*(?:(?:final|abstract)[ \t]+)*(?:class|interface|enum|record)[ \t]+([A-Za-z_]\w*)/gm)) {
       named.add(match[1]);
     }
   }
-  const packageName = /^\s*package\s+([\w.]+)\s*;/m.exec(text);
+  const packageName = /^[ \t]*package[ \t]+([\w.]+)[ \t]*;/m.exec(text);
   return { default: packageName ? packageName[1] : '', named: [...named] };
 }
 
@@ -426,7 +435,7 @@ const KIND_CHECKS = [
   },
   {
     match: /\.css$/i,
-    ok: (code) => !/^\s*import\s+\w+\s+from\s+['"]react/m.test(code) && /[{@]/.test(code),
+    ok: (code) => !/^[ \t]*import[ \t]+\w+[ \t]+from[ \t]+['"]react/m.test(code) && /[{@]/.test(code),
     want: 'CSS',
   },
   { match: /\.html?$/i, ok: (code) => /<\w+/.test(code), want: 'HTML' },
@@ -570,8 +579,325 @@ async function dictate(options) {
   return { ok: true, code, reason: '', durationMs };
 }
 
+/** An edit replaces a few lines. A reply this much longer than its region rewrote the file. */
+const MAX_EDIT_GROWTH_LINES = 60;
+
+/** Room for a rewritten function, which is the largest region `core/editRegion` hands out. */
+const EDIT_NUM_PREDICT = 1500;
+
+/** A rewritten region is seconds of output, not minutes. */
+const EDIT_TIMEOUT_MS = 180000;
+
+/** The fence language for a path, so the region reads as the code it is. */
+function fenceFor(filePath) {
+  const extension = (/\.([a-z0-9]{1,8})$/i.exec(String(filePath || '')) || [])[1] || '';
+  return extension.toLowerCase();
+}
+
+/**
+ * The request for a dictated edit, in plain words.
+ *
+ * Built like `buildPrompt` and for the same measured reason: the small model is asked for
+ * the one thing it can produce, code in a fence, and every decision around it (which file,
+ * which lines, how the answer is applied) has already been made by the extension.
+ *
+ * @param {object} options
+ * @param {string} options.path
+ * @param {string} options.task
+ * @param {{mode: 'replace' | 'append', start: number, end: number, text: string}} options.region
+ * @param {string} [options.provides]       What the file offers, for an addition's context.
+ * @param {string} [options.previousError]
+ * @returns {string}
+ */
+function buildEditPrompt(options) {
+  const { region } = options;
+  const fence = fenceFor(options.path);
+  const blocks = [];
+
+  if (region.mode === 'member') {
+    if (region.related) {
+      blocks.push(
+        `Here is one method of the class ${region.className} in ${options.path}, to show how it is written:\n\n` +
+          `\`\`\`${fence}\n${region.related}\n\`\`\``
+      );
+    }
+    blocks.push(`The request: ${options.task}`);
+    if (options.previousError) blocks.push(`Your last answer was rejected: ${options.previousError}`);
+    blocks.push(
+      `Write only the NEW method to add to the class ${region.className}` +
+        `${region.names && region.names.length ? `, named ${region.names.join(' and ')}` : ''}. ` +
+        'Do not write the class line or any of its existing methods. ' +
+        'Reply with only the new method inside one ``` code block, and nothing else.'
+    );
+    return blocks.join('\n\n');
+  }
+
+  if (region.mode === 'append' || region.mode === 'insert') {
+    if (options.provides) blocks.push(`${options.path} currently provides: ${options.provides}`);
+    if (region.related) {
+      blocks.push(`A related part of ${options.path}, to show how it already does things:\n\n\`\`\`${fence}\n${region.related}\n\`\`\``);
+    }
+    blocks.push(`The request: ${options.task}`);
+    if (options.previousError) blocks.push(`Your last answer was rejected: ${options.previousError}`);
+    const named = Array.isArray(region.names) && region.names.length ? ` Define ${region.names.join(' and ')} in it.` : '';
+    blocks.push(
+      `Write only the NEW code to add to ${options.path} for this request.${named} ` +
+        'Reply with that code inside one ``` code block, and nothing else. Do not repeat code that is already in the file, ' +
+        'and do not write an export list: that is taken care of.'
+    );
+    return blocks.join('\n\n');
+  }
+
+  if (region.mode === 'prepend') {
+    blocks.push(`Here is the first line of a function in ${options.path}:\n\n\`\`\`${fence}\n${region.opener}\n\`\`\``);
+    blocks.push(`The request: ${options.task}`);
+    if (options.previousError) blocks.push(`Your last answer was rejected: ${options.previousError}`);
+    blocks.push(
+      "Write only the NEW lines to put at the start of this function's body for this request, for example a check " +
+        "that throws or returns early. Do not repeat the function's first line or any of its existing code. " +
+        'Reply with only the new lines inside one ``` code block, and nothing else.'
+    );
+    return blocks.join('\n\n');
+  }
+
+  const span = region.start === region.end ? `line ${region.start + 1}` : `lines ${region.start + 1} to ${region.end + 1}`;
+  blocks.push(`Here is ${span} of ${options.path}:\n\n\`\`\`${fence}\n${region.text}\n\`\`\``);
+  if (options.provides) blocks.push(`The rest of the file provides: ${options.provides}`);
+  blocks.push(`The request: ${options.task}`);
+  if (options.previousError) blocks.push(`Your last answer was rejected: ${options.previousError}`);
+  blocks.push(
+    `Rewrite ${region.start === region.end ? 'this line' : 'these lines'} so that they do what the request asks. ` +
+      'Change only what the request asks for and keep everything else exactly as it is. ' +
+      // Measured: asked to make applyDiscount also reject percents over 50, `llama3.2:1b`
+      // replaced `percent < 0` with `percent > 50`, three times out of three. A new rule
+      // is added beside the old ones unless the request says otherwise.
+      'Keep every check that is already there: add a new rule next to the old ones, and do not replace one unless the request says to. ' +
+      'Reply with the rewritten lines inside one ``` code block, and nothing else.'
+  );
+  return blocks.join('\n\n');
+}
+
+/**
+ * Pull rewritten lines out of a reply.
+ *
+ * Not `extractCode`: that refuses anything under forty characters, which is right for a
+ * file and wrong for a line, since `const TAX_RATE = 0.1;` is twenty-one.
+ *
+ * @param {string} reply
+ * @param {{text: string, mode: string}} region
+ * @param {string} [filePath]
+ * @returns {{code: string | null, reason: string}}
+ */
+function extractEdit(reply, region, filePath) {
+  const text = String(reply || '');
+  if (!text.trim()) return { code: null, reason: 'the model replied with nothing' };
+
+  const fenced = FENCE.exec(text);
+  let code;
+  if (fenced) code = fenced[1].trimEnd();
+  else if (OPEN_FENCE.test(text)) return { code: null, reason: 'the reply was cut off before the code block ended' };
+  else {
+    const trimmed = text.trim();
+    if (PROSE_OPENER.test(trimmed.split('\n')[0])) return { code: null, reason: 'the model explained the change instead of writing it' };
+    code = trimmed;
+  }
+
+  if (!code.trim()) return { code: null, reason: 'the code block was empty' };
+  // Words with nothing code-like in them are an answer about the code, not code: "Still
+  // no." has no operator, bracket, or statement end, and was nearly written into a file.
+  if (!fenced && !/[;{}()[\]=<>:]/.test(code)) return { code: null, reason: 'the reply was not code' };
+  // "# ... (other methods and attributes remain the same)" stands in for code that is then
+  // missing from the file. Measured on the held-out suite, in a reply that also re-declared
+  // the class around it.
+  if (PLACEHOLDER.test(code)) {
+    return { code: null, reason: 'the reply left a placeholder comment where code belongs. Write the real code' };
+  }
+  // An action object is a small model falling back on the loop's protocol. It has braces
+  // and colons, so it passes for code, and it was one turn from being written over a line.
+  if (!/\.json$/i.test(String(filePath || '')) && /^\s*[{[]/.test(code)) {
+    try {
+      JSON.parse(code);
+      return { code: null, reason: 'the reply was a JSON object, not code. Reply with the code itself' };
+    } catch {
+      /* an object literal in source, which is fine */
+    }
+  }
+  if (region.mode === 'prepend') {
+    const first = code.split('\n').find((line) => line.trim());
+    if (first && region.opener && first.trim() === region.opener.trim()) {
+      return { code: null, reason: "the reply repeated the function instead of writing only the new lines" };
+    }
+  }
+  if (region.mode === 'insert') {
+    // New code only. An export list it wrote anyway is cut off; the extension keeps the list.
+    const at = code.search(/^(?:module\.exports\s*=|export\s*\{)/m);
+    if (at === 0) return { code: null, reason: 'the reply was only an export list, with no new code' };
+    if (at > 0) code = code.slice(0, at).trimEnd();
+  }
+  if (region.mode === 'replace' && code.trim() === region.text.trim()) {
+    return { code: null, reason: 'the lines came back unchanged' };
+  }
+  const regionLines = region.mode === 'replace' ? region.text.split('\n').length : 0;
+  if (code.split('\n').length > regionLines + MAX_EDIT_GROWTH_LINES) {
+    return { code: null, reason: 'the reply rewrote far more than the lines it was given' };
+  }
+  return { code: code.slice(0, MAX_CODE_CHARS), reason: '' };
+}
+
+/** A comment standing in for code: `// ...`, `# ... rest unchanged`, "remain the same". */
+const PLACEHOLDER = /^[ \t]*(?:#|\/\/|\/\*)[ \t]*\.\.\.|\b(?:remains?|stays?|left)[ \t]+(?:the[ \t]+)?(?:same|unchanged|as[ \t]+is)\b|\(\s*(?:rest|other)[ \t][^)\n]{0,60}\)/im;
+
+/** Names that are in scope anywhere, by language family. */
+const ALWAYS_IN_SCOPE = new Set([
+  // Shared and JavaScript.
+  'if', 'else', 'return', 'throw', 'new', 'typeof', 'instanceof', 'in', 'of', 'not', 'and', 'or', 'is',
+  'true', 'false', 'null', 'undefined', 'this', 'const', 'let', 'var', 'for', 'while', 'Error', 'TypeError',
+  'RangeError', 'Number', 'String', 'Boolean', 'Array', 'Object', 'Math', 'JSON', 'Date', 'console', 'isNaN',
+  'parseInt', 'parseFloat', 'Infinity', 'NaN', 'Promise', 'await', 'async',
+  // Python.
+  'raise', 'None', 'True', 'False', 'self', 'cls', 'len', 'isinstance', 'int', 'float', 'str', 'list', 'dict',
+  'set', 'tuple', 'bool', 'min', 'max', 'sum', 'abs', 'round', 'range', 'print', 'ValueError', 'KeyError',
+  'IndexError', 'Exception', 'elif', 'pass', 'def', 'lambda', 'any', 'all', 'sorted',
+]);
+
+/**
+ * Names new lines at the top of a function use that are not available there.
+ *
+ * The top-of-body insert (see `agentSession._dictateEdit`) puts lines before everything the
+ * function already does, so they can only use what exists at that point: the parameters,
+ * names the file defines or imports, builtins, and attributes the enclosing class actually
+ * assigns. Measured on the held-out inventory suite: asked to refuse selling more than is in
+ * stock, `llama3.2:1b` wrote `if quantity > self.stock:` there. `Inventory` has no `stock`;
+ * the product it means is looked up two lines further down. The insert was refused rather
+ * than written, which leaves the file as it was.
+ *
+ * @param {string} code
+ * @param {{opener: string, classText?: string, fileText: string}} scope
+ * @returns {string[]}
+ */
+function outOfScope(code, scope) {
+  const text = String(code).replace(/(["'`])(?:\\.|(?!\1)[^\\\n]){0,400}\1/g, '""');
+  const params = new Set(
+    (String(scope.opener).match(/\(([^)]{0,400})\)/) || ['', ''])[1].match(/[A-Za-z_$][\w$]*/g) || []
+  );
+  const fileNames = new Set();
+  for (const line of String(scope.fileText).split('\n')) {
+    // The keyword must be followed by a space. Written as `(?:keyword)?[ \t]*name`, it was
+    // two ways to spend one run of spaces, so `export` and 200,000 tabs took 44 seconds;
+    // and `constant = 1` was read as the keyword `const` declaring `ant`.
+    const declared = /^[ \t]*(?:export[ \t]+)?(?:(?:(?:async[ \t]+)?(?:function|def|class)|const|let|var)[ \t]+)?([A-Za-z_$][\w$]*)/.exec(line);
+    if (declared) fileNames.add(declared[1]);
+    for (const imported of line.match(/^(?:import|from)\b.*$|\brequire\(.*$/) ? line.match(/[A-Za-z_$][\w$]*/g) || [] : []) {
+      fileNames.add(imported);
+    }
+  }
+  const attributes = new Set();
+  for (const match of String(scope.classText || '').matchAll(/\b(?:self|this)\.([A-Za-z_$][\w$]*)[ \t]*=(?!=)|^[ \t]*(?:async[ \t]+)?(?:def[ \t]+)?([A-Za-z_$][\w$]*)[ \t]*\(/gm)) {
+    attributes.add(match[1] || match[2]);
+  }
+
+  /** @type {Set<string>} */
+  const unknown = new Set();
+  for (const match of text.matchAll(/(\.)?\b([A-Za-z_$][\w$]*)\b/g)) {
+    const name = match[2];
+    if (match[1]) continue; // an attribute of something else; checked below for self/this only
+    if (ALWAYS_IN_SCOPE.has(name) || params.has(name) || fileNames.has(name)) continue;
+    unknown.add(name);
+  }
+  for (const match of text.matchAll(/\b(?:self|this)\.([A-Za-z_$][\w$]*)/g)) {
+    if (!attributes.has(match[1])) unknown.add(`${/\bself\b/.test(match[0]) ? 'self' : 'this'}.${match[1]}`);
+  }
+  return [...unknown].slice(0, 4);
+}
+
+/** A comparison: `percent < 0`, `index === -1`, `typeof x !== 'number'`. Bounded on every side. */
+const CHECK = /(?:typeof[ \t]+)?[A-Za-z_$][\w$.]{0,60}[ \t]*(?:===|!==|==|!=|<=|>=|<|>)[ \t]*(?:-?\d{1,20}(?:\.\d{1,20})?|'[^'\n]{0,60}'|"[^"\n]{0,60}"|[A-Za-z_$][\w$.]{0,60})/g;
+
+/** A request that asks for a condition to go, or to change into another. */
+// Whole words only: "removeItem should…" names a function and asks for no removal.
+const REPLACING = /\b(?:instead|rather than|remove|delete|drop|replace|no longer|stop|invert|reverse)\b|\bchange\b[^.]{0,80}\bto\b/i;
+
+/**
+ * Comparisons the old lines had and the new lines do not.
+ *
+ * Measured: asked to make `applyDiscount` also reject percents over 50, `llama3.2:1b`
+ * rewrote `percent < 0` as `percent > 50`, three times out of three, though the prompt
+ * said to keep every existing check. A general rule did nothing; a specific correction
+ * ("you removed `percent < 0`") is the kind of thing a small model can act on. A request
+ * that asks for a condition to go or change (`REPLACING`) is exempt, since then dropping one
+ * is the work.
+ *
+ * @param {string} before
+ * @param {string} after
+ * @param {string} request
+ * @returns {string[]}
+ */
+function droppedChecks(before, after, request) {
+  if (REPLACING.test(String(request || ''))) return [];
+  const normalise = (check) => check.replace(/\s+/g, '');
+  const kept = new Set((String(after).match(CHECK) || []).map(normalise));
+  const dropped = [];
+  for (const check of String(before).match(CHECK) || []) {
+    if (!kept.has(normalise(check)) && !dropped.includes(check)) dropped.push(check);
+  }
+  return dropped.slice(0, 4);
+}
+
+/**
+ * Ask for a rewrite of a region the extension chose, and return the new lines.
+ *
+ * @param {object} options
+ * @param {import('../core/ollamaClient').OllamaClient} options.client
+ * @param {string} options.model
+ * @param {string} options.path
+ * @param {string} options.task
+ * @param {{mode: 'replace' | 'append', start: number, end: number, text: string}} options.region
+ * @param {string} [options.provides]
+ * @param {string} [options.previousError]
+ * @param {AbortSignal} [options.signal]
+ * @returns {Promise<{ok: boolean, code: string, reason: string, durationMs: number}>}
+ */
+async function dictateEdit(options) {
+  const started = Date.now();
+  let raw = '';
+  let stopped = '';
+  try {
+    const response = await options.client.chat(
+      {
+        model: options.model,
+        messages: [{ role: 'user', content: buildEditPrompt(options) }],
+        // No `format` and no `think`, for the reasons given in `dictate`.
+        think: false,
+        options: { temperature: 0.1, num_predict: EDIT_NUM_PREDICT },
+      },
+      { timeoutMs: EDIT_TIMEOUT_MS, signal: options.signal }
+    );
+    raw = (response && response.message && response.message.content) || '';
+    stopped = String((response && response.done_reason) || '');
+  } catch (err) {
+    const reason = /** @type {Error} */ (err).message || 'the model call failed';
+    logger.warn(`Dictated edit of ${options.path} failed: ${reason}`);
+    return { ok: false, code: '', reason, durationMs: Date.now() - started };
+  }
+
+  const { code, reason: why } = extractEdit(raw, options.region, options.path);
+  const durationMs = Date.now() - started;
+  if (!code) {
+    const reason = stopped === 'length' ? `${why} (it ran out of room)` : why;
+    logger.info(`Dictated edit of ${options.path} produced nothing usable: ${reason}.`);
+    return { ok: false, code: '', reason, durationMs };
+  }
+  logger.info(`Dictated an edit to ${options.path}: ${code.split('\n').length} line(s) in ${(durationMs / 1000).toFixed(1)}s.`);
+  return { ok: true, code, reason: '', durationMs };
+}
+
 module.exports = {
   dictate,
+  dictateEdit,
+  droppedChecks,
+  outOfScope,
+  buildEditPrompt,
+  extractEdit,
   extractCode,
   matchesPath,
   missingFrom,
