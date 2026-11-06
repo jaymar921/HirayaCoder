@@ -1,7 +1,7 @@
 # HirayaCoder — Architecture
 
-How the extension is put together and, more usefully, *why*. Roughly 22,000 lines of
-JavaScript across 73 modules in `app/`, with **no production dependencies** — the
+How the extension is put together and, more usefully, *why*. Roughly 33,000 lines of
+JavaScript across 86 modules in `app/`, with **no production dependencies** — the
 `dependencies` field in `package.json` is empty and the packaged `.vsix` contains no
 `node_modules` at all.
 
@@ -95,7 +95,8 @@ identical traffic regardless of tier. Swapping loops changes how an action is
 
 | Module | Responsibility |
 |---|---|
-| `ollamaClient.js` | Zero-dependency HTTP against `/api/tags`, `/api/show`, `/api/chat`, `/api/generate`, `/api/pull`, `/api/version`. NDJSON streaming, timeouts, abort. **Loopback enforced at construction**, before a socket opens. |
+| `ollamaClient.js` | Zero-dependency HTTP against `/api/tags`, `/api/show`, `/api/chat`, `/api/generate`, `/api/pull`, `/api/version`. NDJSON streaming, timeouts, abort. **Loopback enforced at construction**, before a socket opens. Stamps each model's `num_ctx` on every request for it and records how full the window got. |
+| `contextWindow.js` | How many tokens Ollama holds for a model. Sized once per model from the tier's largest prompt plus a full file of output, so changing capacity never makes Ollama reload; capped at 16k by default; prompt budgets shrink to fit it. Before 1.2.0 nothing set `num_ctx`, and on any machine under 24 GiB of VRAM the server's 4,096-token default silently cut the start of longer prompts. |
 | `modelDiscovery.js` | Normalises `/api/tags`; falls back to `/api/show` only for incomplete entries. Caches by name+digest. |
 | `modelCapability.js` | Tier rule, budget matrix, `canPlanTodos`. Indexes budgets through a `Map` so a settings-supplied key cannot reach a prototype member. |
 | `intentRouter.js` | Decides, before routing, whether a message is conversation or work. Patterns only — no model call. `task` is the default and `chat` needs positive evidence, because a misread greeting costs one loop while a misread request is silently dropped. Consulted in Agent mode only. |
@@ -107,7 +108,9 @@ identical traffic regardless of tier. Swapping loops changes how an action is
 | `contextFilesManager.js` | Files attached with `+`. Scans and redacts at ingestion, before truncation. |
 | `memoryStore.js` | Plain-text session memory. Treats its own file as untrusted on read; neutralises injection both directions; supersedes by subject. |
 | `factStore.js` | Typed, workspace-scoped facts — what is *true*, as against what happened. Detection is pattern-matching over what a program printed; no model call ever writes one. Same untrusted-file discipline as `memoryStore`, whose `neutralize` it reuses. |
-| `contextTranslator.js` | Turns a step trace into memory notes. **Composed**, not model-written. |
+| `contextTranslator.js` | The translator, in both directions. From the model's work to memory: a note for each step, and for a file change the note is the diff itself ("`TAX_RATE = 0.08` became `0.1`", "added `itemCount(cart)`"), with no model call. From the request to the model: `distillTask` restates a long request by its sentences of work, and `asksForMore` decides whether a request has a second part. |
+| `codeShape.js` | What a file offers, with arguments (`addItem(cart, product, quantity = 1)`), for ES modules, CommonJS, Python and Java; and what an edit changed, in words. Regex over text, every expression bounded and measured on hostile input. |
+| `editRegion.js` | Which lines of a file a request is about, by the request's own words split out of identifiers and weighted by rarity. Declines when nothing or two places match. An addition goes above the export list, or into the class the request names. |
 | `outputParser.js` | Model output → validated action. |
 | `tokenBudget.js` (in `utils/`) | Estimation and truncation that errs high. |
 
@@ -117,6 +120,17 @@ identical traffic regardless of tier. Swapping loops changes how an action is
 dispatches; `tools/*` act; `plannerAgent.js` plans and splits; `todoList.js` holds the
 checklist **outside** the model, because a small model holding three goals at once drops
 one.
+
+`tools/editFile.js` changes part of a file (find this, put that), so a change no longer
+means retyping the whole file. It has no route of its own to the disk: it computes the new
+content and hands it to `writeFile`, so every guard, the gate, the diff and the audit apply.
+
+On the constrained tier, a change to one named file goes further: `agentSession._dictateEdit`
+finds the lines with `core/editRegion`, asks the model in plain words to rewrite them
+(`dictation.dictateEdit`), checks the answer (nothing dropped, nothing out of scope, no
+placeholders, no action objects), and applies it as an `edit_file` placed by line. This is
+the 0.9.0 dictation finding applied to edits: below about 3B the JSON protocol is the
+bottleneck, not the coding.
 
 `stepBrief.js` and `stepGuard.js` are the experimental step-session path, and they split
 along the same line as everything else here: the brief decides what a step is *shown* —
@@ -187,7 +201,9 @@ one file:
   state only — written, restored into the panel, and never shown to the model, which is
   why the agent could not answer a question about its own conversation.
 - **History** is what was *changed*, per workspace: a bounded diff per write, so both
-  the user and the agent can see what a file looked like before. It is the only file
+  the user and the agent can see what a file looked like before. Since 1.2.0 its prompt
+  block also says what each changed file *provides now*, read from disk when the prompt is
+  built: names and arguments, so the next turn calls them correctly instead of guessing. It is the only file
   under `.hirayacoder/` that holds workspace content by design, which is why it is
   redacted and capped and the others do not have to be.
 - **Facts** are what is *true* of the project and the machine, per **workspace**. Typed
@@ -211,10 +227,11 @@ because a session with nothing on disk yet still owns its number.
 
 | Suite | Command | What it proves |
 |---|---|---|
-| Unit (1323) | `npm run test:unit` | Logic, guards, parsing, permission decisions — against a stubbed `vscode`. |
+| Unit (1711) | `npm run test:unit` | Logic, guards, parsing, permission decisions — against a stubbed `vscode`. |
 | Integration (16) | `npm run test:integration` | Activation, command registration, webview protocol, and a full turn to disk **in a real VS Code**, against a stub Ollama on loopback. |
 | Live benchmark | `node tools/bench-agent.js <model>` | What a real model does to a real workspace. |
 | Build benchmark | `node tools/bench-build.js <model> --machine <A\|B\|C>` | Whether a model can build a project from an empty folder — add, read, run, and modify — in Java, JavaScript, and Python. Results land in `benchmarks/results/<machine>/`. |
+| Edit benchmark | `node tools/bench-edit.js <model> --machine <A\|B\|C> [--suite cart\|inventory]` | Whether a model can change part of an existing file without breaking the rest, graded by loading the file and running checks against it. Two suites, one of them held out from tuning. |
 
 That third row is not optional, and the reason is written into the project's history:
 **the mocked suite has passed clean while a real model destroyed a file**, repeatedly.
