@@ -101,6 +101,35 @@ describe('writeFile guards', () => {
       assert.strictEqual(read(), before, 'the file was modified despite the refusal');
     });
 
+    it('refuses a name added to the export list with nothing defining it', async () => {
+      // llama3.2:1b, three runs out of three, asked to add itemCount and export it: it
+      // added the export and no function. In CommonJS that is a ReferenceError on load,
+      // so it broke every importer, not only the new name.
+      const before = read();
+      const result = await writeFile(
+        {
+          path: 'src/greet.js',
+          code: 'function greet(name) {\n  return "Hello " + name;\n}\n\nmodule.exports = { greet, farewell };\n',
+        },
+        context
+      );
+      assert.strictEqual(result.ok, false);
+      assert.strictEqual(result.error, 'EXPORT_NOT_DEFINED');
+      assert.match(result.observation, /now exports "farewell", but nothing in the file defines it/);
+      assert.strictEqual(read(), before);
+    });
+
+    it('still allows a new export of a name the file requires', async () => {
+      const result = await writeFile(
+        {
+          path: 'src/greet.js',
+          code: "const { format } = require('util');\nfunction greet(name) {\n  return format('Hello %s', name);\n}\n\nmodule.exports = { greet, format };\n",
+        },
+        context
+      );
+      assert.strictEqual(result.ok, true, result.observation);
+    });
+
     it('refuses a silent CommonJS to ESM conversion', async () => {
       // stable-code:latest, twice in one sweep. It still exports something, so a
       // check for "does it export anything" would wave it through — and `require()`
