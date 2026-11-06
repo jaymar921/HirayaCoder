@@ -27,62 +27,78 @@
     <title>HirayaCoder</title>
   </head>
   <body>
+    <!--
+      Two rows, grouped by how often each control is touched. The first says who and what:
+      the panel, the session, the model. The second holds the run's settings, with the
+      mode first because it changes what a message does, and the rarely-changed toggles
+      last and quieter, so the eye lands on the two choices that matter per message.
+    -->
     <header class="header" id="header">
-      <div class="header-title">
-        <span class="glyph" aria-hidden="true"></span>
-        <span>HirayaCoder</span>
-        <span class="session-badge" id="session-badge"></span>
+      <div class="header-row">
+        <div class="header-title">
+          <span class="glyph" aria-hidden="true"></span>
+          <span>HirayaCoder</span>
+          <span class="session-badge" id="session-badge"></span>
+        </div>
+        <div class="model-pick">
+          <label class="visually-hidden" for="model">Model</label>
+          <select class="control" id="model" title="Ollama model"></select>
+          <span class="badge" id="tier-badge" title="Capability tier"></span>
+        </div>
       </div>
 
-      <label class="visually-hidden" for="model">Model</label>
-      <select class="control" id="model" title="Ollama model"></select>
-      <span class="badge" id="tier-badge" title="Capability tier"></span>
+      <div class="header-row">
+        <div class="segmented" id="mode" role="group" aria-label="Mode">
+          <button type="button" data-mode="agent" aria-pressed="true">Agent</button>
+          <button type="button" data-mode="plan" aria-pressed="false">Plan</button>
+          <button type="button" data-mode="ask" aria-pressed="false">Ask</button>
+        </div>
 
-      <div class="segmented" id="mode" role="group" aria-label="Mode">
-        <button type="button" data-mode="agent" aria-pressed="true">Agent</button>
-        <button type="button" data-mode="plan" aria-pressed="false">Plan</button>
-        <button type="button" data-mode="ask" aria-pressed="false">Ask</button>
+        <div class="labelled">
+          <span class="labelled-text" aria-hidden="true">Thinking</span>
+          <div class="segmented" id="thinking" role="group" aria-label="Thinking capacity">
+            <button type="button" data-capacity="low" aria-pressed="false">Low</button>
+            <button type="button" data-capacity="medium" aria-pressed="true">Med</button>
+            <button type="button" data-capacity="high" aria-pressed="false">High</button>
+          </div>
+        </div>
+
+        <div class="header-actions">
+          <!--
+            Experimental, and labelled as such in its tooltip rather than its caption: a
+            caption long enough to explain the feature would crowd out the mode selector
+            on a narrow panel.
+          -->
+          <button
+            class="control quiet"
+            id="step-sessions"
+            type="button"
+            aria-pressed="false"
+            title="Experimental: run each TODO item as its own briefed step"
+          >
+            Steps: Off
+          </button>
+
+          <button class="control quiet" id="permissions" type="button" aria-haspopup="true">
+            <span id="perm-summary">Edits: Approve · Scripts: Approve</span>
+          </button>
+
+          <!--
+            The guide is static text, so it is rendered here rather than fetched from the
+            host. See `components/guideCard.js`. It is a toggle rather than a one-way open
+            so the same button that summoned it puts it away.
+          -->
+          <button
+            class="control quiet"
+            id="guide"
+            type="button"
+            aria-pressed="false"
+            title="How to set up HirayaCoder, and what to expect from it"
+          >
+            Guide
+          </button>
+        </div>
       </div>
-
-      <div class="segmented" id="thinking" role="group" aria-label="Thinking capacity">
-        <button type="button" data-capacity="low" aria-pressed="false">Low</button>
-        <button type="button" data-capacity="medium" aria-pressed="true">Med</button>
-        <button type="button" data-capacity="high" aria-pressed="false">High</button>
-      </div>
-
-      <!--
-        Experimental, and labelled as such in its tooltip rather than its caption: the
-        header is already dense, and a caption long enough to explain the feature would
-        crowd out the mode selector on a narrow panel.
-      -->
-      <button
-        class="control"
-        id="step-sessions"
-        type="button"
-        aria-pressed="false"
-        title="Experimental: run each TODO item as its own briefed step"
-      >
-        Steps: Off
-      </button>
-
-      <button class="control" id="permissions" type="button" aria-haspopup="true">
-        <span id="perm-summary">Edits: Approve · Scripts: Approve</span>
-      </button>
-
-      <!--
-        The guide is static text, so it is rendered here rather than fetched from the
-        host — see `components/guideCard.js`. It is a toggle rather than a one-way open
-        so the same button that summoned it puts it away.
-      -->
-      <button
-        class="control"
-        id="guide"
-        type="button"
-        aria-pressed="false"
-        title="How to set up HirayaCoder, and what to expect from it"
-      >
-        Guide
-      </button>
     </header>
 
     <main class="messages" id="messages" aria-live="polite" aria-relevant="additions"></main>
@@ -103,7 +119,12 @@
             aria-label="Attach an image"
             disabled
           >
-            <span aria-hidden="true">🖼</span>
+            <!-- Drawn rather than an emoji: the emoji renders as a box in some editor fonts. -->
+            <svg class="icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+              <rect x="1.5" y="2.5" width="13" height="11" rx="2" fill="none" stroke="currentColor" />
+              <circle cx="5.5" cy="6.5" r="1.4" fill="currentColor" />
+              <path d="M2.5 12.5l3.5-3.5 2.5 2.5 2-2 3 3" fill="none" stroke="currentColor" stroke-linejoin="round" />
+            </svg>
           </button>
           <label class="visually-hidden" for="input">Message</label>
           <textarea id="input" rows="1" placeholder="Ask, plan, or tell HirayaCoder what to build…"></textarea>
@@ -111,7 +132,7 @@
         </div>
 
         <div class="composer-hint">
-          <span>Enter to send · Shift+Enter for a new line · wrap code in backticks</span>
+          <span class="composer-keys">Enter to send · Shift+Enter for a new line · wrap code in backticks</span>
           <span id="status"></span>
         </div>
       </div>
