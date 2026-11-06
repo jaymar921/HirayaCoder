@@ -23,6 +23,7 @@ const vscode = require('vscode');
 
 const logger = require('../utils/logger');
 const { budgetsFor } = require('../core/modelCapability');
+const { formatTokens } = require('../core/contextWindow');
 const { TranscriptStore } = require('../core/transcriptStore');
 const { AgentSession, ChangeSet } = require('../agent/agentSession');
 const { readImage, modelSupportsImages } = require('./imageContext');
@@ -403,11 +404,12 @@ class ChatTab {
     const capability = this.app.capability;
     if (!capability) return;
 
-    const budgets = budgetsFor(capability.tier, this.thinkingCapacity);
-    const context =
+    const budgets = budgetsFor(capability.tier, this.thinkingCapacity, capability.numCtx);
+    const prompt =
       budgets.promptTokenTarget >= 1000
-        ? `~${Math.round(budgets.promptTokenTarget / 100) / 10}k ctx`
-        : `~${budgets.promptTokenTarget} ctx`;
+        ? `~${Math.round(budgets.promptTokenTarget / 100) / 10}k prompt`
+        : `~${budgets.promptTokenTarget} prompt`;
+    const context = capability.numCtx ? `${prompt} · ${formatTokens(capability.numCtx)} window` : prompt;
 
     // The step-session note only appears where it can actually apply. On a model that
     // cannot hold a TODO list there is no list to run step-wise, and saying "step
@@ -807,6 +809,10 @@ class ChatTab {
         model: result.model || this.app.activeModel,
         ms: typeof result.ms === 'number' ? result.ms : null,
         vision: result.vision || null,
+        // How full the model's window got, and the memory it was handed. Both answer the
+        // question a wrong reply raises first: what was the model actually given?
+        context: result.context || null,
+        remembered: Array.isArray(result.remembered) ? result.remembered : null,
       });
     } catch (err) {
       const message = /** @type {Error} */ (err).message;
