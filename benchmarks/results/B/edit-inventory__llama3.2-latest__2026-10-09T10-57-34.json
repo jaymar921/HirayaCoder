@@ -1,0 +1,236 @@
+{
+  "harness": "bench-edit",
+  "suite": "inventory",
+  "model": "llama3.2:latest",
+  "machine": "B",
+  "tier": "B",
+  "numCtx": 8192,
+  "params": "3.2B",
+  "label": "1.2.0",
+  "at": "2026-10-09T10:57:34.377Z",
+  "summary": {
+    "runs": 8,
+    "passed": 8,
+    "changed": 8,
+    "damaged": 0,
+    "meanSeconds": 1.6
+  },
+  "runs": [
+    {
+      "sample": 0,
+      "task": "py-threshold",
+      "changed": true,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "done",
+      "seconds": 1.2,
+      "actions": [
+        "edit_file inventory.py"
+      ],
+      "edits": [
+        {
+          "find": "LOW_STOCK_THRESHOLD = 5",
+          "replace": "LOW_STOCK_THRESHOLD = 10",
+          "placed": true
+        }
+      ],
+      "refusals": [],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Edited inventory.py: \"LOW_STOCK_THRESHOLD = 5\" became \"LOW_STOCK_THRESHOLD = 10\""
+      ],
+      "summary": "Changed inventory.py: \"LOW_STOCK_THRESHOLD = 5\" became \"LOW_STOCK_THRESHOLD = 10\"."
+    },
+    {
+      "sample": 0,
+      "task": "py-oversell",
+      "changed": true,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "done",
+      "seconds": 3.1,
+      "actions": [
+        "edit_file inventory.py"
+      ],
+      "edits": [
+        {
+          "find": "    def sell(self, sku, quantity):\n        if quantity <= 0:\n            raise ValueError(\"sale quantity must be positive\")\n        product = self.products[sku]",
+          "replace": "    def sell(self, sku, quantity):\n        if quantity <= 0:\n            raise ValueError(\"sale quantity must be positive\")\n        product = self.products[sku]",
+          "placed": true
+        }
+      ],
+      "refusals": [],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Edited inventory.py: added 2 line(s) in sell"
+      ],
+      "summary": "Changed inventory.py: added 2 line(s) in sell."
+    },
+    {
+      "sample": 0,
+      "task": "py-remove",
+      "changed": true,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "done",
+      "seconds": 2,
+      "actions": [
+        "edit_file inventory.py"
+      ],
+      "edits": [
+        {
+          "find": "    def remove_product(self, sku):\n        if sku not in self.products:\n            raise KeyError(sku)\n        return self.products.pop(sku)",
+          "replace": "    def remove_product(self, sku):\n        if sku not in self.products:\n            return None\n        return self.products.pop(sku)",
+          "placed": true
+        }
+      ],
+      "refusals": [],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Edited inventory.py: \"raise KeyError(sku)\" became \"return None\" in remove_product"
+      ],
+      "summary": "Changed inventory.py: \"raise KeyError(sku)\" became \"return None\" in remove_product."
+    },
+    {
+      "sample": 0,
+      "task": "py-method",
+      "changed": true,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "done",
+      "seconds": 1.4,
+      "actions": [
+        "edit_file inventory.py"
+      ],
+      "edits": [
+        {
+          "find": "",
+          "replace": "\n    def count_products(self):\n        return len(self.products)\n",
+          "placed": true
+        }
+      ],
+      "refusals": [],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Edited inventory.py: added Inventory.count_products()"
+      ],
+      "summary": "Changed inventory.py: added Inventory.count_products()."
+    },
+    {
+      "sample": 1,
+      "task": "py-threshold",
+      "changed": true,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "done",
+      "seconds": 0.6,
+      "actions": [
+        "edit_file inventory.py"
+      ],
+      "edits": [
+        {
+          "find": "LOW_STOCK_THRESHOLD = 5",
+          "replace": "LOW_STOCK_THRESHOLD = 10",
+          "placed": true
+        }
+      ],
+      "refusals": [],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Edited inventory.py: \"LOW_STOCK_THRESHOLD = 5\" became \"LOW_STOCK_THRESHOLD = 10\""
+      ],
+      "summary": "Changed inventory.py: \"LOW_STOCK_THRESHOLD = 5\" became \"LOW_STOCK_THRESHOLD = 10\"."
+    },
+    {
+      "sample": 1,
+      "task": "py-oversell",
+      "changed": true,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "done",
+      "seconds": 2.4,
+      "actions": [
+        "edit_file inventory.py"
+      ],
+      "edits": [
+        {
+          "find": "    def sell(self, sku, quantity):\n        if quantity <= 0:\n            raise ValueError(\"sale quantity must be positive\")\n        product = self.products[sku]",
+          "replace": "    def sell(self, sku, quantity):\n        if quantity <= 0:\n            raise ValueError(\"sale quantity must be positive\")\n        product = self.products[sku]",
+          "placed": true
+        }
+      ],
+      "refusals": [],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Edited inventory.py: added 2 line(s) in sell"
+      ],
+      "summary": "Changed inventory.py: added 2 line(s) in sell."
+    },
+    {
+      "sample": 1,
+      "task": "py-remove",
+      "changed": true,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "done",
+      "seconds": 1.3,
+      "actions": [
+        "edit_file inventory.py"
+      ],
+      "edits": [
+        {
+          "find": "    def remove_product(self, sku):\n        if sku not in self.products:\n            raise KeyError(sku)\n        return self.products.pop(sku)",
+          "replace": "    def remove_product(self, sku):\n        if sku not in self.products:\n            return None\n        return self.products.pop(sku)",
+          "placed": true
+        }
+      ],
+      "refusals": [],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Edited inventory.py: \"raise KeyError(sku)\" became \"return None\" in remove_product"
+      ],
+      "summary": "Changed inventory.py: \"raise KeyError(sku)\" became \"return None\" in remove_product."
+    },
+    {
+      "sample": 1,
+      "task": "py-method",
+      "changed": true,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "done",
+      "seconds": 0.7,
+      "actions": [
+        "edit_file inventory.py"
+      ],
+      "edits": [
+        {
+          "find": "",
+          "replace": "\n    def count_products(self):\n        return len(self.products)\n",
+          "placed": true
+        }
+      ],
+      "refusals": [],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Edited inventory.py: added Inventory.count_products()"
+      ],
+      "summary": "Changed inventory.py: added Inventory.count_products()."
+    }
+  ]
+}
