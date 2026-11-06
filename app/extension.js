@@ -73,6 +73,7 @@ let lastActiveSessionId = null;
  * @property {string} endpoint
  * @property {number} requestTimeoutMs
  * @property {string} selectedModel
+ * @property {number} contextLength   0 is auto; see core/contextWindow.
  * @property {number} liteTierMaxParams
  * @property {number} todoMinParams
  * @property {Record<string, 'A' | 'B'>} tierOverrides
@@ -98,6 +99,7 @@ function readSettings() {
   return {
     endpoint: cfg.get('ollama.endpoint', 'http://127.0.0.1:11434'),
     requestTimeoutMs: cfg.get('ollama.requestTimeoutMs', 300000),
+    contextLength: cfg.get('ollama.contextLength', 0),
     selectedModel: cfg.get('model.selected', ''),
     liteTierMaxParams: cfg.get('model.liteTierMaxParams', 3),
     todoMinParams: cfg.get('model.todoMinParams', 2),
@@ -548,14 +550,18 @@ class HirayaCoder {
             liteTierMaxParams: this.settings.liteTierMaxParams,
             tierOverrides: this.settings.tierOverrides,
             todoMinParams: this.settings.todoMinParams,
+            contextLength: this.settings.contextLength,
           }
         )
       : null;
 
     if (this.capability) {
+      // Set here as well as by each session, so inline completion, which runs outside
+      // any session, asks for the same window and never makes Ollama reload the model.
+      this.client.setContextWindow(this.capability.model, this.capability.numCtx);
       logger.info(
         `Active model ${this.capability.model}: Tier ${this.capability.tier} ` +
-          `(${this.capability.strategy} loop) — ${this.capability.reason}`
+          `(${this.capability.strategy} loop) — ${this.capability.reason} ${this.capability.windowReason}`
       );
     }
 
@@ -960,6 +966,7 @@ async function selectModelCommand(app) {
         liteTierMaxParams: app.settings.liteTierMaxParams,
         tierOverrides: app.settings.tierOverrides,
         todoMinParams: app.settings.todoMinParams,
+        contextLength: app.settings.contextLength,
       }
     );
     return {
