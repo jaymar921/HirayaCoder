@@ -1,0 +1,344 @@
+{
+  "harness": "bench-edit",
+  "suite": "cart",
+  "model": "llama3.2:1b",
+  "machine": "B",
+  "tier": "B",
+  "numCtx": 8192,
+  "params": "1.2B",
+  "label": "1.2.0",
+  "at": "2026-10-09T10:54:04.306Z",
+  "summary": {
+    "runs": 12,
+    "passed": 12,
+    "changed": 12,
+    "damaged": 0,
+    "meanSeconds": 1.1
+  },
+  "runs": [
+    {
+      "sample": 0,
+      "task": "tax",
+      "changed": true,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "done",
+      "seconds": 4.1,
+      "actions": [
+        "edit_file src/cart.js"
+      ],
+      "edits": [
+        {
+          "find": "const TAX_RATE = 0.08;",
+          "replace": "const TAX_RATE = 0.10;",
+          "placed": true
+        }
+      ],
+      "refusals": [],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Edited src/cart.js: \"const TAX_RATE = 0.08;\" became \"const TAX_RATE = 0.10;\""
+      ],
+      "summary": "Changed src/cart.js: \"const TAX_RATE = 0.08;\" became \"const TAX_RATE = 0.10;\"."
+    },
+    {
+      "sample": 0,
+      "task": "missing",
+      "changed": true,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "done",
+      "seconds": 1.1,
+      "actions": [
+        "edit_file src/cart.js"
+      ],
+      "edits": [
+        {
+          "find": "function removeItem(cart, id) {\n  const index = cart.items.findIndex((item) => item.id === id);\n  if (index === -1) {\n    throw new Error(`No item with id ${id}",
+          "replace": "function removeItem(cart, id) {\n  const index = cart.items.findIndex((item) => item.id === id);\n  if (index !== -1) {\n    const items = cart.items.slice();\n    ",
+          "placed": true
+        }
+      ],
+      "refusals": [],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Edited src/cart.js: changed removeItem (6 line(s) replaced by 7)"
+      ],
+      "summary": "Changed src/cart.js: changed removeItem (6 line(s) replaced by 7)."
+    },
+    {
+      "sample": 0,
+      "task": "discount",
+      "changed": true,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "done",
+      "seconds": 2,
+      "actions": [
+        "edit_file src/cart.js"
+      ],
+      "edits": [
+        {
+          "find": "",
+          "replace": "  if (percent > 50) {\n      throw new Error(\"Discount percent cannot be greater than 50\");\n  }\n",
+          "placed": true
+        }
+      ],
+      "refusals": [],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Edited src/cart.js: added 3 line(s) in applyDiscount"
+      ],
+      "summary": "Changed src/cart.js: added 3 line(s) in applyDiscount."
+    },
+    {
+      "sample": 0,
+      "task": "count",
+      "changed": true,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "done",
+      "seconds": 0.7,
+      "actions": [
+        "edit_file src/cart.js"
+      ],
+      "edits": [
+        {
+          "find": "module.exports = {\n  createCart,\n  addItem,\n  removeItem,\n  updateQuantity,\n  subtotal,\n  applyDiscount,\n  tax,\n  total,\n  formatMoney,\n  serialize,\n  deseriali",
+          "replace": "function itemCount(cart) {\n  return cart.items.reduce((total, item) => total + item.quantity, 0);\n}\n\nmodule.exports = {\n  createCart,\n  addItem,\n  removeItem,\n ",
+          "placed": true
+        }
+      ],
+      "refusals": [],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Edited src/cart.js: added itemCount(cart)"
+      ],
+      "summary": "Changed src/cart.js: added itemCount(cart)."
+    },
+    {
+      "sample": 1,
+      "task": "tax",
+      "changed": true,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "done",
+      "seconds": 0.2,
+      "actions": [
+        "edit_file src/cart.js"
+      ],
+      "edits": [
+        {
+          "find": "const TAX_RATE = 0.08;",
+          "replace": "const TAX_RATE = 0.10;",
+          "placed": true
+        }
+      ],
+      "refusals": [],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Edited src/cart.js: \"const TAX_RATE = 0.08;\" became \"const TAX_RATE = 0.10;\""
+      ],
+      "summary": "Changed src/cart.js: \"const TAX_RATE = 0.08;\" became \"const TAX_RATE = 0.10;\"."
+    },
+    {
+      "sample": 1,
+      "task": "missing",
+      "changed": true,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "done",
+      "seconds": 0.7,
+      "actions": [
+        "edit_file src/cart.js"
+      ],
+      "edits": [
+        {
+          "find": "function removeItem(cart, id) {\n  const index = cart.items.findIndex((item) => item.id === id);\n  if (index === -1) {\n    throw new Error(`No item with id ${id}",
+          "replace": "function removeItem(cart, id) {\n  const index = cart.items.findIndex((item) => item.id === id);\n  if (index !== -1) {\n    const items = cart.items.slice();\n    ",
+          "placed": true
+        }
+      ],
+      "refusals": [],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Edited src/cart.js: changed removeItem (6 line(s) replaced by 7)"
+      ],
+      "summary": "Changed src/cart.js: changed removeItem (6 line(s) replaced by 7)."
+    },
+    {
+      "sample": 1,
+      "task": "discount",
+      "changed": true,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "done",
+      "seconds": 1.7,
+      "actions": [
+        "edit_file src/cart.js"
+      ],
+      "edits": [
+        {
+          "find": "",
+          "replace": "  if (percent > 50) {\n    throw new Error('Discount percent cannot be greater than 50');\n  }\n",
+          "placed": true
+        }
+      ],
+      "refusals": [],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Edited src/cart.js: added 3 line(s) in applyDiscount"
+      ],
+      "summary": "Changed src/cart.js: added 3 line(s) in applyDiscount."
+    },
+    {
+      "sample": 1,
+      "task": "count",
+      "changed": true,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "done",
+      "seconds": 0.3,
+      "actions": [
+        "edit_file src/cart.js"
+      ],
+      "edits": [
+        {
+          "find": "module.exports = {\n  createCart,\n  addItem,\n  removeItem,\n  updateQuantity,\n  subtotal,\n  applyDiscount,\n  tax,\n  total,\n  formatMoney,\n  serialize,\n  deseriali",
+          "replace": "function itemCount(cart) {\n  return cart.items.reduce((total, item) => total + item.quantity, 0);\n}\n\nmodule.exports = {\n  createCart,\n  addItem,\n  removeItem,\n ",
+          "placed": true
+        }
+      ],
+      "refusals": [],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Edited src/cart.js: added itemCount(cart)"
+      ],
+      "summary": "Changed src/cart.js: added itemCount(cart)."
+    },
+    {
+      "sample": 2,
+      "task": "tax",
+      "changed": true,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "done",
+      "seconds": 0.2,
+      "actions": [
+        "edit_file src/cart.js"
+      ],
+      "edits": [
+        {
+          "find": "const TAX_RATE = 0.08;",
+          "replace": "const TAX_RATE = 0.10;",
+          "placed": true
+        }
+      ],
+      "refusals": [],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Edited src/cart.js: \"const TAX_RATE = 0.08;\" became \"const TAX_RATE = 0.10;\""
+      ],
+      "summary": "Changed src/cart.js: \"const TAX_RATE = 0.08;\" became \"const TAX_RATE = 0.10;\"."
+    },
+    {
+      "sample": 2,
+      "task": "missing",
+      "changed": true,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "done",
+      "seconds": 0.7,
+      "actions": [
+        "edit_file src/cart.js"
+      ],
+      "edits": [
+        {
+          "find": "function removeItem(cart, id) {\n  const index = cart.items.findIndex((item) => item.id === id);\n  if (index === -1) {\n    throw new Error(`No item with id ${id}",
+          "replace": "function removeItem(cart, id) {\n  const index = cart.items.findIndex((item) => item.id === id);\n  if (index !== -1) {\n    const items = cart.items.slice();\n    ",
+          "placed": true
+        }
+      ],
+      "refusals": [],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Edited src/cart.js: changed removeItem (6 line(s) replaced by 7)"
+      ],
+      "summary": "Changed src/cart.js: changed removeItem (6 line(s) replaced by 7)."
+    },
+    {
+      "sample": 2,
+      "task": "discount",
+      "changed": true,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "done",
+      "seconds": 0.8,
+      "actions": [
+        "edit_file src/cart.js"
+      ],
+      "edits": [
+        {
+          "find": "function applyDiscount(cart, percent) {\n  if (typeof percent !== 'number' || percent < 0) {\n    throw new Error('Discount must be a positive number.');\n  }\n  re",
+          "replace": "function applyDiscount(cart, percent) {\n  if (typeof percent !== 'number' || percent < 0 || percent > 50) {\n    throw new Error('Discount must be a positive num",
+          "placed": true
+        }
+      ],
+      "refusals": [],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Edited src/cart.js: changed applyDiscount (2 line(s) replaced by 2)"
+      ],
+      "summary": "Changed src/cart.js: changed applyDiscount (2 line(s) replaced by 2)."
+    },
+    {
+      "sample": 2,
+      "task": "count",
+      "changed": true,
+      "intact": true,
+      "loads": true,
+      "regressions": [],
+      "stopReason": "done",
+      "seconds": 0.3,
+      "actions": [
+        "edit_file src/cart.js"
+      ],
+      "edits": [
+        {
+          "find": "module.exports = {\n  createCart,\n  addItem,\n  removeItem,\n  updateQuantity,\n  subtotal,\n  applyDiscount,\n  tax,\n  total,\n  formatMoney,\n  serialize,\n  deseriali",
+          "replace": "function itemCount(cart) {\n  return cart.items.reduce((total, item) => total + item.quantity, 0);\n}\n\nmodule.exports = {\n  createCart,\n  addItem,\n  removeItem,\n ",
+          "placed": true
+        }
+      ],
+      "refusals": [],
+      "parseErrors": 0,
+      "unparseable": [],
+      "memory": [
+        "- Edited src/cart.js: added itemCount(cart)"
+      ],
+      "summary": "Changed src/cart.js: added itemCount(cart)."
+    }
+  ]
+}
