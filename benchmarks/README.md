@@ -295,6 +295,128 @@ Two findings worth carrying forward, both of which changed the shipped code:
   the shape and reports a failed read instead, which is how a benchmark is supposed to
   earn its keep.
 
+## The edit benchmark: `edit-<suite>__*.json`
+
+*New in 1.2.0.* `tools/bench-edit.js`. Can a model change part of a file that already
+exists without breaking the rest of it?
+
+`bench-agent.js` edits a five-line file, which never tests the hard part. Real requests are
+"change the tax rate" in a file of a hundred and fifty lines, and on the constrained tier
+the only way to make that change used to be sending the whole file back inside one JSON
+reply. This harness measures exactly that.
+
+### Two suites, one held out
+
+| Suite | Fixture | Used for |
+|---|---|---|
+| `cart` | `src/cart.js`, CommonJS, 164 lines | Developing the 1.2.0 edit path |
+| `inventory` | `inventory.py`, Python with a class, 85 lines | **Held out.** Written afterwards and not tuned against |
+
+Each has four ordinary requests:
+
+| Suite | Task | Request |
+|---|---|---|
+| cart | `tax` | Change the tax rate from 8% to 10% |
+| cart | `missing` | `removeItem` returns the cart unchanged instead of throwing for an unknown id |
+| cart | `discount` | `applyDiscount` throws when the percent is over 50 (and still rejects negatives) |
+| cart | `count` | Add `itemCount(cart)` and export it alongside the others |
+| inventory | `py-threshold` | Raise the low-stock threshold from 5 to 10 |
+| inventory | `py-oversell` | `sell` raises `ValueError` when asked for more than is in stock |
+| inventory | `py-remove` | `remove_product` returns `None` instead of raising `KeyError` |
+| inventory | `py-method` | Add a `count_products` method to the `Inventory` class |
+
+The held-out suite is the number to trust. Everything in the dictated-edit path was
+developed against `cart`, so a good `cart` score only says the work fits the problems it
+was built on. `inventory` was written after, in a different language with a different
+structure. Its first run with `llama3.2:1b` passed 0 of 12 and damaged the file in 9. Each
+failure became a fix, recorded in a comment where it was made: a method rewritten at column
+0 closed its class early, a reply re-declared the class around a placeholder comment, a new
+check used an attribute the class does not have, and a top-level assignment was not seen as
+a declaration. The numbers below are after those fixes, so `inventory` is no longer fully
+unseen either. It is still the better guide of the two.
+
+### Graded by running the file
+
+Every task starts from a fresh copy of its fixture in a temporary directory and runs
+through the real `AgentSession` with auto-approve on. The grade comes from loading the
+resulting file in a child process and running checks against it, never from what the
+model said it did:
+
+- **changed:** the behaviour the task asked for is there.
+- **intact:** the file still loads, and every behaviour the task did not mention is
+  exactly as before.
+
+A pass is both. A run that is changed but not intact **damaged** the file to make the
+change, which is the outcome worth counting most: a user who approves that diff has a
+broken project. `--selftest` grades a hand-written correct answer and a deliberately
+sabotaged one for every task, so the checks are known to tell the two apart before any
+model is run.
+
+### Running it
+
+```bash
+node tools/bench-edit.js <model> --machine <A|B|C> [options]
+
+node tools/bench-edit.js llama3.2:1b --machine B --suite inventory --repeat 3
+node tools/bench-edit.js --selftest
+```
+
+| Flag | Meaning |
+|---|---|
+| `--machine <A\|B\|C>` | **Required.** Which device this is; picks the results directory |
+| `--suite <s>` | `cart` (default) or `inventory` |
+| `--tasks <list>` | Task names, comma separated. Default: all four |
+| `--repeat <n>` | Runs per task, default 1 |
+| `--tier <A\|B>` | Force a tier, to see whether the other loop does better on this model |
+| `--label <text>` | Free text stored in the record |
+| `--out <dir>` | Results root, default `benchmarks/results` |
+
+To measure a baseline, check out the older release in a separate worktree and copy
+`tools/bench-edit.js` and `tools/lib/*Fixture.js` into it. The harness only uses the
+`AgentSession` API, which has not changed shape.
+
+### 1.1.0 against 1.2.0
+
+Machine B (GTX 1650 Super, 4 GB), Ollama 0.40, run on 2026-10-09. Passes out of runs; a
+pass is changed **and** intact.
+
+| Model | Loop | `cart` 1.1.0 | `cart` 1.2.0 | `inventory` 1.1.0 | `inventory` 1.2.0 |
+|---|---|---|---|---|---|
+| `llama3.2:1b` | Tier B, its default | 0/12 | **12/12** | 0/12 | **9/12** |
+| `llama3.2:latest` (3B) | Tier A, its default | 0/8, 1 damaged | 0/8 | 0/8 | 2/8, 1 damaged |
+| `llama3.2:latest` (3B) | Tier B, forced | | **8/8** | | **8/8** |
+
+What it says:
+
+- **The 1B model went from nothing to most of it, and damaged nothing.** 21 of 24 across
+  both suites, with no damaged file in any 1.2.0 run. The mean time per task also fell
+  from 29 seconds to about 1, because a dictated edit is one short call in plain words
+  instead of a loop of JSON turns. On 1.1.0 every run ended untouched: either the reply
+  never parsed, or the whole file came back truncated and was refused.
+- **The three held-out misses are one task, `py-oversell`, three times.** Asked to refuse
+  selling more than is in stock, the 1B model kept checking `self.stock`, which the class
+  does not have. Each rewrite was refused for that, the request went to the ordinary loop,
+  the loop could not land an edit either, and the file was left exactly as it was. A miss
+  that leaves the file alone is the failure mode this was designed to have.
+- **The 3B model gets nothing from 1.2.0 on its default loop.** `llama3.2:latest` is 3.2B,
+  just over the 3B line, so it runs the full tool loop, which has `edit_file` but not the
+  dictated path. It still mostly re-reads the file until the repeat guard stops it. Forced
+  onto the constrained tier with `hirayacoder.model.tierOverrides`, it passed **16 of 16**.
+  So for editing, the line between the tiers is in the wrong place for this model.
+  Anyone running a 3B model should try the override. Whether to move the default line is
+  open: the tier decides more than how files are edited, and the other benchmarks have
+  not been re-run with it moved.
+
+Raw runs: `benchmarks/results/B/edit-*.json`. The 1.1.0 runs are labelled
+`baseline-1.1.0`. Each record keeps every action, every refusal, every edit the model
+sent, and every reply that failed to parse.
+
+```bash
+node tools/bench-edit.js llama3.2:1b     --machine B --suite cart      --repeat 3
+node tools/bench-edit.js llama3.2:1b     --machine B --suite inventory --repeat 3
+node tools/bench-edit.js llama3.2:latest --machine B --suite cart      --repeat 2 --tier B
+```
+
 ## The machines
 
 The letters match the ones used throughout [doc/MODELS.md](../doc/MODELS.md):
