@@ -38,33 +38,43 @@ works with your Wi-Fi switched off. That is the whole point of it.
 
 ---
 
-## New in 1.1.0: it can look at pictures
+## New in 1.2.0: small models can change your files
 
-Attach a screenshot, a photo, or a sketch to your message, and HirayaCoder reads it.
+Ask a small model to *"change the tax rate from 8% to 10% in src/cart.js"* and, until
+this release, it usually failed. It knew how to write the new line. What it could not do
+was point at the old one precisely enough for the change to be made.
 
-- **Ask a question about it.** *"What is this error saying?"*
-- **Give it a job.** *"Build the screen in this mockup."* The picture becomes part of
-  the task.
+So now HirayaCoder finds the right lines itself, shows them to the model, and asks in
+plain words for the rewritten version. Before anything is saved it checks the answer: no
+existing check was dropped, nothing refers to something that does not exist, and the rest
+of the file is untouched. You still approve the change as before.
 
-The useful part is that **this works even if your coding model cannot see**. Most AI
-models only handle text. A few, called vision models, can also take an image. If the
-model you picked is a text-only one, HirayaCoder quietly hands the picture to a vision
-model instead, gets back a written description of what is in it, and passes that
-description to your coding model. You do not have to switch models.
+On our tests with `llama3.2:1b`, the smallest model we support, edits to an existing file
+went from **0 out of 12 to 12**, and from **0 to 9** on a second
+set of tests written afterwards to check it was not just tuned to the first.
 
-If nothing you have installed can read images, one command fixes it:
+Also in this release:
 
-```bash
-ollama pull minicpm-v4.6
-```
+- **It no longer loses the start of long requests.** Ollama, the program that runs the
+  model, was quietly cutting off the beginning of anything long, which is where your
+  instructions were. HirayaCoder now tells it how much to keep. If you have memory to spare, you can raise it with the
+  `hirayacoder.ollama.contextLength` setting.
+- **You can see what the model was given.** Under each reply there is a line saying how
+  much of the model's memory the turn used, and a closed **What it remembered** panel
+  with exactly what it was told about your project. When an answer is wrong, this tells
+  you whether it had the wrong picture or just reasoned badly.
+- **It remembers what it built.** After it writes a function, later requests are told
+  its name and what it takes, so *"now use it from the main page"* calls it correctly.
+- **A tidier panel.** The settings are grouped into two rows, and the ones you rarely
+  touch are quieter.
 
-That is 1.6 GB, and it sits alongside whatever you already use for coding.
+**Using a 3B model like `llama3.2`?** It is just big enough to get the other, more
+general way of working, which in our tests managed 2 edits out of 16. Add
+`"hirayacoder.model.tierOverrides": { "llama3.2:latest": "B" }` to your settings and it
+passed all 16 instead.
 
-**You can always see what it read.** Under your message there is a panel showing the
-exact description the vision model produced. Open it when an answer looks wrong, because
-it tells you whether the picture was misread or the answer was.
-
-Full detail, including what it is bad at, is in
+Still new from 1.1.0: attach a screenshot or a photo and it reads it, even if your coding
+model only handles text. See
 [IMAGE-RECOGNITION.md](https://github.com/jaymar921/HirayaCoder/blob/main/doc/IMAGE-RECOGNITION.md).
 
 ---
