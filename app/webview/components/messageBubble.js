@@ -94,8 +94,13 @@ export function seconds(ms) {
  * not decoration: it is where the extra twenty seconds went, and without it the headline
  * number looks like the coding model got slower.
  *
+ * The context reading ("1.7k of 8k context") says how much of the model's window the
+ * largest prompt of the turn filled, from Ollama's own count. It exists for the same
+ * reason as the timing: on a small model, how much it was shown is often the whole story.
+ *
  * @param {HTMLElement} body
- * @param {{model?: string, ms?: number | null, vision?: {model: string, ms: number} | null}} meta
+ * @param {{model?: string, ms?: number | null, vision?: {model: string, ms: number} | null,
+ *   context?: {numCtx: number | null, peakPromptTokens: number, filled: number} | null}} meta
  */
 export function appendRunMeta(body, meta) {
   if (!meta || (!meta.model && typeof meta.ms !== 'number')) return;
@@ -120,6 +125,27 @@ export function appendRunMeta(body, meta) {
     line.appendChild(took);
   }
 
+  const context = describeContext(meta.context);
+  if (context) {
+    const dot = document.createElement('span');
+    dot.className = 'run-meta-sep';
+    dot.textContent = '•';
+    line.appendChild(dot);
+
+    const used = document.createElement('span');
+    used.className = 'run-meta-context';
+    used.textContent = context.text;
+    used.title = context.title;
+    line.appendChild(used);
+
+    if (context.warning) {
+      const warn = document.createElement('span');
+      warn.className = 'run-meta-warn';
+      warn.textContent = context.warning;
+      line.appendChild(warn);
+    }
+  }
+
   if (meta.vision && meta.vision.model) {
     const via = document.createElement('span');
     via.className = 'run-meta-via';
@@ -128,6 +154,79 @@ export function appendRunMeta(body, meta) {
   }
 
   body.appendChild(line);
+}
+
+/**
+ * A token count the way the footer shows it: 8192 is "8k", 1536 is "1.5k".
+ *
+ * @param {number} tokens
+ * @returns {string}
+ */
+export function tokens(tokens) {
+  const value = Number(tokens) || 0;
+  if (value < 1000) return String(value);
+  const thousands = value / 1024;
+  return `${thousands >= 10 || Number.isInteger(thousands) ? Math.round(thousands) : thousands.toFixed(1)}k`;
+}
+
+/**
+ * The footer's context reading, or null when Ollama reported nothing to read.
+ *
+ * Exported for the unit suite, like `seconds`: the words are the decision, the nodes are not.
+ *
+ * @param {{numCtx: number | null, peakPromptTokens: number, filled: number} | null | undefined} context
+ * @returns {{text: string, title: string, warning: string} | null}
+ */
+export function describeContext(context) {
+  if (!context || !context.peakPromptTokens) return null;
+  const used = tokens(context.peakPromptTokens);
+  const text = context.numCtx ? `${used} of ${tokens(context.numCtx)} context` : `${used} context`;
+  const title = context.numCtx
+    ? `The largest prompt this turn was ${context.peakPromptTokens} tokens, in a ${context.numCtx}-token window.`
+    : `The largest prompt this turn was ${context.peakPromptTokens} tokens.`;
+  const warning =
+    context.filled > 0 ? `window full ${context.filled === 1 ? 'once' : `${context.filled} times`}, so some of the prompt was lost` : '';
+  return { text, title, warning };
+}
+
+/**
+ * What the model was told it remembered, line by line, collapsed under the reply.
+ *
+ * ## Why
+ *
+ * A small model's answer is only as good as what it was shown, and memory is the part of
+ * that the user cannot see anywhere else. It is assembled per turn from three sources
+ * (facts about the machine, the files this session changed and what they provide, and the
+ * translator's notes), and when an answer is wrong the first question is whether the model
+ * was given the wrong picture or reasoned badly from the right one. This answers it.
+ *
+ * @param {HTMLElement} body
+ * @param {string[] | null | undefined} lines
+ */
+export function appendMemoryNote(body, lines) {
+  if (!Array.isArray(lines) || lines.length === 0) return;
+
+  const box = document.createElement('details');
+  box.className = 'trace memory-note';
+
+  const entries = lines.filter((line) => /^\s*[-[]/.test(line)).length;
+  const summary = document.createElement('summary');
+  summary.textContent = `What it remembered (${entries || lines.length})`;
+  box.appendChild(summary);
+
+  const list = document.createElement('ul');
+  list.className = 'memory-lines';
+  for (const line of lines) {
+    const row = document.createElement('li');
+    // A line that is not an entry ("- …" or "[This machine] …") is a block heading.
+    row.className = /^\s*[-[]/.test(line) ? 'memory-line' : 'memory-line is-heading';
+    // Memory is neutralised before it is stored and again before it is shown to the model,
+    // and here it is still text: `textContent`, never markup.
+    row.textContent = line.replace(/^\s*-\s*/, '');
+    list.appendChild(row);
+  }
+  box.appendChild(list);
+  body.appendChild(box);
 }
 
 /**
@@ -194,7 +293,8 @@ export function appendVisionNote(body, model, descriptions) {
  */
 const ACTION_VERBS = new Map([
   ['read_file', 'Reading'],
-  ['write_file', 'Editing'],
+  ['edit_file', 'Editing'],
+  ['write_file', 'Writing'],
   ['list_files', 'Listing'],
   ['search_workspace', 'Searching'],
   ['run_script', 'Running'],
