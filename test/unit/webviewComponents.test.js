@@ -292,7 +292,10 @@ describe('step panel rows', () => {
     // user leaks the tool protocol into the surface that is meant to explain the run.
     assert.strictEqual(describeStep({ action: 'read_file', path: 'README.md' }).verb, 'Reading');
     assert.strictEqual(describeStep({ action: 'run_script', command: 'npm install' }).verb, 'Running');
-    assert.strictEqual(describeStep({ action: 'write_file', path: 'src/App.jsx' }).verb, 'Editing');
+    // Two verbs since 1.2.0: a whole-file write and a partial edit read differently in the
+    // panel, because "it rewrote the file" and "it changed three lines" are different news.
+    assert.strictEqual(describeStep({ action: 'write_file', path: 'src/App.jsx' }).verb, 'Writing');
+    assert.strictEqual(describeStep({ action: 'edit_file', path: 'src/App.jsx' }).verb, 'Editing');
   });
 
   it('falls back to the raw name for an action it does not know', () => {
